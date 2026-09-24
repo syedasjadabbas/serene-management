@@ -7,7 +7,8 @@ services:
       POSTGRES_PASSWORD: serene
       POSTGRES_DB: serene_management
     ports:
-      - "5432:5432"
+      # Host port 5433: 5432 is commonly taken by a locally installed PostgreSQL service.
+      - "5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
