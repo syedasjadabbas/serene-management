@@ -1,0 +1,126 @@
+# SERENE MANAGEMENT — RBAC
+
+Code: [`lib/permissions/catalog.ts`](../lib/permissions/catalog.ts) (permission catalog), [`lib/permissions/roles.ts`](../lib/permissions/roles.ts) (role templates), [`lib/permissions/evaluate.ts`](../lib/permissions/evaluate.ts) (evaluation). Tables: `permissions`, `roles`, `role_permissions`, `user_role_assignments` ([DATABASE_DESIGN.md](./DATABASE_DESIGN.md) §4.2). Tests: `tests/unit/permissions.test.ts`.
+
+---
+
+## 1. Model
+
+```text
+User ──< UserRoleAssignment >── Role ──< RolePermission >── Permission("resource:action")
+             │ scope = ORGANIZATION (all properties of the org)
+             └ scope = PROPERTY + property_id (one property)
+```
+
+- **Permission**: `resource:action` key. The catalog is **code-owned** (a permission only exists if code checks it) and synchronised into the `permissions` table by the seed.
+- **Role**: a named set of permissions. System templates (`organization_id IS NULL`) are cloned into each organization, where they can be edited; organizations can create their own roles (`roles:manage`).
+- **Assignment**: a user gets roles organization-wide or per property. A user can hold different roles at different properties (e.g. Front Office Manager at property A, Read Only at property B).
+- **Effective permissions** for (user, property) = union of the user's ORGANIZATION-scope roles and that property's PROPERTY-scope roles. No property grant and no org grant → no access to the property at all.
+- **Super admin**: `users.is_super_admin` is a platform-operator flag (support staff), not a role; it bypasses permission checks, is never assignable from the UI, and every action is audited HIGH.
+- **Deny by default**: absence of a permission = denied. There are no negative permissions.
+
+## 2. Permission catalog
+
+High-risk permissions (★) require a reason and create HIGH audit records.
+
+| Resource       | Actions                                                                                                                 |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `dashboard`    | `read`                                                                                                                  |
+| `search`       | `global`                                                                                                                |
+| `reservations` | `read`, `create`, `update`, `cancel`★, `reinstate`★, `no_show`★, `override_rate`★, `override_availability`★, `waitlist` |
+| `availability` | `read`, `manage`★                                                                                                       |
+| `rates`        | `read`, `manage`★                                                                                                       |
+| `packages`     | `manage`                                                                                                                |
+| `frontdesk`    | `read`, `checkin`, `checkout`, `reverse_checkin`★, `reinstate_checkout`★, `messages`                                    |
+| `rooms`        | `read`, `assign`, `upgrade`★, `update_status`, `out_of_order`★, `hold`, `override_hold`                                 |
+| `guests`       | `read`, `create`, `update`, `read_sensitive`★, `merge`★, `privacy`★                                                     |
+| `accounts`     | `read`, `manage`                                                                                                        |
+| `groups`       | `read`, `manage`, `rooming_list`                                                                                        |
+| `housekeeping` | `read`, `update`, `assign`, `inspect`, `lost_found`                                                                     |
+| `maintenance`  | `read`, `create`, `update`, `manage`                                                                                    |
+| `billing`      | `read`, `post`, `adjust`★, `transfer`, `routing`, `invoice`, `credit_note`★                                             |
+| `payments`     | `read`, `create`, `refund`★, `void`★                                                                                    |
+| `cashier`      | `operate`, `manage`★                                                                                                    |
+| `nightaudit`   | `read`, `run`★                                                                                                          |
+| `reports`      | `read`, `financial`, `export`                                                                                           |
+| `commissions`  | `read`, `manage`★                                                                                                       |
+| `loyalty`      | `read`, `manage`★                                                                                                       |
+| `audit`        | `read`                                                                                                                  |
+| `users`        | `read`, `manage`★                                                                                                       |
+| `roles`        | `manage`★                                                                                                               |
+| `settings`     | `read`, `manage`★                                                                                                       |
+| `properties`   | `manage`★                                                                                                               |
+
+78 permissions in total. Adding a permission = add it to the catalog, check it in a route/service, add it to the relevant templates, run the seed; the unit test rejects malformed keys and unknown keys in templates.
+
+Payment creation is not flagged high-risk as a permission (it is routine front-desk work), but every payment, refund and void is still written as a **HIGH** audit record per Guide §29.
+
+## 3. Role templates
+
+| Role                 | Intent                               | Notable grants                                                                                                                                                           |
+| -------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Super Admin          | platform flag, not a role            | everything, all organizations                                                                                                                                            |
+| Organization Admin   | owner/IT of the hotel company        | all permissions                                                                                                                                                          |
+| General Manager      | runs a property                      | all except `properties:manage`, `roles:manage`                                                                                                                           |
+| Front Office Manager | supervises front desk & reservations | front desk + reservations incl. overrides, reinstatements, adjustments, refunds, voids, night audit, cashier management, sensitive guest data, merges, groups, audit log |
+| Front Desk Agent     | check-in/out, in-house service       | reservations create/update/cancel, check-in/out, messages, room assign/status, posting, transfers, invoices, own cashier, payments                                       |
+| Reservations Agent   | sales & bookings                     | reservations create/update/cancel/waitlist, holds, profiles create/update, payments (deposits)                                                                           |
+| Housekeeping Manager | runs housekeeping                    | task sheets & assignment, inspection, room status, OOO/OOS, lost & found, reports                                                                                        |
+| Housekeeper          | attendant (tablet)                   | own tasks, room cleaning status, lost & found, report maintenance                                                                                                        |
+| Maintenance Manager  | runs engineering                     | assign/close requests, OOO/OOS, reports                                                                                                                                  |
+| Maintenance Staff    | technician                           | read/update requests, report new ones                                                                                                                                    |
+| Cashier              | cashiering desk                      | post, transfer, invoice, payments, own cashier shift                                                                                                                     |
+| Accountant           | back-office finance                  | read everything financial, adjust, credit notes, refunds, cashier management, commissions, financial reports & exports                                                   |
+| Auditor              | internal/external audit              | read-only + financial reports + audit log                                                                                                                                |
+| Read Only            | observers                            | read permissions only                                                                                                                                                    |
+
+Exact lists are in `lib/permissions/roles.ts` (the test suite asserts that line-staff roles hold no high-risk permission).
+
+## 4. Enforcement points
+
+| Layer                                   | Responsibility                                                                                                                                                                                                  |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `proxy.ts`                              | Optimistic: authenticated or redirect to login. **No authorization decisions.**                                                                                                                                 |
+| `(workspace)/[propertyCode]/layout.tsx` | Property access check for rendering; permission-denied state.                                                                                                                                                   |
+| UI (`usePermissions`)                   | Hide/disable actions the user cannot perform (convenience only).                                                                                                                                                |
+| `defineRoute` (route handler)           | **Authoritative**: authenticate, `canAccessProperty`, `hasPermission(access, propertyId, permission)`, reason required for high-risk.                                                                           |
+| Services                                | Data-dependent rules: ownership (own cashier shift, own housekeeping tasks), approval thresholds (refund > limit needs a second approver), field-level sensitivity (ID documents need `guests:read_sensitive`). |
+| Database                                | Property isolation via composite FKs; append-only audit.                                                                                                                                                        |
+
+The access profile is loaded per request from `user_role_assignments ⨝ role_permissions` (one indexed query) into:
+
+```ts
+interface AccessProfile {
+  userId: string;
+  organizationId: string;
+  isSuperAdmin: boolean;
+  byProperty: Record<propertyId, Permission[]>; // org grants merged into every property
+}
+```
+
+`GET /api/v1/me` returns the same structure (permission keys per property) so the UI can gate actions without extra calls. Changes to roles/assignments take effect on the next request (no permissions inside the JWT, so no stale grants).
+
+## 5. Property-level permissions
+
+- A property appears in a user's switcher only if they have at least one grant covering it.
+- Requests for a property without access return `404` for resources, `403` for property-level endpoints (e.g. `/properties/{id}/business-date`) — never data.
+- Central profiles are organization data: a user with `guests:read` at any property can read guest profiles, but financial history of stays at properties where they have no `billing:read` is omitted.
+- Cross-property reports include only properties where the user holds `reports:read` (and `reports:financial` for financial figures).
+
+## 6. Administration and audit
+
+- `users:manage`★: invite, disable, unlock, assign/revoke roles. A user cannot grant permissions they do not hold themselves (no privilege escalation), and cannot modify their own assignments.
+- `roles:manage`★: edit organization roles. System templates are read-only; editing clones them.
+- Every grant/revoke/role edit writes a HIGH audit record (`user.role_grant`, `role.permissions_update`) with before/after.
+- Disabling a user revokes all sessions immediately.
+
+## 7. Sensitive data visibility
+
+| Data                                                        | Requirement                                                            |
+| ----------------------------------------------------------- | ---------------------------------------------------------------------- |
+| ID document numbers, scans                                  | `guests:read_sensitive` (view audited)                                 |
+| Restricted guest notes (`visibility = MANAGEMENT/INTERNAL`) | `guests:read_sensitive`                                                |
+| Card data                                                   | never available (tokens only; brand + last 4 shown to `payments:read`) |
+| Folio contents                                              | `billing:read`                                                         |
+| Rates on reservations (negotiated, comp)                    | `rates:read`; housekeeping roles do not see rates                      |
+| Audit log                                                   | `audit:read`                                                           |

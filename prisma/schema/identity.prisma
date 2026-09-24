@@ -1,0 +1,156 @@
+// Identity, sessions and RBAC. See docs/RBAC.md.
+
+enum UserStatus {
+  INVITED
+  ACTIVE
+  LOCKED
+  DISABLED
+
+  @@map("user_status")
+}
+
+enum RoleScope {
+  ORGANIZATION // grant applies to every property of the organization
+  PROPERTY // grant applies to one property
+
+  @@map("role_scope")
+}
+
+model User {
+  id                String     @id @default(uuid(7)) @db.Uuid
+  organizationId    String     @map("organization_id") @db.Uuid
+  /// Stored lower-cased; uniqueness is global so login needs no tenant hint.
+  email             String     @unique @db.VarChar(254)
+  displayName       String     @map("display_name") @db.VarChar(120)
+  /// argon2id hash. Null while INVITED.
+  passwordHash      String?    @map("password_hash") @db.VarChar(255)
+  passwordChangedAt DateTime?  @map("password_changed_at") @db.Timestamptz(3)
+  status            UserStatus @default(INVITED)
+  isSuperAdmin      Boolean    @default(false) @map("is_super_admin")
+  locale            String     @default("en") @db.VarChar(10)
+  failedLoginCount  Int        @default(0) @map("failed_login_count")
+  lockedUntil       DateTime?  @map("locked_until") @db.Timestamptz(3)
+  lastLoginAt       DateTime?  @map("last_login_at") @db.Timestamptz(3)
+  defaultPropertyId String?    @map("default_property_id") @db.Uuid
+  createdAt         DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organization           Organization            @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  roleAssignments        UserRoleAssignment[]
+  sessions               AuthSession[]
+  resetTokens            PasswordResetToken[]
+  groups                 Group[]
+  housekeepingAttendants HousekeepingAttendant[]
+  maintenanceRequests    MaintenanceRequest[]
+  cashierShifts          CashierShift[]
+
+  @@index([organizationId])
+  @@map("users")
+}
+
+/// Permission catalog. Keys follow `resource:action`; the catalog is code-owned
+/// (lib/permissions/catalog.ts) and synchronised by the seed.
+model Permission {
+  key         String  @id @db.VarChar(80)
+  resource    String  @db.VarChar(40)
+  action      String  @db.VarChar(40)
+  description String  @db.VarChar(255)
+  /// High-risk permissions demand a reason and produce a HIGH audit record.
+  isHighRisk  Boolean @default(false) @map("is_high_risk")
+
+  roles RolePermission[]
+
+  @@map("permissions")
+}
+
+/// A named permission set. System roles (organizationId null) are templates
+/// cloned into each organization; organization roles are editable.
+model Role {
+  id             String   @id @default(uuid(7)) @db.Uuid
+  organizationId String?  @map("organization_id") @db.Uuid
+  code           String   @db.VarChar(40)
+  name           String   @db.VarChar(100)
+  description    String?  @db.VarChar(255)
+  isSystem       Boolean  @default(false) @map("is_system")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organization Organization?        @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  permissions  RolePermission[]
+  assignments  UserRoleAssignment[]
+
+  @@unique([organizationId, code], where: raw("organization_id IS NOT NULL"))
+  @@unique([code], map: "roles_system_code_key", where: raw("organization_id IS NULL"))
+  @@map("roles")
+}
+
+model RolePermission {
+  roleId        String @map("role_id") @db.Uuid
+  permissionKey String @map("permission_key") @db.VarChar(80)
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionKey], references: [key], onDelete: Cascade)
+
+  @@id([roleId, permissionKey])
+  @@map("role_permissions")
+}
+
+/// Grants a role to a user, either organization-wide or for one property.
+/// Effective permissions for (user, property) = union of ORGANIZATION grants
+/// and PROPERTY grants for that property.
+model UserRoleAssignment {
+  id          String    @id @default(uuid(7)) @db.Uuid
+  userId      String    @map("user_id") @db.Uuid
+  roleId      String    @map("role_id") @db.Uuid
+  scope       RoleScope
+  propertyId  String?   @map("property_id") @db.Uuid
+  grantedById String    @map("granted_by_id") @db.Uuid
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role     Role      @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  property Property? @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+
+  @@unique([userId, roleId, propertyId], where: raw("property_id IS NOT NULL"))
+  @@unique([userId, roleId], map: "user_role_assignments_org_scope_key", where: raw("property_id IS NULL"))
+  @@index([propertyId])
+  @@map("user_role_assignments")
+}
+
+/// One refresh-token family per login. Tokens rotate on every refresh; the
+/// previous hash is retained so reuse of a rotated token revokes the family.
+model AuthSession {
+  id                String    @id @default(uuid(7)) @db.Uuid
+  userId            String    @map("user_id") @db.Uuid
+  /// SHA-256 of the current refresh token. Raw tokens are never stored.
+  refreshTokenHash  String    @unique @map("refresh_token_hash") @db.Char(64)
+  previousTokenHash String?   @unique @map("previous_token_hash") @db.Char(64)
+  rotationCounter   Int       @default(0) @map("rotation_counter")
+  ipAddress         String?   @map("ip_address") @db.VarChar(45)
+  userAgent         String?   @map("user_agent") @db.VarChar(500)
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  lastUsedAt        DateTime  @default(now()) @map("last_used_at") @db.Timestamptz(3)
+  expiresAt         DateTime  @map("expires_at") @db.Timestamptz(3)
+  revokedAt         DateTime? @map("revoked_at") @db.Timestamptz(3)
+  revokedReason     String?   @map("revoked_reason") @db.VarChar(40)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revokedAt])
+  @@index([expiresAt])
+  @@map("auth_sessions")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid(7)) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  tokenHash String    @unique @map("token_hash") @db.Char(64)
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(3)
+  usedAt    DateTime? @map("used_at") @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("password_reset_tokens")
+}

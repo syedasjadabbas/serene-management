@@ -1,0 +1,449 @@
+// Availability (daily inventory counters, restrictions), rate plans, policies
+// and packages. See docs/DOMAIN_MODEL.md §Availability & rates.
+
+enum RestrictionType {
+  CLOSED
+  CLOSED_TO_ARRIVAL
+  CLOSED_TO_DEPARTURE
+  MIN_LOS // minimum length of stay counted from arrival
+  MAX_LOS
+  MIN_STAY_THROUGH // applies if any stay night touches the date
+  MAX_STAY_THROUGH
+  MIN_ADVANCE_DAYS
+  MAX_ADVANCE_DAYS
+
+  @@map("restriction_type")
+}
+
+enum RatePlanKind {
+  BAR
+  RACK
+  CORPORATE
+  NEGOTIATED
+  GROUP
+  PACKAGE
+  PROMOTIONAL
+  MEMBER
+  GOVERNMENT
+  WHOLESALE
+  COMPLIMENTARY
+  HOUSE_USE
+  DAY_USE
+
+  @@map("rate_plan_kind")
+}
+
+enum DerivationType {
+  PERCENT
+  AMOUNT
+
+  @@map("derivation_type")
+}
+
+enum PolicyAmountType {
+  FLAT
+  PERCENT_OF_STAY
+  PERCENT_OF_FIRST_NIGHT
+  NIGHTS
+
+  @@map("policy_amount_type")
+}
+
+enum PackageCalculation {
+  PER_ROOM
+  PER_PERSON
+  PER_ADULT
+  PER_CHILD
+
+  @@map("package_calculation")
+}
+
+enum PackagePostingRhythm {
+  EVERY_NIGHT
+  ARRIVAL_NIGHT
+  LAST_NIGHT
+  EVERY_NIGHT_EXCEPT_ARRIVAL
+  EVERY_NIGHT_EXCEPT_LAST
+  WEEKDAYS // uses daysOfWeek mask
+  ONCE_PER_STAY
+
+  @@map("package_posting_rhythm")
+}
+
+enum PackagePostingType {
+  INCLUDED_IN_RATE // price carved out of the room rate (separate revenue bucket)
+  SEPARATE_LINE // posted as its own folio line in addition to the rate
+  COMBINED_WITH_ROOM // added to the room line amount
+
+  @@map("package_posting_type")
+}
+
+/// Daily sellable-inventory counters per room type. The single contention
+/// point for selling rooms: every inventory-affecting command locks the
+/// affected (room_type_id, stay_date) rows in date order (SELECT ... FOR UPDATE),
+/// adjusts counters and commits with the reservation change. Night audit
+/// reconciles counters against source rows.
+/// available = physical - out_of_order - sold - blocked + overbook_limit
+model RoomTypeInventory {
+  propertyId    String   @map("property_id") @db.Uuid
+  roomTypeId    String   @map("room_type_id") @db.Uuid
+  stayDate      DateTime @map("stay_date") @db.Date
+  physicalRooms Int      @map("physical_rooms")
+  outOfOrder    Int      @default(0) @map("out_of_order")
+  /// Deducting reservations outside blocks (and block pickup beyond allocation).
+  sold          Int      @default(0)
+  /// Unpicked-up allocation of deducting blocks.
+  blocked       Int      @default(0)
+  overbookLimit Int      @default(0) @map("overbook_limit")
+  /// Optional cap on sales below physical capacity (null = no cap).
+  sellLimit     Int?     @map("sell_limit")
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  roomType RoomType @relation(fields: [propertyId, roomTypeId], references: [propertyId, id], onDelete: Restrict)
+
+  @@id([roomTypeId, stayDate])
+  @@index([propertyId, stayDate])
+  @@map("room_type_inventory")
+}
+
+/// House-level daily controls (hotel-wide overbooking and sell limit).
+model HouseInventoryControl {
+  propertyId    String   @map("property_id") @db.Uuid
+  stayDate      DateTime @map("stay_date") @db.Date
+  overbookLimit Int      @default(0) @map("overbook_limit")
+  sellLimit     Int?     @map("sell_limit")
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+
+  @@id([propertyId, stayDate])
+  @@map("house_inventory_controls")
+}
+
+/// Sparse daily restriction. Null room type / rate plan = applies to all.
+model Restriction {
+  id          String          @id @default(uuid(7)) @db.Uuid
+  propertyId  String          @map("property_id") @db.Uuid
+  stayDate    DateTime        @map("stay_date") @db.Date
+  type        RestrictionType
+  roomTypeId  String?         @map("room_type_id") @db.Uuid
+  ratePlanId  String?         @map("rate_plan_id") @db.Uuid
+  /// Nights / days for LOS and advance restrictions; null for CLOSED/CTA/CTD.
+  value       Int?
+  createdById String          @map("created_by_id") @db.Uuid
+  createdAt   DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  property Property  @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  roomType RoomType? @relation(fields: [propertyId, roomTypeId], references: [propertyId, id], onDelete: Restrict)
+  ratePlan RatePlan? @relation(fields: [propertyId, ratePlanId], references: [propertyId, id], onDelete: Restrict)
+
+  // One restriction of a type per (date, scope). Four partial indexes because
+  // the scope columns are nullable.
+  @@unique([propertyId, stayDate, type, roomTypeId, ratePlanId], map: "restrictions_rt_rp_key", where: raw("room_type_id IS NOT NULL AND rate_plan_id IS NOT NULL"))
+  @@unique([propertyId, stayDate, type, roomTypeId], map: "restrictions_rt_key", where: raw("room_type_id IS NOT NULL AND rate_plan_id IS NULL"))
+  @@unique([propertyId, stayDate, type, ratePlanId], map: "restrictions_rp_key", where: raw("room_type_id IS NULL AND rate_plan_id IS NOT NULL"))
+  @@unique([propertyId, stayDate, type], map: "restrictions_house_key", where: raw("room_type_id IS NULL AND rate_plan_id IS NULL"))
+  @@index([propertyId, stayDate])
+  @@map("restrictions")
+}
+
+model RateCategory {
+  id         String       @id @default(uuid(7)) @db.Uuid
+  propertyId String       @map("property_id") @db.Uuid
+  code       String       @db.VarChar(20)
+  name       String       @db.VarChar(100)
+  /// Rate class grouping above category (e.g. "TRANSIENT", "GROUP").
+  rateClass  String?      @map("rate_class") @db.VarChar(20)
+  sortOrder  Int          @default(0) @map("sort_order")
+  status     RecordStatus @default(ACTIVE)
+
+  property  Property   @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  ratePlans RatePlan[]
+
+  @@unique([propertyId, code])
+  @@unique([propertyId, id])
+  @@map("rate_categories")
+}
+
+model CancellationPolicy {
+  id            String           @id @default(uuid(7)) @db.Uuid
+  propertyId    String           @map("property_id") @db.Uuid
+  code          String           @db.VarChar(20)
+  name          String           @db.VarChar(100)
+  /// Free cancellation until this many hours before local arrival time.
+  deadlineHours Int              @map("deadline_hours")
+  penaltyType   PolicyAmountType @map("penalty_type")
+  penaltyValue  Decimal          @map("penalty_value") @db.Decimal(19, 4)
+  description   String?          @db.VarChar(1000)
+  status        RecordStatus     @default(ACTIVE)
+
+  property         Property          @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  blocks           Block[]
+  ratePlans        RatePlan[]
+  reservationRooms ReservationRoom[]
+
+  @@unique([propertyId, code])
+  @@unique([propertyId, id])
+  @@map("cancellation_policies")
+}
+
+model DepositPolicy {
+  id          String           @id @default(uuid(7)) @db.Uuid
+  propertyId  String           @map("property_id") @db.Uuid
+  code        String           @db.VarChar(20)
+  name        String           @db.VarChar(100)
+  amountType  PolicyAmountType @map("amount_type")
+  amountValue Decimal          @map("amount_value") @db.Decimal(19, 4)
+  /// Days after booking the deposit is due (capped at arrival).
+  dueDays     Int              @default(0) @map("due_days")
+  status      RecordStatus     @default(ACTIVE)
+
+  property         Property          @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  blocks           Block[]
+  ratePlans        RatePlan[]
+  reservationRooms ReservationRoom[]
+
+  @@unique([propertyId, code])
+  @@unique([propertyId, id])
+  @@map("deposit_policies")
+}
+
+/// Reservation (guarantee) type: decides whether the booking deducts inventory
+/// and what is required to hold it (card, deposit, arrival time).
+model ReservationType {
+  id               String       @id @default(uuid(7)) @db.Uuid
+  propertyId       String       @map("property_id") @db.Uuid
+  code             String       @db.VarChar(20)
+  name             String       @db.VarChar(100)
+  deductsInventory Boolean      @default(true) @map("deducts_inventory")
+  isGuaranteed     Boolean      @default(true) @map("is_guaranteed")
+  requiresCard     Boolean      @default(false) @map("requires_card")
+  requiresDeposit  Boolean      @default(false) @map("requires_deposit")
+  requiresEta      Boolean      @default(false) @map("requires_eta")
+  /// Local time after which a non-guaranteed booking may be released, "HH:MM".
+  releaseTime      String?      @map("release_time") @db.VarChar(5)
+  postNoShowCharge Boolean      @default(false) @map("post_no_show_charge")
+  status           RecordStatus @default(ACTIVE)
+
+  property         Property          @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  blocks           Block[]
+  reservationRooms ReservationRoom[]
+
+  @@unique([propertyId, code])
+  @@unique([propertyId, id])
+  @@map("reservation_types")
+}
+
+model RatePlan {
+  id                    String          @id @default(uuid(7)) @db.Uuid
+  propertyId            String          @map("property_id") @db.Uuid
+  categoryId            String?         @map("category_id") @db.Uuid
+  code                  String          @db.VarChar(20)
+  name                  String          @db.VarChar(100)
+  description           String?         @db.VarChar(2000)
+  kind                  RatePlanKind
+  currencyCode          String          @map("currency_code") @db.Char(3)
+  taxInclusive          Boolean         @default(false) @map("tax_inclusive")
+  /// Transaction code used for the nightly room charge.
+  roomTransactionCodeId String          @map("room_transaction_code_id") @db.Uuid
+  /// Derived rates: amount = parent ± derivation, rounded to roundingIncrement.
+  parentRatePlanId      String?         @map("parent_rate_plan_id") @db.Uuid
+  derivationType        DerivationType? @map("derivation_type")
+  derivationValue       Decimal?        @map("derivation_value") @db.Decimal(19, 4)
+  roundingIncrement     Decimal?        @map("rounding_increment") @db.Decimal(19, 4)
+  /// Sell window (booking date) and stay window (inclusive dates; null = open).
+  sellFrom              DateTime?       @map("sell_from") @db.Date
+  sellTo                DateTime?       @map("sell_to") @db.Date
+  stayFrom              DateTime?       @map("stay_from") @db.Date
+  stayTo                DateTime?       @map("stay_to") @db.Date
+  isCommissionable      Boolean         @default(true) @map("is_commissionable")
+  commissionPlanId      String?         @map("commission_plan_id") @db.Uuid
+  /// Negotiated rates are bookable only with a linked account (NegotiatedRate).
+  requiresNegotiation   Boolean         @default(false) @map("requires_negotiation")
+  requiresMembership    Boolean         @default(false) @map("requires_membership")
+  isComplimentary       Boolean         @default(false) @map("is_complimentary")
+  isDayUse              Boolean         @default(false) @map("is_day_use")
+  defaultMarketCodeId   String?         @map("default_market_code_id") @db.Uuid
+  defaultSourceCodeId   String?         @map("default_source_code_id") @db.Uuid
+  cancellationPolicyId  String?         @map("cancellation_policy_id") @db.Uuid
+  depositPolicyId       String?         @map("deposit_policy_id") @db.Uuid
+  displayOrder          Int             @default(0) @map("display_order")
+  status                RecordStatus    @default(ACTIVE)
+  version               Int             @default(1)
+  createdAt             DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  property            Property            @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  category            RateCategory?       @relation(fields: [propertyId, categoryId], references: [propertyId, id], onDelete: Restrict)
+  roomTransactionCode TransactionCode     @relation(fields: [propertyId, roomTransactionCodeId], references: [propertyId, id], onDelete: Restrict)
+  parent              RatePlan?           @relation("DerivedRates", fields: [propertyId, parentRatePlanId], references: [propertyId, id], onDelete: Restrict)
+  derived             RatePlan[]          @relation("DerivedRates")
+  commissionPlan      CommissionPlan?     @relation(fields: [commissionPlanId], references: [id], onDelete: Restrict)
+  defaultMarketCode   MarketCode?         @relation(fields: [propertyId, defaultMarketCodeId], references: [propertyId, id], onDelete: Restrict)
+  defaultSourceCode   SourceCode?         @relation(fields: [propertyId, defaultSourceCodeId], references: [propertyId, id], onDelete: Restrict)
+  cancellationPolicy  CancellationPolicy? @relation(fields: [propertyId, cancellationPolicyId], references: [propertyId, id], onDelete: Restrict)
+  depositPolicy       DepositPolicy?      @relation(fields: [propertyId, depositPolicyId], references: [propertyId, id], onDelete: Restrict)
+
+  roomTypes             RatePlanRoomType[]
+  seasons               RateSeason[]
+  packages              RatePlanPackage[]
+  negotiated            NegotiatedRate[]
+  blocks                Block[]
+  restrictions          Restriction[]
+  reservationRooms      ReservationRoom[]
+  reservationRoomNights ReservationRoomNight[]
+
+  @@unique([propertyId, code])
+  @@unique([propertyId, id])
+  @@index([propertyId, status])
+  @@map("rate_plans")
+}
+
+model RatePlanRoomType {
+  propertyId String @map("property_id") @db.Uuid
+  ratePlanId String @map("rate_plan_id") @db.Uuid
+  roomTypeId String @map("room_type_id") @db.Uuid
+
+  ratePlan RatePlan @relation(fields: [propertyId, ratePlanId], references: [propertyId, id], onDelete: Cascade)
+  roomType RoomType @relation(fields: [propertyId, roomTypeId], references: [propertyId, id], onDelete: Restrict)
+
+  @@id([ratePlanId, roomTypeId])
+  @@index([roomTypeId])
+  @@map("rate_plan_room_types")
+}
+
+/// A pricing period of a (non-derived) rate plan. Overlaps resolve by highest
+/// priority, so a one-day "date-specific" season overrides a seasonal one.
+model RateSeason {
+  id         String   @id @default(uuid(7)) @db.Uuid
+  propertyId String   @map("property_id") @db.Uuid
+  ratePlanId String   @map("rate_plan_id") @db.Uuid
+  name       String   @db.VarChar(100)
+  /// Inclusive stay-date range.
+  startDate  DateTime @map("start_date") @db.Date
+  endDate    DateTime @map("end_date") @db.Date
+  /// Bitmask Mon=1 ... Sun=64; 127 = every day. Enables weekend pricing.
+  daysOfWeek Int      @default(127) @map("days_of_week")
+  priority   Int      @default(0)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  ratePlan RatePlan           @relation(fields: [propertyId, ratePlanId], references: [propertyId, id], onDelete: Cascade)
+  amounts  RateSeasonAmount[]
+
+  @@unique([propertyId, id])
+  @@index([ratePlanId, startDate, endDate])
+  @@map("rate_seasons")
+}
+
+/// Occupancy-based price for one room type within a season.
+model RateSeasonAmount {
+  propertyId  String   @map("property_id") @db.Uuid
+  seasonId    String   @map("season_id") @db.Uuid
+  roomTypeId  String   @map("room_type_id") @db.Uuid
+  oneAdult    Decimal  @map("one_adult") @db.Decimal(19, 4)
+  twoAdults   Decimal? @map("two_adults") @db.Decimal(19, 4)
+  threeAdults Decimal? @map("three_adults") @db.Decimal(19, 4)
+  fourAdults  Decimal? @map("four_adults") @db.Decimal(19, 4)
+  extraAdult  Decimal? @map("extra_adult") @db.Decimal(19, 4)
+  extraChild  Decimal? @map("extra_child") @db.Decimal(19, 4)
+
+  season   RateSeason @relation(fields: [propertyId, seasonId], references: [propertyId, id], onDelete: Cascade)
+  roomType RoomType   @relation(fields: [propertyId, roomTypeId], references: [propertyId, id], onDelete: Restrict)
+
+  @@id([seasonId, roomTypeId])
+  @@map("rate_season_amounts")
+}
+
+/// Grants an account (company / agent / source) access to a negotiated rate.
+model NegotiatedRate {
+  id               String    @id @default(uuid(7)) @db.Uuid
+  propertyId       String    @map("property_id") @db.Uuid
+  ratePlanId       String    @map("rate_plan_id") @db.Uuid
+  accountProfileId String    @map("account_profile_id") @db.Uuid
+  validFrom        DateTime? @map("valid_from") @db.Date
+  validTo          DateTime? @map("valid_to") @db.Date
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  ratePlan RatePlan       @relation(fields: [propertyId, ratePlanId], references: [propertyId, id], onDelete: Cascade)
+  account  AccountProfile @relation(fields: [accountProfileId], references: [id], onDelete: Restrict)
+
+  @@unique([ratePlanId, accountProfileId])
+  @@index([accountProfileId])
+  @@map("negotiated_rates")
+}
+
+model Package {
+  id             String             @id @default(uuid(7)) @db.Uuid
+  propertyId     String             @map("property_id") @db.Uuid
+  code           String             @db.VarChar(20)
+  name           String             @db.VarChar(100)
+  description    String?            @db.VarChar(2000)
+  postingType    PackagePostingType @default(INCLUDED_IN_RATE) @map("posting_type")
+  sellSeparately Boolean            @default(false) @map("sell_separately")
+  status         RecordStatus       @default(ACTIVE)
+  createdAt      DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  property            Property             @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  components          PackageComponent[]
+  ratePlans           RatePlanPackage[]
+  reservationPackages ReservationPackage[]
+
+  @@unique([propertyId, code])
+  @@unique([propertyId, id])
+  @@map("packages")
+}
+
+/// One posting element of a package (e.g. "Breakfast" inside "Half Board").
+model PackageComponent {
+  id                String               @id @default(uuid(7)) @db.Uuid
+  propertyId        String               @map("property_id") @db.Uuid
+  packageId         String               @map("package_id") @db.Uuid
+  name              String               @db.VarChar(100)
+  transactionCodeId String               @map("transaction_code_id") @db.Uuid
+  calculation       PackageCalculation
+  postingRhythm     PackagePostingRhythm @map("posting_rhythm")
+  daysOfWeek        Int                  @default(127) @map("days_of_week")
+  unitPrice         Decimal              @map("unit_price") @db.Decimal(19, 4)
+  /// Allowance components credit a package ledger consumed by outlet postings.
+  isAllowance       Boolean              @default(false) @map("is_allowance")
+  /// Post on the night after the stay date (e.g. breakfast).
+  postNextDay       Boolean              @default(false) @map("post_next_day")
+  sortOrder         Int                  @default(0) @map("sort_order")
+
+  package         Package                 @relation(fields: [propertyId, packageId], references: [propertyId, id], onDelete: Cascade)
+  transactionCode TransactionCode         @relation(fields: [propertyId, transactionCodeId], references: [propertyId, id], onDelete: Restrict)
+  prices          PackageComponentPrice[]
+
+  @@unique([propertyId, id])
+  @@index([packageId])
+  @@map("package_components")
+}
+
+/// Seasonal price override for a component (inclusive dates).
+model PackageComponentPrice {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  propertyId  String   @map("property_id") @db.Uuid
+  componentId String   @map("component_id") @db.Uuid
+  startDate   DateTime @map("start_date") @db.Date
+  endDate     DateTime @map("end_date") @db.Date
+  unitPrice   Decimal  @map("unit_price") @db.Decimal(19, 4)
+
+  component PackageComponent @relation(fields: [propertyId, componentId], references: [propertyId, id], onDelete: Cascade)
+
+  @@index([componentId, startDate])
+  @@map("package_component_prices")
+}
+
+model RatePlanPackage {
+  propertyId String @map("property_id") @db.Uuid
+  ratePlanId String @map("rate_plan_id") @db.Uuid
+  packageId  String @map("package_id") @db.Uuid
+
+  ratePlan RatePlan @relation(fields: [propertyId, ratePlanId], references: [propertyId, id], onDelete: Cascade)
+  package  Package  @relation(fields: [propertyId, packageId], references: [propertyId, id], onDelete: Restrict)
+
+  @@id([ratePlanId, packageId])
+  @@map("rate_plan_packages")
+}

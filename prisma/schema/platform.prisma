@@ -1,0 +1,110 @@
+// Cross-cutting platform tables: audit trail, transactional outbox,
+// idempotency and file attachments.
+
+enum AuditRisk {
+  LOW
+  STANDARD
+  HIGH
+
+  @@map("audit_risk")
+}
+
+enum OutboxStatus {
+  PENDING
+  PUBLISHED
+  FAILED
+
+  @@map("outbox_status")
+}
+
+/// Append-only audit trail. UPDATE/DELETE are rejected by a database trigger.
+/// Written inside the same transaction as the change it describes.
+/// High-volume: partition by month (created_at) before production scale.
+model AuditLog {
+  id             String    @id @default(uuid(7)) @db.Uuid
+  organizationId String    @map("organization_id") @db.Uuid
+  propertyId     String?   @map("property_id") @db.Uuid
+  /// Null for system actors (night audit scheduler, integrations).
+  userId         String?   @map("user_id") @db.Uuid
+  actorType      String    @default("USER") @map("actor_type") @db.VarChar(20)
+  /// e.g. "reservation.cancel", "folio.adjust", "room.status_change"
+  action         String    @db.VarChar(80)
+  resourceType   String    @map("resource_type") @db.VarChar(60)
+  resourceId     String?   @map("resource_id") @db.VarChar(64)
+  businessDate   DateTime? @map("business_date") @db.Date
+  risk           AuditRisk @default(STANDARD)
+  before         Json?
+  after          Json?
+  reasonCodeId   String?   @map("reason_code_id") @db.Uuid
+  reason         String?   @db.VarChar(1000)
+  requestId      String?   @map("request_id") @db.VarChar(64)
+  ipAddress      String?   @map("ip_address") @db.VarChar(45)
+  userAgent      String?   @map("user_agent") @db.VarChar(500)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([propertyId, createdAt(sort: Desc)])
+  @@index([resourceType, resourceId, createdAt(sort: Desc)])
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([propertyId, risk, createdAt(sort: Desc)])
+  @@map("audit_logs")
+}
+
+/// Transactional outbox: domain events written in the business transaction,
+/// then relayed to real-time subscribers (SSE) and integrations.
+model OutboxEvent {
+  id            String       @id @default(uuid(7)) @db.Uuid
+  propertyId    String?      @map("property_id") @db.Uuid
+  aggregateType String       @map("aggregate_type") @db.VarChar(60)
+  aggregateId   String       @map("aggregate_id") @db.VarChar(64)
+  /// e.g. "room.status_changed", "reservation.checked_in"
+  eventType     String       @map("event_type") @db.VarChar(80)
+  payload       Json
+  status        OutboxStatus @default(PENDING)
+  attempts      Int          @default(0)
+  lastError     String?      @map("last_error") @db.VarChar(1000)
+  occurredAt    DateTime     @default(now()) @map("occurred_at") @db.Timestamptz(3)
+  publishedAt   DateTime?    @map("published_at") @db.Timestamptz(3)
+
+  @@index([occurredAt], map: "outbox_events_pending_idx", where: raw("status = 'PENDING'"))
+  @@index([propertyId, occurredAt])
+  @@map("outbox_events")
+}
+
+/// Replay protection for non-idempotent commands (payments, postings, check-in).
+/// Clients send `Idempotency-Key`; the stored response is returned on retry.
+model IdempotencyKey {
+  key          String   @db.VarChar(80)
+  userId       String   @map("user_id") @db.Uuid
+  route        String   @db.VarChar(200)
+  requestHash  String   @map("request_hash") @db.Char(64)
+  statusCode   Int?     @map("status_code")
+  responseBody Json?    @map("response_body")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  expiresAt    DateTime @map("expires_at") @db.Timestamptz(3)
+
+  @@id([userId, key])
+  @@index([expiresAt])
+  @@map("idempotency_keys")
+}
+
+/// File metadata (photos, scanned documents, maintenance pictures). Bytes live
+/// in object storage. `resourceType/resourceId` is the one intentional
+/// polymorphic reference besides the audit log.
+model Attachment {
+  id           String    @id @default(uuid(7)) @db.Uuid
+  propertyId   String?   @map("property_id") @db.Uuid
+  resourceType String    @map("resource_type") @db.VarChar(60)
+  resourceId   String    @map("resource_id") @db.Uuid
+  storageKey   String    @unique @map("storage_key") @db.VarChar(500)
+  fileName     String    @map("file_name") @db.VarChar(255)
+  contentType  String    @map("content_type") @db.VarChar(100)
+  sizeBytes    Int       @map("size_bytes")
+  /// Sensitive attachments (ID scans) require an elevated read permission.
+  isSensitive  Boolean   @default(false) @map("is_sensitive")
+  uploadedById String    @map("uploaded_by_id") @db.Uuid
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  deletedAt    DateTime? @map("deleted_at") @db.Timestamptz(3)
+
+  @@index([resourceType, resourceId])
+  @@map("attachments")
+}

@@ -1,0 +1,136 @@
+// Groups and room blocks (allotments).
+// Group = the business relationship (organization-level, may span properties).
+// Block = one property's inventory commitment for the group; its allocation
+//         grid (room type x date) feeds RoomTypeInventory.blocked.
+
+enum BlockStatusType {
+  INQUIRY // no inventory effect
+  NON_DEDUCT // tentative: visible, not deducted
+  DEDUCT // definite: deducts inventory, allows pickup
+  CANCEL // lost / cancelled: returns inventory
+
+  @@map("block_status_type")
+}
+
+enum GroupStatus {
+  ACTIVE
+  CLOSED
+  CANCELLED
+
+  @@map("group_status")
+}
+
+model Group {
+  id               String      @id @default(uuid(7)) @db.Uuid
+  organizationId   String      @map("organization_id") @db.Uuid
+  code             String      @db.VarChar(20)
+  name             String      @db.VarChar(200)
+  accountProfileId String?     @map("account_profile_id") @db.Uuid
+  contactGuestId   String?     @map("contact_guest_id") @db.Uuid
+  salesOwnerId     String?     @map("sales_owner_id") @db.Uuid
+  status           GroupStatus @default(ACTIVE)
+  notes            String?     @db.VarChar(4000)
+  createdAt        DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  account      AccountProfile? @relation(fields: [accountProfileId], references: [id], onDelete: Restrict)
+  contactGuest Guest?          @relation(fields: [contactGuestId], references: [id], onDelete: Restrict)
+  salesOwner   User?           @relation(fields: [salesOwnerId], references: [id], onDelete: Restrict)
+  blocks       Block[]
+  reservations Reservation[]
+
+  @@unique([organizationId, code])
+  @@map("groups")
+}
+
+/// Configurable block status (Inquiry, Tentative, Definite, Actual, Lost ...)
+/// whose `type` drives inventory behaviour.
+model BlockStatus {
+  id           String          @id @default(uuid(7)) @db.Uuid
+  propertyId   String          @map("property_id") @db.Uuid
+  code         String          @db.VarChar(20)
+  name         String          @db.VarChar(100)
+  type         BlockStatusType
+  allowsPickup Boolean         @default(false) @map("allows_pickup")
+  isDefault    Boolean         @default(false) @map("is_default")
+  sortOrder    Int             @default(0) @map("sort_order")
+  status       RecordStatus    @default(ACTIVE)
+
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  blocks   Block[]
+
+  @@unique([propertyId, code])
+  @@unique([propertyId, id])
+  @@map("block_statuses")
+}
+
+model Block {
+  id                   String    @id @default(uuid(7)) @db.Uuid
+  propertyId           String    @map("property_id") @db.Uuid
+  groupId              String    @map("group_id") @db.Uuid
+  code                 String    @db.VarChar(20)
+  name                 String    @db.VarChar(200)
+  statusId             String    @map("status_id") @db.Uuid
+  /// Core dates: first night and departure (exclusive).
+  startDate            DateTime  @map("start_date") @db.Date
+  endDate              DateTime  @map("end_date") @db.Date
+  /// All unpicked rooms return to house inventory at this date (unless null).
+  cutoffDate           DateTime? @map("cutoff_date") @db.Date
+  /// Rolling cutoff: each night is released this many days before it.
+  cutoffDays           Int?      @map("cutoff_days")
+  /// Elastic blocks may pick up beyond allocation from house inventory.
+  isElastic            Boolean   @default(false) @map("is_elastic")
+  ratePlanId           String?   @map("rate_plan_id") @db.Uuid
+  marketCodeId         String    @map("market_code_id") @db.Uuid
+  sourceCodeId         String    @map("source_code_id") @db.Uuid
+  reservationTypeId    String    @map("reservation_type_id") @db.Uuid
+  cancellationPolicyId String?   @map("cancellation_policy_id") @db.Uuid
+  depositPolicyId      String?   @map("deposit_policy_id") @db.Uuid
+  salesOwnerId         String?   @map("sales_owner_id") @db.Uuid
+  version              Int       @default(1)
+  createdAt            DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  property           Property            @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  group              Group               @relation(fields: [groupId], references: [id], onDelete: Restrict)
+  status             BlockStatus         @relation(fields: [propertyId, statusId], references: [propertyId, id], onDelete: Restrict)
+  ratePlan           RatePlan?           @relation(fields: [propertyId, ratePlanId], references: [propertyId, id], onDelete: Restrict)
+  marketCode         MarketCode          @relation(fields: [propertyId, marketCodeId], references: [propertyId, id], onDelete: Restrict)
+  sourceCode         SourceCode          @relation(fields: [propertyId, sourceCodeId], references: [propertyId, id], onDelete: Restrict)
+  reservationType    ReservationType     @relation(fields: [propertyId, reservationTypeId], references: [propertyId, id], onDelete: Restrict)
+  cancellationPolicy CancellationPolicy? @relation(fields: [propertyId, cancellationPolicyId], references: [propertyId, id], onDelete: Restrict)
+  depositPolicy      DepositPolicy?      @relation(fields: [propertyId, depositPolicyId], references: [propertyId, id], onDelete: Restrict)
+  allocations        BlockAllocation[]
+  folios             Folio[]
+  reservations       Reservation[]
+  reservationRooms   ReservationRoom[]
+
+  @@unique([propertyId, code])
+  @@unique([propertyId, id])
+  @@index([groupId])
+  @@index([propertyId, startDate, endDate])
+  @@map("blocks")
+}
+
+/// Room-type x night grid. `pickedUp` is maintained transactionally with
+/// reservation changes; `released` records cutoff/wash returns.
+model BlockAllocation {
+  propertyId String   @map("property_id") @db.Uuid
+  blockId    String   @map("block_id") @db.Uuid
+  roomTypeId String   @map("room_type_id") @db.Uuid
+  stayDate   DateTime @map("stay_date") @db.Date
+  allocated  Int
+  pickedUp   Int      @default(0) @map("picked_up")
+  released   Int      @default(0)
+  /// Group rate for this night / room type (single occupancy basis).
+  rateAmount Decimal? @map("rate_amount") @db.Decimal(19, 4)
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  block    Block    @relation(fields: [propertyId, blockId], references: [propertyId, id], onDelete: Cascade)
+  roomType RoomType @relation(fields: [propertyId, roomTypeId], references: [propertyId, id], onDelete: Restrict)
+
+  @@id([blockId, roomTypeId, stayDate])
+  @@index([propertyId, stayDate])
+  @@map("block_allocations")
+}

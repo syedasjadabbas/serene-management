@@ -1,0 +1,280 @@
+@import "tailwindcss";
+
+/*
+ * SERENE MANAGEMENT design tokens (docs/ARCHITECTURE.md §Design system).
+ *
+ * Three layers:
+ *   1. Raw palette (--palette-*): never used directly in components.
+ *   2. Semantic tokens (--sm-*): redefined per theme (light / dark) and density.
+ *   3. Tailwind @theme mapping so utilities read semantic tokens
+ *      (bg-surface, text-fg-muted, border-subtle, bg-status-vacant-clean ...).
+ *
+ * Operational screens are dense: 13px table text, 32px rows by default,
+ * small radii, near-flat surfaces, color reserved for status and action.
+ */
+
+:root {
+  /* --- Raw palette ------------------------------------------------------ */
+  --palette-ink-950: #0d141b;
+  --palette-ink-900: #16202a;
+  --palette-ink-800: #243140;
+  --palette-ink-700: #37475a;
+  --palette-ink-600: #4a5563;
+  --palette-ink-500: #6b7684;
+  --palette-ink-400: #97a1ad;
+  --palette-ink-300: #c3cad2;
+  --palette-ink-200: #dde2e7;
+  --palette-ink-100: #eceff2;
+  --palette-ink-50: #f5f7f8;
+
+  --palette-pine-900: #072f2d;
+  --palette-pine-800: #0a3d3a;
+  --palette-pine-700: #0e4d4a;
+  --palette-pine-600: #145f5b;
+  --palette-pine-500: #1f7671;
+  --palette-pine-100: #dcebe9;
+  --palette-pine-50: #eef6f5;
+
+  --palette-brass-600: #8a6630;
+  --palette-brass-500: #a07a3f;
+  --palette-brass-100: #f3ead9;
+
+  /* --- Semantic: surfaces & text (light) ----------------------------- */
+  --sm-canvas: var(--palette-ink-50);
+  --sm-surface: #ffffff;
+  --sm-surface-sunken: var(--palette-ink-100);
+  --sm-surface-raised: #ffffff;
+  --sm-surface-inverse: var(--palette-ink-900);
+  --sm-overlay: rgb(13 20 27 / 0.45);
+
+  --sm-border-subtle: var(--palette-ink-200);
+  --sm-border: var(--palette-ink-300);
+  --sm-border-strong: var(--palette-ink-400);
+
+  --sm-fg: var(--palette-ink-900);
+  --sm-fg-secondary: var(--palette-ink-600);
+  --sm-fg-muted: var(--palette-ink-500);
+  --sm-fg-inverse: #ffffff;
+
+  --sm-brand: var(--palette-pine-700);
+  --sm-brand-hover: var(--palette-pine-800);
+  --sm-brand-subtle: var(--palette-pine-50);
+  --sm-brand-fg: #ffffff;
+  --sm-accent: var(--palette-brass-500);
+  --sm-accent-subtle: var(--palette-brass-100);
+  --sm-focus: #1d6fd8;
+
+  /* --- Semantic: feedback ------------------------------------------- */
+  --sm-success: #1f7a4d;
+  --sm-success-subtle: #e4f3ea;
+  --sm-warning: #a15c07;
+  --sm-warning-subtle: #fbf0dc;
+  --sm-danger: #b42318;
+  --sm-danger-subtle: #fbe7e5;
+  --sm-info: #1d5fb8;
+  --sm-info-subtle: #e3edfa;
+
+  /* --- Semantic: room status (always paired with a code/icon) -------- */
+  --sm-status-vacant-clean: #1f7a4d;
+  --sm-status-vacant-dirty: #b45309;
+  --sm-status-occupied-clean: #1d5fb8;
+  --sm-status-occupied-dirty: #b42318;
+  --sm-status-inspected: #0f766e;
+  --sm-status-pickup: #a16207;
+  --sm-status-out-of-order: #3f3f46;
+  --sm-status-out-of-service: #71717a;
+  --sm-status-hold: #4338ca;
+
+  /* --- Semantic: reservation status ---------------------------------- */
+  --sm-res-reserved: #1d5fb8;
+  --sm-res-due-in: #0f766e;
+  --sm-res-in-house: #1f7a4d;
+  --sm-res-due-out: #a15c07;
+  --sm-res-checked-out: #6b7684;
+  --sm-res-cancelled: #b42318;
+  --sm-res-no-show: #7f1d1d;
+  --sm-res-waitlisted: #4a5563;
+
+  /* --- Density (default: comfortable-compact) ----------------------- */
+  --sm-row-height: 2rem; /* 32px table rows */
+  --sm-control-height: 2rem; /* inputs, selects, buttons */
+  --sm-control-height-touch: 2.75rem; /* housekeeping / tablet workflows */
+
+  color-scheme: light;
+}
+
+/* Dark theme: explicit toggle, or system preference unless light is forced. */
+:root[data-theme="dark"] {
+  --sm-canvas: var(--palette-ink-950);
+  --sm-surface: #111a22;
+  --sm-surface-sunken: #0b1117;
+  --sm-surface-raised: #17222c;
+  --sm-surface-inverse: var(--palette-ink-100);
+  --sm-overlay: rgb(0 0 0 / 0.6);
+  --sm-border-subtle: #1f2b36;
+  --sm-border: #2b3946;
+  --sm-border-strong: #3d4d5c;
+  --sm-fg: #e6eaee;
+  --sm-fg-secondary: #b3bcc6;
+  --sm-fg-muted: #8793a0;
+  --sm-fg-inverse: var(--palette-ink-900);
+  --sm-brand: #2a938c;
+  --sm-brand-hover: #33a8a0;
+  --sm-brand-subtle: #0f2927;
+  --sm-accent: #c79c5a;
+  --sm-accent-subtle: #2b2416;
+  --sm-focus: #5b9cf0;
+  --sm-success-subtle: #10281c;
+  --sm-warning-subtle: #2c1f0b;
+  --sm-danger-subtle: #2e1310;
+  --sm-info-subtle: #0f1f36;
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --sm-canvas: var(--palette-ink-950);
+    --sm-surface: #111a22;
+    --sm-surface-sunken: #0b1117;
+    --sm-surface-raised: #17222c;
+    --sm-surface-inverse: var(--palette-ink-100);
+    --sm-overlay: rgb(0 0 0 / 0.6);
+    --sm-border-subtle: #1f2b36;
+    --sm-border: #2b3946;
+    --sm-border-strong: #3d4d5c;
+    --sm-fg: #e6eaee;
+    --sm-fg-secondary: #b3bcc6;
+    --sm-fg-muted: #8793a0;
+    --sm-fg-inverse: var(--palette-ink-900);
+    --sm-brand: #2a938c;
+    --sm-brand-hover: #33a8a0;
+    --sm-brand-subtle: #0f2927;
+    --sm-accent: #c79c5a;
+    --sm-accent-subtle: #2b2416;
+    --sm-focus: #5b9cf0;
+    --sm-success-subtle: #10281c;
+    --sm-warning-subtle: #2c1f0b;
+    --sm-danger-subtle: #2e1310;
+    --sm-info-subtle: #0f1f36;
+    color-scheme: dark;
+  }
+}
+
+:root[data-density="touch"] {
+  --sm-row-height: 2.75rem;
+  --sm-control-height: 2.75rem;
+}
+
+/* --- Tailwind mapping ---------------------------------------------------- */
+@theme inline {
+  --font-sans: var(--font-plex-sans), var(--font-plex-arabic), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, monospace;
+
+  /* Type scale tuned for dense operational UI */
+  --text-2xs: 0.6875rem; /* 11px: badges, meta */
+  --text-2xs--line-height: 1rem;
+  --text-xs: 0.75rem; /* 12px: secondary cells, labels */
+  --text-xs--line-height: 1rem;
+  --text-sm: 0.8125rem; /* 13px: table body, controls */
+  --text-sm--line-height: 1.25rem;
+  --text-base: 0.875rem; /* 14px: body */
+  --text-base--line-height: 1.375rem;
+  --text-lg: 1rem; /* 16px: panel titles */
+  --text-lg--line-height: 1.5rem;
+  --text-xl: 1.125rem; /* 18px: page titles */
+  --text-xl--line-height: 1.625rem;
+  --text-2xl: 1.375rem; /* 22px: rare, report headers */
+  --text-2xl--line-height: 1.875rem;
+
+  --radius-xs: 2px;
+  --radius-sm: 3px;
+  --radius-md: 4px;
+  --radius-lg: 6px;
+
+  --shadow-raised: 0 1px 2px rgb(13 20 27 / 0.06), 0 1px 1px rgb(13 20 27 / 0.04);
+  --shadow-overlay: 0 8px 24px rgb(13 20 27 / 0.16), 0 2px 6px rgb(13 20 27 / 0.08);
+
+  --color-canvas: var(--sm-canvas);
+  --color-surface: var(--sm-surface);
+  --color-surface-sunken: var(--sm-surface-sunken);
+  --color-surface-raised: var(--sm-surface-raised);
+  --color-surface-inverse: var(--sm-surface-inverse);
+  --color-overlay: var(--sm-overlay);
+  --color-border-subtle: var(--sm-border-subtle);
+  --color-border: var(--sm-border);
+  --color-border-strong: var(--sm-border-strong);
+  --color-fg: var(--sm-fg);
+  --color-fg-secondary: var(--sm-fg-secondary);
+  --color-fg-muted: var(--sm-fg-muted);
+  --color-fg-inverse: var(--sm-fg-inverse);
+  --color-brand: var(--sm-brand);
+  --color-brand-hover: var(--sm-brand-hover);
+  --color-brand-subtle: var(--sm-brand-subtle);
+  --color-brand-fg: var(--sm-brand-fg);
+  --color-accent: var(--sm-accent);
+  --color-accent-subtle: var(--sm-accent-subtle);
+  --color-focus: var(--sm-focus);
+  --color-success: var(--sm-success);
+  --color-success-subtle: var(--sm-success-subtle);
+  --color-warning: var(--sm-warning);
+  --color-warning-subtle: var(--sm-warning-subtle);
+  --color-danger: var(--sm-danger);
+  --color-danger-subtle: var(--sm-danger-subtle);
+  --color-info: var(--sm-info);
+  --color-info-subtle: var(--sm-info-subtle);
+  --color-status-vacant-clean: var(--sm-status-vacant-clean);
+  --color-status-vacant-dirty: var(--sm-status-vacant-dirty);
+  --color-status-occupied-clean: var(--sm-status-occupied-clean);
+  --color-status-occupied-dirty: var(--sm-status-occupied-dirty);
+  --color-status-inspected: var(--sm-status-inspected);
+  --color-status-pickup: var(--sm-status-pickup);
+  --color-status-out-of-order: var(--sm-status-out-of-order);
+  --color-status-out-of-service: var(--sm-status-out-of-service);
+  --color-status-hold: var(--sm-status-hold);
+  --color-res-reserved: var(--sm-res-reserved);
+  --color-res-due-in: var(--sm-res-due-in);
+  --color-res-in-house: var(--sm-res-in-house);
+  --color-res-due-out: var(--sm-res-due-out);
+  --color-res-checked-out: var(--sm-res-checked-out);
+  --color-res-cancelled: var(--sm-res-cancelled);
+  --color-res-no-show: var(--sm-res-no-show);
+  --color-res-waitlisted: var(--sm-res-waitlisted);
+
+  --spacing-row: var(--sm-row-height);
+  --spacing-control: var(--sm-control-height);
+  --spacing-control-touch: var(--sm-control-height-touch);
+}
+
+/* --- Base ---------------------------------------------------------------- */
+@layer base {
+  html {
+    font-size: 16px;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background: var(--sm-canvas);
+    color: var(--sm-fg);
+    font-family: var(--font-sans);
+    font-size: 0.875rem; /* text-base */
+    line-height: 1.375rem;
+    /* Figures align in tables, folios and the room rack. */
+    font-variant-numeric: tabular-nums;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--sm-focus);
+    outline-offset: 1px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}

@@ -1,0 +1,373 @@
+// Physical rooms, room types, statuses, out-of-order/service and holds.
+// Room status model: see docs/DOMAIN_MODEL.md §Room status (four independent
+// axes; the display status "Vacant Dirty", "OOO", "Hold"... is derived).
+
+enum HousekeepingStatus {
+  CLEAN
+  DIRTY
+  PICKUP // optional: touch-up only (PropertyConfiguration.usePickupStatus)
+  INSPECTED // optional: supervisor-verified clean (useInspectedStatus)
+
+  @@map("housekeeping_status")
+}
+
+enum FrontOfficeStatus {
+  VACANT
+  OCCUPIED
+
+  @@map("front_office_status")
+}
+
+enum RoomServiceStatus {
+  IN_SERVICE
+  OUT_OF_ORDER // removed from sellable inventory, cannot be assigned
+  OUT_OF_SERVICE // stays in inventory, assignable with warning
+
+  @@map("room_service_status")
+}
+
+enum GuestServiceStatus {
+  NONE
+  DO_NOT_DISTURB
+  MAKE_UP_ROOM
+  SERVICE_DECLINED
+
+  @@map("guest_service_status")
+}
+
+enum TurndownStatus {
+  NOT_REQUIRED
+  REQUIRED
+  COMPLETED
+
+  @@map("turndown_status")
+}
+
+enum RoomConnectionKind {
+  CONNECTING
+  ADJACENT
+
+  @@map("room_connection_kind")
+}
+
+enum ServiceBlockKind {
+  OUT_OF_ORDER
+  OUT_OF_SERVICE
+
+  @@map("service_block_kind")
+}
+
+enum ServiceBlockStatus {
+  SCHEDULED
+  ACTIVE
+  RELEASED
+  CANCELLED
+
+  @@map("service_block_status")
+}
+
+enum RoomHoldStatus {
+  ACTIVE
+  RELEASED
+  EXPIRED
+  CONSUMED // turned into an assignment
+
+  @@map("room_hold_status")
+}
+
+enum RoomStatusField {
+  HOUSEKEEPING
+  FRONT_OFFICE
+  SERVICE
+  GUEST_SERVICE
+  TURNDOWN
+  CONDITION
+
+  @@map("room_status_field")
+}
+
+model RoomClass {
+  id         String       @id @default(uuid(7)) @db.Uuid
+  propertyId String       @map("property_id") @db.Uuid
+  code       String       @db.VarChar(20)
+  name       String       @db.VarChar(100)
+  sortOrder  Int          @default(0) @map("sort_order")
+  status     RecordStatus @default(ACTIVE)
+
+  property  Property   @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  roomTypes RoomType[]
+
+  @@unique([propertyId, code])
+  @@unique([propertyId, id])
+  @@map("room_classes")
+}
+
+model RoomType {
+  id               String       @id @default(uuid(7)) @db.Uuid
+  propertyId       String       @map("property_id") @db.Uuid
+  roomClassId      String?      @map("room_class_id") @db.Uuid
+  code             String       @db.VarChar(20)
+  name             String       @db.VarChar(100)
+  description      String?      @db.VarChar(2000)
+  defaultOccupancy Int          @default(2) @map("default_occupancy")
+  maxOccupancy     Int          @map("max_occupancy")
+  maxAdults        Int          @map("max_adults")
+  maxChildren      Int          @default(0) @map("max_children")
+  /// Pseudo types (posting masters, day-use shells) are never counted in inventory.
+  isPseudo         Boolean      @default(false) @map("is_pseudo")
+  isSuite          Boolean      @default(false) @map("is_suite")
+  isSellable       Boolean      @default(true) @map("is_sellable")
+  sortOrder        Int          @default(0) @map("sort_order")
+  status           RecordStatus @default(ACTIVE)
+  createdAt        DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  property  Property   @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  roomClass RoomClass? @relation(fields: [propertyId, roomClassId], references: [propertyId, id], onDelete: Restrict)
+  rooms     Room[]
+
+  bookedReservationRooms  ReservationRoom[]        @relation("BookedRoomType")
+  rateReservationRooms    ReservationRoom[]        @relation("RateRoomType")
+  blockAllocations        BlockAllocation[]
+  dailyRoomTypeStatistics DailyRoomTypeStatistic[]
+  roomTypeInventories     RoomTypeInventory[]
+  restrictions            Restriction[]
+  ratePlanRoomTypes       RatePlanRoomType[]
+  rateSeasonAmounts       RateSeasonAmount[]
+  reservationRoomNights   ReservationRoomNight[]
+
+  @@unique([propertyId, code])
+  @@unique([propertyId, id])
+  @@map("room_types")
+}
+
+model HousekeepingSection {
+  id         String       @id @default(uuid(7)) @db.Uuid
+  propertyId String       @map("property_id") @db.Uuid
+  code       String       @db.VarChar(20)
+  name       String       @db.VarChar(100)
+  status     RecordStatus @default(ACTIVE)
+
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  rooms    Room[]
+
+  @@unique([propertyId, code])
+  @@unique([propertyId, id])
+  @@map("housekeeping_sections")
+}
+
+/// Temporary room condition ("show room", "minibar removed"). `hidesFromAvailability`
+/// removes the room from assignable-room searches without touching inventory.
+model RoomCondition {
+  id                    String       @id @default(uuid(7)) @db.Uuid
+  propertyId            String       @map("property_id") @db.Uuid
+  code                  String       @db.VarChar(20)
+  name                  String       @db.VarChar(100)
+  hidesFromAvailability Boolean      @default(false) @map("hides_from_availability")
+  status                RecordStatus @default(ACTIVE)
+
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  rooms    Room[]
+
+  @@unique([propertyId, code])
+  @@unique([propertyId, id])
+  @@map("room_conditions")
+}
+
+/// A physical room. Status columns are the operational source of truth for the
+/// room rack / housekeeping board and are changed only through room services,
+/// each change recorded in room_status_history.
+model Room {
+  id                  String             @id @default(uuid(7)) @db.Uuid
+  propertyId          String             @map("property_id") @db.Uuid
+  roomTypeId          String             @map("room_type_id") @db.Uuid
+  floorId             String?            @map("floor_id") @db.Uuid
+  sectionId           String?            @map("section_id") @db.Uuid
+  number              String             @db.VarChar(20)
+  description         String?            @db.VarChar(500)
+  maxOccupancy        Int?               @map("max_occupancy")
+  isSmoking           Boolean            @default(false) @map("is_smoking")
+  isAccessible        Boolean            @default(false) @map("is_accessible")
+  /// Housekeeping credits used to balance task sheets.
+  housekeepingCredits Decimal            @default(1) @map("housekeeping_credits") @db.Decimal(6, 2)
+  sortOrder           Int                @default(0) @map("sort_order")
+  housekeepingStatus  HousekeepingStatus @default(DIRTY) @map("housekeeping_status")
+  /// Derived from active stays; maintained in the check-in/out transaction.
+  frontOfficeStatus   FrontOfficeStatus  @default(VACANT) @map("front_office_status")
+  /// Derived from the active service block covering the business date.
+  serviceStatus       RoomServiceStatus  @default(IN_SERVICE) @map("service_status")
+  guestServiceStatus  GuestServiceStatus @default(NONE) @map("guest_service_status")
+  turndownStatus      TurndownStatus     @default(NOT_REQUIRED) @map("turndown_status")
+  roomConditionId     String?            @map("room_condition_id") @db.Uuid
+  /// Housekeeping-reported occupancy and head count, for discrepancy detection.
+  hkReportedOccupancy FrontOfficeStatus? @map("hk_reported_occupancy")
+  hkReportedPersons   Int?               @map("hk_reported_persons")
+  statusChangedAt     DateTime           @default(now()) @map("status_changed_at") @db.Timestamptz(3)
+  status              RecordStatus       @default(ACTIVE)
+  /// Optimistic concurrency token for status updates.
+  version             Int                @default(1)
+  createdAt           DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  property  Property             @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  roomType  RoomType             @relation(fields: [propertyId, roomTypeId], references: [propertyId, id], onDelete: Restrict)
+  floor     Floor?               @relation(fields: [propertyId, floorId], references: [propertyId, id], onDelete: Restrict)
+  section   HousekeepingSection? @relation(fields: [propertyId, sectionId], references: [propertyId, id], onDelete: Restrict)
+  condition RoomCondition?       @relation(fields: [propertyId, roomConditionId], references: [propertyId, id], onDelete: Restrict)
+
+  features                   RoomFeatureAssignment[]
+  connectionsA               RoomConnection[]            @relation("RoomConnectionA")
+  connectionsB               RoomConnection[]            @relation("RoomConnectionB")
+  components                 RoomComponent[]             @relation("SuiteComponents")
+  partOfSuites               RoomComponent[]             @relation("ComponentOfSuite")
+  housekeepingTasks          HousekeepingTask[]
+  housekeepingDiscrepancies  HousekeepingDiscrepancy[]
+  lostFoundItems             LostFoundItem[]
+  maintenanceRequests        MaintenanceRequest[]
+  preventiveMaintenancePlans PreventiveMaintenancePlan[]
+  reservationRooms           ReservationRoom[]
+  roomAssignments            RoomAssignment[]
+  stays                      Stay[]
+  roomStatusHistories        RoomStatusHistory[]
+  roomServiceBlocks          RoomServiceBlock[]
+  roomHolds                  RoomHold[]
+
+  @@unique([propertyId, number])
+  @@unique([propertyId, id])
+  @@index([propertyId, roomTypeId])
+  @@index([propertyId, housekeepingStatus, frontOfficeStatus])
+  @@index([propertyId, floorId])
+  @@map("rooms")
+}
+
+model RoomFeature {
+  id         String       @id @default(uuid(7)) @db.Uuid
+  propertyId String       @map("property_id") @db.Uuid
+  code       String       @db.VarChar(20)
+  name       String       @db.VarChar(100)
+  status     RecordStatus @default(ACTIVE)
+
+  property Property                @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  rooms    RoomFeatureAssignment[]
+
+  @@unique([propertyId, code])
+  @@unique([propertyId, id])
+  @@map("room_features")
+}
+
+model RoomFeatureAssignment {
+  propertyId String @map("property_id") @db.Uuid
+  roomId     String @map("room_id") @db.Uuid
+  featureId  String @map("feature_id") @db.Uuid
+
+  room    Room        @relation(fields: [propertyId, roomId], references: [propertyId, id], onDelete: Cascade)
+  feature RoomFeature @relation(fields: [propertyId, featureId], references: [propertyId, id], onDelete: Cascade)
+
+  @@id([roomId, featureId])
+  @@index([propertyId, featureId])
+  @@map("room_feature_assignments")
+}
+
+/// Undirected pair; the constraints migration enforces room_a_id < room_b_id.
+model RoomConnection {
+  propertyId String             @map("property_id") @db.Uuid
+  roomAId    String             @map("room_a_id") @db.Uuid
+  roomBId    String             @map("room_b_id") @db.Uuid
+  kind       RoomConnectionKind
+
+  roomA Room @relation("RoomConnectionA", fields: [propertyId, roomAId], references: [propertyId, id], onDelete: Cascade)
+  roomB Room @relation("RoomConnectionB", fields: [propertyId, roomBId], references: [propertyId, id], onDelete: Cascade)
+
+  @@id([roomAId, roomBId, kind])
+  @@index([roomBId])
+  @@map("room_connections")
+}
+
+/// Component suites: a sellable suite room made of physical component rooms.
+/// Selling the suite deducts the components' inventory too.
+model RoomComponent {
+  propertyId      String @map("property_id") @db.Uuid
+  suiteRoomId     String @map("suite_room_id") @db.Uuid
+  componentRoomId String @map("component_room_id") @db.Uuid
+
+  suite     Room @relation("SuiteComponents", fields: [propertyId, suiteRoomId], references: [propertyId, id], onDelete: Cascade)
+  component Room @relation("ComponentOfSuite", fields: [propertyId, componentRoomId], references: [propertyId, id], onDelete: Cascade)
+
+  @@id([suiteRoomId, componentRoomId])
+  @@index([componentRoomId])
+  @@map("room_components")
+}
+
+/// Every room status change (high volume, append-only).
+model RoomStatusHistory {
+  id           String          @id @default(uuid(7)) @db.Uuid
+  propertyId   String          @map("property_id") @db.Uuid
+  roomId       String          @map("room_id") @db.Uuid
+  field        RoomStatusField
+  fromValue    String?         @map("from_value") @db.VarChar(40)
+  toValue      String?         @map("to_value") @db.VarChar(40)
+  businessDate DateTime        @map("business_date") @db.Date
+  /// USER, CHECK_IN, CHECK_OUT, NIGHT_AUDIT, HOUSEKEEPING, MAINTENANCE, INTERFACE
+  source       String          @db.VarChar(20)
+  changedById  String?         @map("changed_by_id") @db.Uuid
+  createdAt    DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  room Room @relation(fields: [propertyId, roomId], references: [propertyId, id], onDelete: Restrict)
+
+  @@index([propertyId, roomId, createdAt(sort: Desc)])
+  @@index([propertyId, businessDate])
+  @@map("room_status_history")
+}
+
+/// Out-of-order / out-of-service period. `toDate` is exclusive (first night back
+/// in service). An exclusion constraint forbids overlapping live blocks per room.
+model RoomServiceBlock {
+  id                   String             @id @default(uuid(7)) @db.Uuid
+  propertyId           String             @map("property_id") @db.Uuid
+  roomId               String             @map("room_id") @db.Uuid
+  kind                 ServiceBlockKind
+  status               ServiceBlockStatus @default(SCHEDULED)
+  fromDate             DateTime           @map("from_date") @db.Date
+  toDate               DateTime           @map("to_date") @db.Date
+  reasonCodeId         String             @map("reason_code_id") @db.Uuid
+  returnStatus         HousekeepingStatus @default(DIRTY) @map("return_status")
+  notes                String?            @db.VarChar(1000)
+  maintenanceRequestId String?            @map("maintenance_request_id") @db.Uuid
+  createdById          String             @map("created_by_id") @db.Uuid
+  releasedById         String?            @map("released_by_id") @db.Uuid
+  releasedAt           DateTime?          @map("released_at") @db.Timestamptz(3)
+  createdAt            DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  room               Room                @relation(fields: [propertyId, roomId], references: [propertyId, id], onDelete: Restrict)
+  reasonCode         ReasonCode          @relation(fields: [propertyId, reasonCodeId], references: [propertyId, id], onDelete: Restrict)
+  maintenanceRequest MaintenanceRequest? @relation(fields: [propertyId, maintenanceRequestId], references: [propertyId, id], onDelete: Restrict)
+
+  @@index([propertyId, fromDate, toDate])
+  @@index([propertyId, roomId])
+  @@map("room_service_blocks")
+}
+
+/// Temporary hold of a specific room (e.g. while a guest decides). Only the
+/// holder (or `rooms:override_hold`) may assign it. Expires automatically.
+model RoomHold {
+  id                String         @id @default(uuid(7)) @db.Uuid
+  propertyId        String         @map("property_id") @db.Uuid
+  roomId            String         @map("room_id") @db.Uuid
+  reservationRoomId String?        @map("reservation_room_id") @db.Uuid
+  fromDate          DateTime       @map("from_date") @db.Date
+  toDate            DateTime       @map("to_date") @db.Date
+  status            RoomHoldStatus @default(ACTIVE)
+  reason            String?        @db.VarChar(500)
+  expiresAt         DateTime?      @map("expires_at") @db.Timestamptz(3)
+  heldById          String         @map("held_by_id") @db.Uuid
+  createdAt         DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  releasedAt        DateTime?      @map("released_at") @db.Timestamptz(3)
+
+  room            Room             @relation(fields: [propertyId, roomId], references: [propertyId, id], onDelete: Restrict)
+  reservationRoom ReservationRoom? @relation(fields: [propertyId, reservationRoomId], references: [propertyId, id], onDelete: Restrict)
+
+  @@index([propertyId, roomId, status])
+  @@index([expiresAt], where: raw("status = 'ACTIVE'"))
+  @@map("room_holds")
+}

@@ -1,0 +1,116 @@
+// Night audit runs and the daily statistics snapshot it produces.
+
+enum NightAuditStatus {
+  RUNNING
+  FAILED // rolled back; business date unchanged; safe to retry
+  COMPLETED
+
+  @@map("night_audit_status")
+}
+
+enum NightAuditStepStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  SKIPPED
+
+  @@map("night_audit_step_status")
+}
+
+/// One attempt to close a business date. The pre-checks run first (read-only);
+/// postings + date roll run in one database transaction, so a failure leaves
+/// the business date OPEN with nothing posted. The unique partial index allows
+/// only one RUNNING audit per property.
+model NightAuditRun {
+  id           String           @id @default(uuid(7)) @db.Uuid
+  propertyId   String           @map("property_id") @db.Uuid
+  businessDate DateTime         @map("business_date") @db.Date
+  attempt      Int              @default(1)
+  status       NightAuditStatus @default(RUNNING)
+  startedById  String           @map("started_by_id") @db.Uuid
+  startedAt    DateTime         @default(now()) @map("started_at") @db.Timestamptz(3)
+  finishedAt   DateTime?        @map("finished_at") @db.Timestamptz(3)
+  errorCode    String?          @map("error_code") @db.VarChar(60)
+  errorMessage String?          @map("error_message") @db.VarChar(2000)
+  /// Counts and totals produced (charges posted, no-shows, etc.).
+  summary      Json?
+
+  property Property         @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  steps    NightAuditStep[]
+
+  @@unique([propertyId, businessDate, attempt])
+  @@unique([propertyId, status], map: "night_audit_runs_one_running", where: raw("status = 'RUNNING'"))
+  @@map("night_audit_runs")
+}
+
+model NightAuditStep {
+  id         String               @id @default(uuid(7)) @db.Uuid
+  runId      String               @map("run_id") @db.Uuid
+  sequence   Int
+  /// e.g. VALIDATE_DEPARTURES, POST_ROOM_AND_TAX, PROCESS_NO_SHOWS, ROLL_DATE
+  code       String               @db.VarChar(60)
+  status     NightAuditStepStatus @default(PENDING)
+  startedAt  DateTime?            @map("started_at") @db.Timestamptz(3)
+  finishedAt DateTime?            @map("finished_at") @db.Timestamptz(3)
+  result     Json?
+  error      String?              @db.VarChar(2000)
+
+  run NightAuditRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, sequence])
+  @@map("night_audit_steps")
+}
+
+/// Frozen house-level statistics for a closed business date, written by
+/// night audit. Reports over closed dates read these tables instead of
+/// re-aggregating the ledger. ADR / RevPAR / occupancy are computed from the
+/// components at query time and never stored.
+model DailyStatistic {
+  propertyId         String   @map("property_id") @db.Uuid
+  businessDate       DateTime @map("business_date") @db.Date
+  physicalRooms      Int      @map("physical_rooms")
+  outOfOrderRooms    Int      @map("out_of_order_rooms")
+  outOfServiceRooms  Int      @map("out_of_service_rooms")
+  roomsSold          Int      @map("rooms_sold")
+  complimentaryRooms Int      @map("complimentary_rooms")
+  houseUseRooms      Int      @map("house_use_rooms")
+  dayUseRooms        Int      @map("day_use_rooms")
+  arrivals           Int
+  departures         Int
+  stayovers          Int
+  noShows            Int      @map("no_shows")
+  cancellations      Int
+  walkIns            Int      @map("walk_ins")
+  adults             Int
+  children           Int
+  roomRevenue        Decimal  @map("room_revenue") @db.Decimal(19, 4)
+  packageRevenue     Decimal  @map("package_revenue") @db.Decimal(19, 4)
+  otherRevenue       Decimal  @map("other_revenue") @db.Decimal(19, 4)
+  taxTotal           Decimal  @map("tax_total") @db.Decimal(19, 4)
+  paymentsTotal      Decimal  @map("payments_total") @db.Decimal(19, 4)
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+
+  @@id([propertyId, businessDate])
+  @@map("daily_statistics")
+}
+
+/// Room-type breakdown of DailyStatistic.
+model DailyRoomTypeStatistic {
+  propertyId      String   @map("property_id") @db.Uuid
+  businessDate    DateTime @map("business_date") @db.Date
+  roomTypeId      String   @map("room_type_id") @db.Uuid
+  physicalRooms   Int      @map("physical_rooms")
+  outOfOrderRooms Int      @map("out_of_order_rooms")
+  roomsSold       Int      @map("rooms_sold")
+  arrivals        Int
+  departures      Int
+  roomRevenue     Decimal  @map("room_revenue") @db.Decimal(19, 4)
+
+  roomType RoomType @relation(fields: [propertyId, roomTypeId], references: [propertyId, id], onDelete: Restrict)
+
+  @@id([propertyId, businessDate, roomTypeId])
+  @@map("daily_room_type_statistics")
+}

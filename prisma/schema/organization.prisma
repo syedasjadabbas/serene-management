@@ -1,0 +1,367 @@
+// Tenancy, property configuration, business date and shared reference codes.
+
+enum RecordStatus {
+  ACTIVE
+  INACTIVE
+
+  @@map("record_status")
+}
+
+enum BusinessDateStatus {
+  OPEN // the property's current business date; exactly one per property
+  IN_AUDIT // night audit running; operational postings blocked
+  CLOSED // audited and closed; immutable
+
+  @@map("business_date_status")
+}
+
+enum ReasonCategory {
+  CANCELLATION
+  NO_SHOW
+  REINSTATEMENT
+  ROOM_MOVE
+  UPGRADE
+  RATE_OVERRIDE
+  DISCOUNT
+  ADJUSTMENT
+  REFUND
+  PAID_OUT
+  OUT_OF_ORDER
+  OUT_OF_SERVICE
+  EARLY_DEPARTURE
+  TURNAWAY
+  VOID
+
+  @@map("reason_category")
+}
+
+/// A hotel company / tenant. Owns central profiles, users and roles.
+model Organization {
+  id                 String              @id @default(uuid(7)) @db.Uuid
+  code               String              @unique @db.VarChar(20)
+  name               String              @db.VarChar(200)
+  legalName          String?             @map("legal_name") @db.VarChar(200)
+  baseCurrency       String              @map("base_currency") @db.Char(3)
+  status             RecordStatus        @default(ACTIVE)
+  createdAt          DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
+  commissionPlans    CommissionPlan[]
+  loyaltyPrograms    LoyaltyProgram[]
+  stockItems         StockItem[]
+  groups             Group[]
+  users              User[]
+  roles              Role[]
+  properties         Property[]
+  paymentInstruments PaymentInstrument[]
+  vipLevels          VipLevel[]
+  guests             Guest[]
+  preferenceCodes    PreferenceCode[]
+  accountProfiles    AccountProfile[]
+
+  @@map("organizations")
+}
+
+/// A hotel. Every operational record is scoped to exactly one property.
+model Property {
+  id              String       @id @default(uuid(7)) @db.Uuid
+  organizationId  String       @map("organization_id") @db.Uuid
+  code            String       @db.VarChar(20)
+  name            String       @db.VarChar(200)
+  legalName       String?      @map("legal_name") @db.VarChar(200)
+  /// IANA zone, e.g. "Asia/Karachi". All local-time conversions use this.
+  timezone        String       @db.VarChar(64)
+  currencyCode    String       @map("currency_code") @db.Char(3)
+  countryCode     String       @map("country_code") @db.Char(2)
+  defaultLocale   String       @default("en") @map("default_locale") @db.VarChar(10)
+  addressLine1    String?      @map("address_line1") @db.VarChar(200)
+  addressLine2    String?      @map("address_line2") @db.VarChar(200)
+  city            String?      @db.VarChar(100)
+  region          String?      @db.VarChar(100)
+  postalCode      String?      @map("postal_code") @db.VarChar(20)
+  phone           String?      @db.VarChar(40)
+  email           String?      @db.VarChar(254)
+  taxRegistration String?      @map("tax_registration") @db.VarChar(60)
+  /// Local wall-clock times, "HH:MM".
+  checkInTime     String       @default("14:00") @map("check_in_time") @db.VarChar(5)
+  checkOutTime    String       @default("12:00") @map("check_out_time") @db.VarChar(5)
+  status          RecordStatus @default(ACTIVE)
+  createdAt       DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organization               Organization                @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  configuration              PropertyConfiguration?
+  transactionCodeGroups      TransactionCodeGroup[]
+  transactionCodes           TransactionCode[]
+  taxRules                   TaxRule[]
+  folios                     Folio[]
+  stockLocations             StockLocation[]
+  blockStatuses              BlockStatus[]
+  blocks                     Block[]
+  userRoleAssignments        UserRoleAssignment[]
+  nightAuditRuns             NightAuditRun[]
+  dailyStatistics            DailyStatistic[]
+  housekeepingAttendants     HousekeepingAttendant[]
+  housekeepingTaskTypes      HousekeepingTaskType[]
+  lostFoundItems             LostFoundItem[]
+  maintenanceCategories      MaintenanceCategory[]
+  maintenanceRequests        MaintenanceRequest[]
+  preventiveMaintenancePlans PreventiveMaintenancePlan[]
+  exchangeRates              ExchangeRate[]
+  buildings                  Building[]
+  floors                     Floor[]
+  propertySequences          PropertySequence[]
+  businessDates              BusinessDate[]
+  marketGroups               MarketGroup[]
+  marketCodes                MarketCode[]
+  sourceCodes                SourceCode[]
+  channels                   Channel[]
+  reasonCodes                ReasonCode[]
+  paymentMethods             PaymentMethod[]
+  payments                   Payment[]
+  cashierShifts              CashierShift[]
+  guestPreferences           GuestPreference[]
+  guestNotes                 GuestNote[]
+  guestStayStatistics        GuestStayStatistic[]
+  houseInventoryControls     HouseInventoryControl[]
+  restrictions               Restriction[]
+  rateCategories             RateCategory[]
+  cancellationPolicies       CancellationPolicy[]
+  depositPolicies            DepositPolicy[]
+  reservationTypes           ReservationType[]
+  ratePlans                  RatePlan[]
+  packages                   Package[]
+  reservations               Reservation[]
+  turnaways                  Turnaway[]
+  roomClasses                RoomClass[]
+  roomTypes                  RoomType[]
+  housekeepingSections       HousekeepingSection[]
+  roomConditions             RoomCondition[]
+  rooms                      Room[]
+  roomFeatures               RoomFeature[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId])
+  @@map("properties")
+}
+
+/// Typed operational switches per property. Extended as phases need them;
+/// every change is audited (settings:manage).
+model PropertyConfiguration {
+  propertyId                 String   @id @map("property_id") @db.Uuid
+  maxFolioWindows            Int      @default(8) @map("max_folio_windows")
+  allowOverbooking           Boolean  @default(false) @map("allow_overbooking")
+  requireInspectedForCheckIn Boolean  @default(false) @map("require_inspected_for_check_in")
+  usePickupStatus            Boolean  @default(false) @map("use_pickup_status")
+  useInspectedStatus         Boolean  @default(true) @map("use_inspected_status")
+  autoNoShowOnNightAudit     Boolean  @default(true) @map("auto_no_show_on_night_audit")
+  postNoShowCharges          Boolean  @default(true) @map("post_no_show_charges")
+  requireZeroBalanceCheckout Boolean  @default(true) @map("require_zero_balance_checkout")
+  allowCancelWithDeposit     Boolean  @default(false) @map("allow_cancel_with_deposit")
+  autoCloseCashiersOnAudit   Boolean  @default(false) @map("auto_close_cashiers_on_audit")
+  roomHoldDefaultMinutes     Int      @default(30) @map("room_hold_default_minutes")
+  updatedAt                  DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+
+  @@map("property_configurations")
+}
+
+model Currency {
+  code          String         @id @db.Char(3)
+  name          String         @db.VarChar(60)
+  minorUnits    Int            @default(2) @map("minor_units")
+  status        RecordStatus   @default(ACTIVE)
+  exchangeRates ExchangeRate[]
+
+  @@map("currencies")
+}
+
+/// Property-level exchange rate to the property currency, effective from a business date.
+model ExchangeRate {
+  id            String   @id @default(uuid(7)) @db.Uuid
+  propertyId    String   @map("property_id") @db.Uuid
+  currencyCode  String   @map("currency_code") @db.Char(3)
+  rate          Decimal  @db.Decimal(18, 8)
+  effectiveDate DateTime @map("effective_date") @db.Date
+  createdById   String   @map("created_by_id") @db.Uuid
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  currency Currency @relation(fields: [currencyCode], references: [code], onDelete: Restrict)
+
+  @@unique([propertyId, currencyCode, effectiveDate])
+  @@map("exchange_rates")
+}
+
+model Building {
+  id         String       @id @default(uuid(7)) @db.Uuid
+  propertyId String       @map("property_id") @db.Uuid
+  code       String       @db.VarChar(20)
+  name       String       @db.VarChar(100)
+  sortOrder  Int          @default(0) @map("sort_order")
+  status     RecordStatus @default(ACTIVE)
+  createdAt  DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  floors   Floor[]
+
+  @@unique([propertyId, code])
+  @@unique([propertyId, id])
+  @@map("buildings")
+}
+
+model Floor {
+  id         String       @id @default(uuid(7)) @db.Uuid
+  propertyId String       @map("property_id") @db.Uuid
+  buildingId String?      @map("building_id") @db.Uuid
+  code       String       @db.VarChar(20)
+  name       String       @db.VarChar(100)
+  level      Int          @default(0)
+  sortOrder  Int          @default(0) @map("sort_order")
+  status     RecordStatus @default(ACTIVE)
+  createdAt  DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  property Property  @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  building Building? @relation(fields: [propertyId, buildingId], references: [propertyId, id], onDelete: Restrict)
+  rooms    Room[]
+
+  @@unique([propertyId, code])
+  @@unique([propertyId, id])
+  @@map("floors")
+}
+
+/// Gap-free, per-property counters (confirmation, folio, invoice, maintenance numbers).
+/// Incremented with `UPDATE ... RETURNING` inside the business transaction, which
+/// row-locks the counter so numbers are never duplicated or skipped on rollback.
+model PropertySequence {
+  propertyId String   @map("property_id") @db.Uuid
+  name       String   @db.VarChar(40)
+  prefix     String   @default("") @db.VarChar(10)
+  nextValue  BigInt   @default(1) @map("next_value")
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+
+  @@id([propertyId, name])
+  @@map("property_sequences")
+}
+
+/// Hotel business date. Distinct from the calendar date; advanced only by night audit.
+/// `isCurrent` marks the property's single live date (OPEN or IN_AUDIT); the
+/// constraints migration enforces is_current = (status <> 'CLOSED').
+model BusinessDate {
+  id         String             @id @default(uuid(7)) @db.Uuid
+  propertyId String             @map("property_id") @db.Uuid
+  date       DateTime           @db.Date
+  status     BusinessDateStatus @default(OPEN)
+  isCurrent  Boolean            @default(true) @map("is_current")
+  openedAt   DateTime           @default(now()) @map("opened_at") @db.Timestamptz(3)
+  closedAt   DateTime?          @map("closed_at") @db.Timestamptz(3)
+  closedById String?            @map("closed_by_id") @db.Uuid
+
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+
+  @@unique([propertyId, date])
+  @@unique([propertyId, isCurrent], map: "business_dates_one_current_per_property", where: raw("is_current"))
+  @@map("business_dates")
+}
+
+/// Market segment roll-up (Corporate, Leisure, Government, Wholesale ...).
+model MarketGroup {
+  id         String       @id @default(uuid(7)) @db.Uuid
+  propertyId String       @map("property_id") @db.Uuid
+  code       String       @db.VarChar(20)
+  name       String       @db.VarChar(100)
+  status     RecordStatus @default(ACTIVE)
+
+  property Property     @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  codes    MarketCode[]
+
+  @@unique([propertyId, code])
+  @@unique([propertyId, id])
+  @@map("market_groups")
+}
+
+model MarketCode {
+  id            String       @id @default(uuid(7)) @db.Uuid
+  propertyId    String       @map("property_id") @db.Uuid
+  marketGroupId String?      @map("market_group_id") @db.Uuid
+  code          String       @db.VarChar(20)
+  name          String       @db.VarChar(100)
+  status        RecordStatus @default(ACTIVE)
+
+  property         Property          @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  marketGroup      MarketGroup?      @relation(fields: [propertyId, marketGroupId], references: [propertyId, id], onDelete: Restrict)
+  blocks           Block[]
+  ratePlans        RatePlan[]
+  reservations     Reservation[]
+  reservationRooms ReservationRoom[]
+
+  @@unique([propertyId, code])
+  @@unique([propertyId, id])
+  @@map("market_codes")
+}
+
+/// Where the business came from (direct, phone, CRS, OTA, walk-in ...).
+model SourceCode {
+  id         String       @id @default(uuid(7)) @db.Uuid
+  propertyId String       @map("property_id") @db.Uuid
+  code       String       @db.VarChar(20)
+  name       String       @db.VarChar(100)
+  groupCode  String?      @map("group_code") @db.VarChar(20)
+  status     RecordStatus @default(ACTIVE)
+
+  property         Property          @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  blocks           Block[]
+  ratePlans        RatePlan[]
+  reservations     Reservation[]
+  reservationRooms ReservationRoom[]
+
+  @@unique([propertyId, code])
+  @@unique([propertyId, id])
+  @@map("source_codes")
+}
+
+/// Booking channel / origin (front desk, web, GDS, channel manager ...).
+model Channel {
+  id         String       @id @default(uuid(7)) @db.Uuid
+  propertyId String       @map("property_id") @db.Uuid
+  code       String       @db.VarChar(20)
+  name       String       @db.VarChar(100)
+  status     RecordStatus @default(ACTIVE)
+
+  property     Property      @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  reservations Reservation[]
+
+  @@unique([propertyId, code])
+  @@unique([propertyId, id])
+  @@map("channels")
+}
+
+/// Reason codes required by high-risk actions (cancel, move, adjust, refund, OOO ...).
+model ReasonCode {
+  id              String         @id @default(uuid(7)) @db.Uuid
+  propertyId      String         @map("property_id") @db.Uuid
+  category        ReasonCategory
+  code            String         @db.VarChar(20)
+  name            String         @db.VarChar(100)
+  requiresComment Boolean        @default(false) @map("requires_comment")
+  status          RecordStatus   @default(ACTIVE)
+
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+
+  discountedReservationRooms ReservationRoom[]      @relation("DiscountReason")
+  cancelledReservationRooms  ReservationRoom[]      @relation("CancelReason")
+  folioItems                 FolioItem[]
+  payments                   Payment[]
+  refunds                    Refund[]
+  reservationRoomNights      ReservationRoomNight[]
+  roomAssignments            RoomAssignment[]
+  roomServiceBlocks          RoomServiceBlock[]
+
+  @@unique([propertyId, category, code])
+  @@unique([propertyId, id])
+  @@map("reason_codes")
+}

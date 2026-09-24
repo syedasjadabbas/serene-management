@@ -1,0 +1,342 @@
+// Central profiles (organization-scoped): guests and accounts (company,
+// travel agent, source, wholesaler ...). Profiles are shared across the
+// organization's properties; property-specific facts carry property_id.
+
+enum ContactType {
+  EMAIL
+  PHONE
+  MOBILE
+  WHATSAPP
+  FAX
+
+  @@map("contact_type")
+}
+
+enum AddressType {
+  HOME
+  BUSINESS
+  BILLING
+  OTHER
+
+  @@map("address_type")
+}
+
+enum IdentityDocumentType {
+  PASSPORT
+  NATIONAL_ID
+  DRIVING_LICENSE
+  VISA
+  RESIDENCE_PERMIT
+  OTHER
+
+  @@map("identity_document_type")
+}
+
+enum AccountProfileType {
+  COMPANY
+  TRAVEL_AGENT
+  SOURCE
+  WHOLESALER
+  OTA
+  PARTNER
+
+  @@map("account_profile_type")
+}
+
+enum ProfileStatus {
+  ACTIVE
+  INACTIVE
+  MERGED // survivor is mergedIntoId; kept for history links
+  ANONYMIZED // personal data erased (privacy request); stays keep statistics
+
+  @@map("profile_status")
+}
+
+enum NoteVisibility {
+  ALL_STAFF
+  MANAGEMENT
+  INTERNAL
+
+  @@map("note_visibility")
+}
+
+model VipLevel {
+  id             String       @id @default(uuid(7)) @db.Uuid
+  organizationId String       @map("organization_id") @db.Uuid
+  code           String       @db.VarChar(20)
+  name           String       @db.VarChar(100)
+  rank           Int          @default(0)
+  status         RecordStatus @default(ACTIVE)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  guests       Guest[]
+
+  @@unique([organizationId, code])
+  @@map("vip_levels")
+}
+
+model Guest {
+  id                String        @id @default(uuid(7)) @db.Uuid
+  organizationId    String        @map("organization_id") @db.Uuid
+  profileNumber     String        @map("profile_number") @db.VarChar(20)
+  title             String?       @db.VarChar(20)
+  firstName         String        @map("first_name") @db.VarChar(100)
+  middleName        String?       @map("middle_name") @db.VarChar(100)
+  lastName          String        @map("last_name") @db.VarChar(100)
+  /// Lower-cased, accent-stripped "last first" used by trigram search.
+  searchName        String        @map("search_name") @db.VarChar(250)
+  gender            String?       @db.VarChar(20)
+  dateOfBirth       DateTime?     @map("date_of_birth") @db.Date
+  nationalityCode   String?       @map("nationality_code") @db.Char(2)
+  languageCode      String?       @map("language_code") @db.VarChar(10)
+  primaryEmail      String?       @map("primary_email") @db.VarChar(254)
+  primaryPhone      String?       @map("primary_phone") @db.VarChar(40)
+  vipLevelId        String?       @map("vip_level_id") @db.Uuid
+  isRestricted      Boolean       @default(false) @map("is_restricted")
+  restrictionReason String?       @map("restriction_reason") @db.VarChar(500)
+  marketingOptIn    Boolean       @default(false) @map("marketing_opt_in")
+  privacyConsentAt  DateTime?     @map("privacy_consent_at") @db.Timestamptz(3)
+  status            ProfileStatus @default(ACTIVE)
+  mergedIntoId      String?       @map("merged_into_id") @db.Uuid
+  version           Int           @default(1)
+  createdAt         DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt         DateTime?     @map("deleted_at") @db.Timestamptz(3)
+
+  organization       Organization         @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  vipLevel           VipLevel?            @relation(fields: [vipLevelId], references: [id], onDelete: Restrict)
+  mergedInto         Guest?               @relation("GuestMerge", fields: [mergedIntoId], references: [id], onDelete: Restrict)
+  mergedFrom         Guest[]              @relation("GuestMerge")
+  contacts           GuestContact[]
+  addresses          GuestAddress[]
+  documents          GuestDocument[]
+  preferences        GuestPreference[]
+  notes              GuestNote[]
+  statistics         GuestStayStatistic[]
+  folios             Folio[]
+  loyaltyMemberships LoyaltyMembership[]
+  groups             Group[]
+  lostFoundItems     LostFoundItem[]
+  paymentInstruments PaymentInstrument[]
+  accountContacts    AccountContact[]
+  reservations       Reservation[]
+  reservationRooms   ReservationRoom[]
+  reservationGuests  ReservationGuest[]
+  stays              Stay[]
+
+  @@unique([organizationId, profileNumber])
+  @@index([organizationId, lastName, firstName])
+  @@index([searchName(ops: raw("gin_trgm_ops"))], type: Gin, map: "guests_search_name_trgm_idx")
+  @@index([organizationId, primaryEmail])
+  @@index([organizationId, primaryPhone])
+  @@map("guests")
+}
+
+model GuestContact {
+  id        String      @id @default(uuid(7)) @db.Uuid
+  guestId   String      @map("guest_id") @db.Uuid
+  type      ContactType
+  value     String      @db.VarChar(254)
+  isPrimary Boolean     @default(false) @map("is_primary")
+  optIn     Boolean     @default(false) @map("opt_in")
+  createdAt DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  guest Guest @relation(fields: [guestId], references: [id], onDelete: Cascade)
+
+  @@index([guestId])
+  @@index([type, value])
+  @@map("guest_contacts")
+}
+
+model GuestAddress {
+  id          String      @id @default(uuid(7)) @db.Uuid
+  guestId     String      @map("guest_id") @db.Uuid
+  type        AddressType
+  line1       String      @db.VarChar(200)
+  line2       String?     @db.VarChar(200)
+  city        String?     @db.VarChar(100)
+  region      String?     @db.VarChar(100)
+  postalCode  String?     @map("postal_code") @db.VarChar(20)
+  countryCode String?     @map("country_code") @db.Char(2)
+  isPrimary   Boolean     @default(false) @map("is_primary")
+
+  guest Guest @relation(fields: [guestId], references: [id], onDelete: Cascade)
+
+  @@index([guestId])
+  @@map("guest_addresses")
+}
+
+/// Identity document. The number is encrypted at the application layer
+/// (AES-256-GCM, FIELD_ENCRYPTION_KEY); only a keyed hash (for duplicate
+/// detection) and the last four characters are stored in clear.
+model GuestDocument {
+  id               String               @id @default(uuid(7)) @db.Uuid
+  guestId          String               @map("guest_id") @db.Uuid
+  type             IdentityDocumentType
+  numberCiphertext String               @map("number_ciphertext") @db.Text
+  numberHash       String               @map("number_hash") @db.Char(64)
+  numberLast4      String               @map("number_last4") @db.VarChar(4)
+  issuingCountry   String?              @map("issuing_country") @db.Char(2)
+  issueDate        DateTime?            @map("issue_date") @db.Date
+  expiryDate       DateTime?            @map("expiry_date") @db.Date
+  isPrimary        Boolean              @default(false) @map("is_primary")
+  verifiedAt       DateTime?            @map("verified_at") @db.Timestamptz(3)
+  verifiedById     String?              @map("verified_by_id") @db.Uuid
+  createdAt        DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  guest Guest @relation(fields: [guestId], references: [id], onDelete: Cascade)
+
+  @@index([guestId])
+  @@index([numberHash])
+  @@map("guest_documents")
+}
+
+/// Preference / special-request catalog (room location, pillow, dietary ...).
+model PreferenceCode {
+  id              String       @id @default(uuid(7)) @db.Uuid
+  organizationId  String       @map("organization_id") @db.Uuid
+  /// ROOM, FLOOR, SMOKING, BED, PILLOW, DIETARY, AMENITY, SPECIAL_REQUEST ...
+  groupCode       String       @map("group_code") @db.VarChar(20)
+  code            String       @db.VarChar(20)
+  name            String       @db.VarChar(100)
+  /// Optional room feature this preference maps to for auto-assignment.
+  roomFeatureCode String?      @map("room_feature_code") @db.VarChar(20)
+  status          RecordStatus @default(ACTIVE)
+
+  organization               Organization                @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  guestPreferences           GuestPreference[]
+  reservationSpecialRequests ReservationSpecialRequest[]
+
+  @@unique([organizationId, groupCode, code])
+  @@map("preference_codes")
+}
+
+model GuestPreference {
+  id               String   @id @default(uuid(7)) @db.Uuid
+  guestId          String   @map("guest_id") @db.Uuid
+  preferenceCodeId String   @map("preference_code_id") @db.Uuid
+  /// Null = applies at every property.
+  propertyId       String?  @map("property_id") @db.Uuid
+  note             String?  @db.VarChar(500)
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  guest          Guest          @relation(fields: [guestId], references: [id], onDelete: Cascade)
+  preferenceCode PreferenceCode @relation(fields: [preferenceCodeId], references: [id], onDelete: Restrict)
+  property       Property?      @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+
+  @@unique([guestId, preferenceCodeId, propertyId], where: raw("property_id IS NOT NULL"))
+  @@unique([guestId, preferenceCodeId], map: "guest_preferences_global_key", where: raw("property_id IS NULL"))
+  @@map("guest_preferences")
+}
+
+model GuestNote {
+  id          String         @id @default(uuid(7)) @db.Uuid
+  guestId     String         @map("guest_id") @db.Uuid
+  propertyId  String?        @map("property_id") @db.Uuid
+  body        String         @db.VarChar(4000)
+  visibility  NoteVisibility @default(ALL_STAFF)
+  /// Shown as a recognition alert on arrival / reservation open.
+  isAlert     Boolean        @default(false) @map("is_alert")
+  createdById String         @map("created_by_id") @db.Uuid
+  createdAt   DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  deletedAt   DateTime?      @map("deleted_at") @db.Timestamptz(3)
+
+  guest    Guest     @relation(fields: [guestId], references: [id], onDelete: Cascade)
+  property Property? @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+
+  @@index([guestId])
+  @@map("guest_notes")
+}
+
+/// Denormalised stay history per guest and property, updated at check-out and
+/// no-show/cancel. Powers recognition (returning guest) and profile history
+/// without scanning reservations.
+model GuestStayStatistic {
+  guestId       String    @map("guest_id") @db.Uuid
+  propertyId    String    @map("property_id") @db.Uuid
+  stays         Int       @default(0)
+  nights        Int       @default(0)
+  cancellations Int       @default(0)
+  noShows       Int       @default(0) @map("no_shows")
+  roomRevenue   Decimal   @default(0) @map("room_revenue") @db.Decimal(19, 4)
+  totalRevenue  Decimal   @default(0) @map("total_revenue") @db.Decimal(19, 4)
+  firstStayDate DateTime? @map("first_stay_date") @db.Date
+  lastStayDate  DateTime? @map("last_stay_date") @db.Date
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  guest    Guest    @relation(fields: [guestId], references: [id], onDelete: Cascade)
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+
+  @@id([guestId, propertyId])
+  @@map("guest_stay_statistics")
+}
+
+/// Company, travel agent, source, wholesaler, OTA or partner profile.
+model AccountProfile {
+  id                String             @id @default(uuid(7)) @db.Uuid
+  organizationId    String             @map("organization_id") @db.Uuid
+  type              AccountProfileType
+  code              String?            @db.VarChar(20)
+  name              String             @db.VarChar(200)
+  searchName        String             @map("search_name") @db.VarChar(200)
+  legalName         String?            @map("legal_name") @db.VarChar(200)
+  /// IATA / TIDS for agents.
+  iataNumber        String?            @map("iata_number") @db.VarChar(20)
+  taxId             String?            @map("tax_id") @db.VarChar(60)
+  email             String?            @db.VarChar(254)
+  phone             String?            @db.VarChar(40)
+  addressLine1      String?            @map("address_line1") @db.VarChar(200)
+  addressLine2      String?            @map("address_line2") @db.VarChar(200)
+  city              String?            @db.VarChar(100)
+  region            String?            @db.VarChar(100)
+  postalCode        String?            @map("postal_code") @db.VarChar(20)
+  countryCode       String?            @map("country_code") @db.Char(2)
+  /// City-ledger (AR) account number; null = direct billing not allowed.
+  arNumber          String?            @map("ar_number") @db.VarChar(20)
+  creditLimit       Decimal?           @map("credit_limit") @db.Decimal(19, 4)
+  commissionPlanId  String?            @map("commission_plan_id") @db.Uuid
+  isRestricted      Boolean            @default(false) @map("is_restricted")
+  restrictionReason String?            @map("restriction_reason") @db.VarChar(500)
+  salesOwnerId      String?            @map("sales_owner_id") @db.Uuid
+  status            ProfileStatus      @default(ACTIVE)
+  mergedIntoId      String?            @map("merged_into_id") @db.Uuid
+  version           Int                @default(1)
+  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt         DateTime?          @map("deleted_at") @db.Timestamptz(3)
+
+  organization              Organization        @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  commissionPlan            CommissionPlan?     @relation(fields: [commissionPlanId], references: [id], onDelete: Restrict)
+  mergedInto                AccountProfile?     @relation("AccountMerge", fields: [mergedIntoId], references: [id], onDelete: Restrict)
+  mergedFrom                AccountProfile[]    @relation("AccountMerge")
+  contacts                  AccountContact[]
+  reservationsAsCompany     Reservation[]       @relation("ReservationCompany")
+  reservationsAsTravelAgent Reservation[]       @relation("ReservationTravelAgent")
+  reservationsAsSource      Reservation[]       @relation("ReservationSource")
+  folios                    Folio[]
+  commissions               Commission[]
+  groups                    Group[]
+  paymentInstruments        PaymentInstrument[]
+  negotiatedRates           NegotiatedRate[]
+
+  @@unique([organizationId, type, code])
+  @@unique([organizationId, arNumber])
+  @@index([organizationId, type, name])
+  @@index([searchName(ops: raw("gin_trgm_ops"))], type: Gin, map: "account_profiles_search_name_trgm_idx")
+  @@map("account_profiles")
+}
+
+/// A guest profile acting as contact person for an account.
+model AccountContact {
+  accountProfileId String   @map("account_profile_id") @db.Uuid
+  guestId          String   @map("guest_id") @db.Uuid
+  role             String?  @db.VarChar(100)
+  isPrimary        Boolean  @default(false) @map("is_primary")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  account AccountProfile @relation(fields: [accountProfileId], references: [id], onDelete: Cascade)
+  guest   Guest          @relation(fields: [guestId], references: [id], onDelete: Cascade)
+
+  @@id([accountProfileId, guestId])
+  @@map("account_contacts")
+}

@@ -1,0 +1,303 @@
+// Housekeeping and maintenance operations.
+
+enum HousekeepingTaskStatus {
+  PENDING
+  IN_PROGRESS
+  PAUSED // e.g. Do-Not-Disturb, guest in room
+  COMPLETED // cleaned; awaiting inspection if required
+  INSPECTED // passed inspection
+  FAILED_INSPECTION // back to attendant
+  SKIPPED // service declined / not required
+  CANCELLED
+
+  @@map("housekeeping_task_status")
+}
+
+enum DiscrepancyType {
+  SKIP // front office occupied, housekeeping vacant
+  SLEEP // front office vacant, housekeeping occupied
+  PERSON // head-count mismatch
+
+  @@map("discrepancy_type")
+}
+
+enum DiscrepancyStatus {
+  OPEN
+  RESOLVED
+
+  @@map("discrepancy_status")
+}
+
+enum LostFoundStatus {
+  FOUND
+  CLAIMED
+  RETURNED
+  DISPOSED
+
+  @@map("lost_found_status")
+}
+
+enum MaintenancePriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+
+  @@map("maintenance_priority")
+}
+
+enum MaintenanceStatus {
+  OPEN
+  ASSIGNED
+  IN_PROGRESS
+  ON_HOLD
+  RESOLVED
+  CLOSED
+  CANCELLED
+
+  @@map("maintenance_status")
+}
+
+/// Housekeeping staff. May or may not have a system login (userId).
+model HousekeepingAttendant {
+  id         String       @id @default(uuid(7)) @db.Uuid
+  propertyId String       @map("property_id") @db.Uuid
+  userId     String?      @map("user_id") @db.Uuid
+  code       String       @db.VarChar(20)
+  name       String       @db.VarChar(120)
+  status     RecordStatus @default(ACTIVE)
+
+  property               Property                @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  user                   User?                   @relation(fields: [userId], references: [id], onDelete: Restrict)
+  housekeepingTaskSheets HousekeepingTaskSheet[]
+  housekeepingTasks      HousekeepingTask[]
+
+  @@unique([propertyId, code])
+  @@unique([propertyId, id])
+  @@map("housekeeping_attendants")
+}
+
+/// DEPARTURE, STAYOVER, DEEP, TURNDOWN, INSPECTION, LINEN, MINIBAR ...
+model HousekeepingTaskType {
+  id                 String       @id @default(uuid(7)) @db.Uuid
+  propertyId         String       @map("property_id") @db.Uuid
+  code               String       @db.VarChar(20)
+  name               String       @db.VarChar(100)
+  credits            Decimal      @default(1) @db.Decimal(6, 2)
+  estimatedMinutes   Int          @default(30) @map("estimated_minutes")
+  /// Completing this task sets the room CLEAN (and INSPECTED after inspection).
+  changesRoomStatus  Boolean      @default(true) @map("changes_room_status")
+  requiresInspection Boolean      @default(false) @map("requires_inspection")
+  status             RecordStatus @default(ACTIVE)
+
+  property          Property           @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  housekeepingTasks HousekeepingTask[]
+
+  @@unique([propertyId, code])
+  @@unique([propertyId, id])
+  @@map("housekeeping_task_types")
+}
+
+/// Daily task sheet = one attendant's assignment for a business date.
+model HousekeepingTaskSheet {
+  id           String   @id @default(uuid(7)) @db.Uuid
+  propertyId   String   @map("property_id") @db.Uuid
+  businessDate DateTime @map("business_date") @db.Date
+  sheetNumber  Int      @map("sheet_number")
+  attendantId  String?  @map("attendant_id") @db.Uuid
+  instructions String?  @db.VarChar(2000)
+  createdById  String   @map("created_by_id") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  attendant HousekeepingAttendant? @relation(fields: [propertyId, attendantId], references: [propertyId, id], onDelete: Restrict)
+  tasks     HousekeepingTask[]
+
+  @@unique([propertyId, businessDate, sheetNumber])
+  @@unique([propertyId, id])
+  @@map("housekeeping_task_sheets")
+}
+
+model HousekeepingTask {
+  id            String                 @id @default(uuid(7)) @db.Uuid
+  propertyId    String                 @map("property_id") @db.Uuid
+  roomId        String                 @map("room_id") @db.Uuid
+  taskTypeId    String                 @map("task_type_id") @db.Uuid
+  businessDate  DateTime               @map("business_date") @db.Date
+  sheetId       String?                @map("sheet_id") @db.Uuid
+  attendantId   String?                @map("attendant_id") @db.Uuid
+  status        HousekeepingTaskStatus @default(PENDING)
+  /// Lower = sooner (arrivals waiting, VIP, queue rooms first).
+  priority      Int                    @default(100)
+  credits       Decimal                @default(1) @db.Decimal(6, 2)
+  /// Stay that generated the task (departure / stayover).
+  stayId        String?                @map("stay_id") @db.Uuid
+  notes         String?                @db.VarChar(2000)
+  startedAt     DateTime?              @map("started_at") @db.Timestamptz(3)
+  completedAt   DateTime?              @map("completed_at") @db.Timestamptz(3)
+  inspectedAt   DateTime?              @map("inspected_at") @db.Timestamptz(3)
+  inspectedById String?                @map("inspected_by_id") @db.Uuid
+  version       Int                    @default(1)
+  createdAt     DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  room      Room                   @relation(fields: [propertyId, roomId], references: [propertyId, id], onDelete: Restrict)
+  taskType  HousekeepingTaskType   @relation(fields: [propertyId, taskTypeId], references: [propertyId, id], onDelete: Restrict)
+  sheet     HousekeepingTaskSheet? @relation(fields: [propertyId, sheetId], references: [propertyId, id], onDelete: Restrict)
+  attendant HousekeepingAttendant? @relation(fields: [propertyId, attendantId], references: [propertyId, id], onDelete: Restrict)
+  stay      Stay?                  @relation(fields: [propertyId, stayId], references: [propertyId, id], onDelete: Restrict)
+
+  // One live task of a given type per room per day.
+  @@unique([propertyId, roomId, businessDate, taskTypeId], where: raw("status <> 'CANCELLED'"))
+  @@index([propertyId, businessDate, status])
+  @@index([propertyId, attendantId, businessDate])
+  @@map("housekeeping_tasks")
+}
+
+model HousekeepingDiscrepancy {
+  id                String            @id @default(uuid(7)) @db.Uuid
+  propertyId        String            @map("property_id") @db.Uuid
+  roomId            String            @map("room_id") @db.Uuid
+  businessDate      DateTime          @map("business_date") @db.Date
+  type              DiscrepancyType
+  status            DiscrepancyStatus @default(OPEN)
+  frontOfficeState  FrontOfficeStatus @map("front_office_state")
+  housekeepingState FrontOfficeStatus @map("housekeeping_state")
+  foPersons         Int?              @map("fo_persons")
+  hkPersons         Int?              @map("hk_persons")
+  resolution        String?           @db.VarChar(1000)
+  resolvedById      String?           @map("resolved_by_id") @db.Uuid
+  resolvedAt        DateTime?         @map("resolved_at") @db.Timestamptz(3)
+  createdAt         DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  room Room @relation(fields: [propertyId, roomId], references: [propertyId, id], onDelete: Restrict)
+
+  @@unique([propertyId, roomId, businessDate, type], where: raw("status = 'OPEN'"))
+  @@index([propertyId, status])
+  @@map("housekeeping_discrepancies")
+}
+
+model LostFoundItem {
+  id              String          @id @default(uuid(7)) @db.Uuid
+  propertyId      String          @map("property_id") @db.Uuid
+  itemNumber      String          @map("item_number") @db.VarChar(20)
+  roomId          String?         @map("room_id") @db.Uuid
+  location        String?         @db.VarChar(200)
+  category        String          @db.VarChar(40)
+  description     String          @db.VarChar(1000)
+  status          LostFoundStatus @default(FOUND)
+  guestId         String?         @map("guest_id") @db.Uuid
+  foundAt         DateTime        @map("found_at") @db.Timestamptz(3)
+  foundById       String          @map("found_by_id") @db.Uuid
+  storageLocation String?         @map("storage_location") @db.VarChar(200)
+  resolvedAt      DateTime?       @map("resolved_at") @db.Timestamptz(3)
+  resolvedById    String?         @map("resolved_by_id") @db.Uuid
+  resolution      String?         @db.VarChar(1000)
+  createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  room     Room?    @relation(fields: [propertyId, roomId], references: [propertyId, id], onDelete: Restrict)
+  guest    Guest?   @relation(fields: [guestId], references: [id], onDelete: Restrict)
+
+  @@unique([propertyId, itemNumber])
+  @@index([propertyId, status])
+  @@map("lost_found_items")
+}
+
+model MaintenanceCategory {
+  id         String       @id @default(uuid(7)) @db.Uuid
+  propertyId String       @map("property_id") @db.Uuid
+  code       String       @db.VarChar(20)
+  name       String       @db.VarChar(100)
+  status     RecordStatus @default(ACTIVE)
+
+  property                   Property                    @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  maintenanceRequests        MaintenanceRequest[]
+  preventiveMaintenancePlans PreventiveMaintenancePlan[]
+
+  @@unique([propertyId, code])
+  @@unique([propertyId, id])
+  @@map("maintenance_categories")
+}
+
+model MaintenanceRequest {
+  id               String              @id @default(uuid(7)) @db.Uuid
+  propertyId       String              @map("property_id") @db.Uuid
+  requestNumber    String              @map("request_number") @db.VarChar(20)
+  /// Room-level request; null for public areas (see `location`).
+  roomId           String?             @map("room_id") @db.Uuid
+  location         String?             @db.VarChar(200)
+  categoryId       String              @map("category_id") @db.Uuid
+  title            String              @db.VarChar(200)
+  description      String?             @db.VarChar(4000)
+  priority         MaintenancePriority @default(NORMAL)
+  status           MaintenanceStatus   @default(OPEN)
+  assignedToId     String?             @map("assigned_to_id") @db.Uuid
+  reportedById     String              @map("reported_by_id") @db.Uuid
+  reportedAt       DateTime            @default(now()) @map("reported_at") @db.Timestamptz(3)
+  dueAt            DateTime?           @map("due_at") @db.Timestamptz(3)
+  resolvedAt       DateTime?           @map("resolved_at") @db.Timestamptz(3)
+  closedAt         DateTime?           @map("closed_at") @db.Timestamptz(3)
+  resolution       String?             @db.VarChar(4000)
+  preventivePlanId String?             @map("preventive_plan_id") @db.Uuid
+  version          Int                 @default(1)
+  createdAt        DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  property       Property                   @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  room           Room?                      @relation(fields: [propertyId, roomId], references: [propertyId, id], onDelete: Restrict)
+  category       MaintenanceCategory        @relation(fields: [propertyId, categoryId], references: [propertyId, id], onDelete: Restrict)
+  assignedTo     User?                      @relation(fields: [assignedToId], references: [id], onDelete: Restrict)
+  preventivePlan PreventiveMaintenancePlan? @relation(fields: [propertyId, preventivePlanId], references: [propertyId, id], onDelete: Restrict)
+  activities     MaintenanceActivity[]
+  serviceBlocks  RoomServiceBlock[]
+
+  @@unique([propertyId, requestNumber])
+  @@unique([propertyId, id])
+  @@index([propertyId, status, priority])
+  @@index([propertyId, roomId])
+  @@index([assignedToId, status])
+  @@map("maintenance_requests")
+}
+
+/// Work history: notes, status changes, time and parts used.
+model MaintenanceActivity {
+  id           String             @id @default(uuid(7)) @db.Uuid
+  propertyId   String             @map("property_id") @db.Uuid
+  requestId    String             @map("request_id") @db.Uuid
+  /// NOTE, STATUS_CHANGE, ASSIGNMENT, TIME, PARTS
+  type         String             @db.VarChar(20)
+  body         String?            @db.VarChar(4000)
+  fromStatus   MaintenanceStatus? @map("from_status")
+  toStatus     MaintenanceStatus? @map("to_status")
+  minutesSpent Int?               @map("minutes_spent")
+  cost         Decimal?           @db.Decimal(19, 4)
+  createdById  String             @map("created_by_id") @db.Uuid
+  createdAt    DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  request MaintenanceRequest @relation(fields: [propertyId, requestId], references: [propertyId, id], onDelete: Cascade)
+
+  @@index([requestId, createdAt])
+  @@map("maintenance_activities")
+}
+
+model PreventiveMaintenancePlan {
+  id           String       @id @default(uuid(7)) @db.Uuid
+  propertyId   String       @map("property_id") @db.Uuid
+  title        String       @db.VarChar(200)
+  categoryId   String       @map("category_id") @db.Uuid
+  roomId       String?      @map("room_id") @db.Uuid
+  location     String?      @db.VarChar(200)
+  intervalDays Int          @map("interval_days")
+  nextDueDate  DateTime     @map("next_due_date") @db.Date
+  status       RecordStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  property Property             @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  category MaintenanceCategory  @relation(fields: [propertyId, categoryId], references: [propertyId, id], onDelete: Restrict)
+  room     Room?                @relation(fields: [propertyId, roomId], references: [propertyId, id], onDelete: Restrict)
+  requests MaintenanceRequest[]
+
+  @@unique([propertyId, id])
+  @@index([propertyId, nextDueDate])
+  @@map("preventive_maintenance_plans")
+}

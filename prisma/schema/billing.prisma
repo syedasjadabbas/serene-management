@@ -1,0 +1,394 @@
+// Folios, the posting ledger, transaction codes, taxes, routing, invoices.
+//
+// FolioItem is an append-only ledger: rows are never updated or deleted
+// (enforced by trigger). Corrections, adjustments and transfers are new rows
+// that reference the original. Folio totals are denormalised and maintained
+// in the posting transaction; night audit verifies them against the ledger.
+//
+// Sign convention: charges > 0, payments/credits < 0. balance = SUM(amount).
+
+enum TransactionGroupType {
+  REVENUE
+  PAYMENT
+  WRAPPER // non-revenue containers (package allowances, internal transfers)
+
+  @@map("transaction_group_type")
+}
+
+enum RevenueBucket {
+  ROOM
+  FOOD_BEVERAGE
+  PACKAGE
+  TELEPHONE
+  MINIBAR
+  LAUNDRY
+  SPA
+  TRANSPORT
+  OTHER
+  TAX
+  SERVICE_CHARGE
+  NON_REVENUE
+  PAYMENT
+
+  @@map("revenue_bucket")
+}
+
+enum TaxCalculation {
+  PERCENT
+  FLAT_PER_UNIT
+
+  @@map("tax_calculation")
+}
+
+enum TaxBasis {
+  NET // percentage of the base amount
+  COMPOUND // percentage of base + previously generated taxes
+
+  @@map("tax_basis")
+}
+
+enum FolioOwnerType {
+  GUEST // reservation-room folio, windows 1..n
+  GROUP_MASTER // block posting master
+  ACCOUNT // direct-bill / city-ledger folio for an account
+  PASSER_BY // non-resident sale
+
+  @@map("folio_owner_type")
+}
+
+enum FolioStatus {
+  OPEN
+  SETTLED // zero balance, may still receive postings until closed
+  CLOSED // invoiced; no further postings
+
+  @@map("folio_status")
+}
+
+enum FolioItemKind {
+  CHARGE
+  TAX
+  PAYMENT
+  ADJUSTMENT // prior-day correction with adjustment transaction code
+  REVERSAL // exact negation of an item (same-day correction / void)
+  TRANSFER_OUT
+  TRANSFER_IN
+  DEPOSIT_TRANSFER // deposit ledger -> guest folio at check-in
+
+  @@map("folio_item_kind")
+}
+
+enum PostingSource {
+  MANUAL
+  NIGHT_AUDIT
+  PACKAGE
+  FIXED_CHARGE
+  ROUTING
+  POS
+  INTERFACE
+  SYSTEM
+
+  @@map("posting_source")
+}
+
+enum RoutingTargetKind {
+  WINDOW // another window of the same reservation room
+  RESERVATION_ROOM // another reservation room's window (e.g. "pays for")
+  FOLIO // a specific folio (group master / account folio)
+
+  @@map("routing_target_kind")
+}
+
+enum InvoiceType {
+  INVOICE
+  CREDIT_NOTE
+
+  @@map("invoice_type")
+}
+
+enum InvoiceStatus {
+  ISSUED
+  CREDITED // fully offset by a credit note
+
+  @@map("invoice_status")
+}
+
+model TransactionCodeGroup {
+  id         String               @id @default(uuid(7)) @db.Uuid
+  propertyId String               @map("property_id") @db.Uuid
+  /// Null for a top-level group; set for a subgroup.
+  parentId   String?              @map("parent_id") @db.Uuid
+  code       String               @db.VarChar(20)
+  name       String               @db.VarChar(100)
+  type       TransactionGroupType
+  sortOrder  Int                  @default(0) @map("sort_order")
+
+  property Property               @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  parent   TransactionCodeGroup?  @relation("TransactionGroupTree", fields: [propertyId, parentId], references: [propertyId, id], onDelete: Restrict)
+  children TransactionCodeGroup[] @relation("TransactionGroupTree")
+  codes    TransactionCode[]
+
+  @@unique([propertyId, code])
+  @@unique([propertyId, id])
+  @@map("transaction_code_groups")
+}
+
+model TransactionCode {
+  id                        String        @id @default(uuid(7)) @db.Uuid
+  propertyId                String        @map("property_id") @db.Uuid
+  groupId                   String        @map("group_id") @db.Uuid
+  code                      String        @db.VarChar(20)
+  name                      String        @db.VarChar(100)
+  bucket                    RevenueBucket
+  isManualPostAllowed       Boolean       @default(true) @map("is_manual_post_allowed")
+  isPaidOut                 Boolean       @default(false) @map("is_paid_out")
+  /// Amounts posted with this code already include generated taxes.
+  isTaxInclusive            Boolean       @default(false) @map("is_tax_inclusive")
+  includeInDepositRule      Boolean       @default(true) @map("include_in_deposit_rule")
+  includeInCancellationRule Boolean       @default(true) @map("include_in_cancellation_rule")
+  defaultPrice              Decimal?      @map("default_price") @db.Decimal(19, 4)
+  minAmount                 Decimal?      @map("min_amount") @db.Decimal(19, 4)
+  maxAmount                 Decimal?      @map("max_amount") @db.Decimal(19, 4)
+  /// Code used when adjusting prior-day postings of this code.
+  adjustmentCodeId          String?       @map("adjustment_code_id") @db.Uuid
+  /// External general-ledger mapping for accounting exports.
+  glAccount                 String?       @map("gl_account") @db.VarChar(40)
+  status                    RecordStatus  @default(ACTIVE)
+  createdAt                 DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                 DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  property                Property                 @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  group                   TransactionCodeGroup     @relation(fields: [propertyId, groupId], references: [propertyId, id], onDelete: Restrict)
+  adjustmentCode          TransactionCode?         @relation("AdjustmentCode", fields: [propertyId, adjustmentCodeId], references: [propertyId, id], onDelete: Restrict)
+  adjusts                 TransactionCode[]        @relation("AdjustmentCode")
+  taxes                   TransactionCodeTax[]
+  taxRules                TaxRule[]                @relation("TaxRulePostingCode")
+  folioItems              FolioItem[]
+  routingInstructionCodes RoutingInstructionCode[]
+  paymentMethods          PaymentMethod[]
+  ratePlans               RatePlan[]
+  packageComponents       PackageComponent[]
+  fixedCharges            FixedCharge[]
+
+  @@unique([propertyId, code])
+  @@unique([propertyId, id])
+  @@map("transaction_codes")
+}
+
+/// A tax or service charge generated when its parent code is posted.
+model TaxRule {
+  id                String         @id @default(uuid(7)) @db.Uuid
+  propertyId        String         @map("property_id") @db.Uuid
+  code              String         @db.VarChar(20)
+  name              String         @db.VarChar(100)
+  calculation       TaxCalculation
+  basis             TaxBasis       @default(NET)
+  /// Percent (e.g. 16.0000) or flat amount per unit.
+  rate              Decimal        @db.Decimal(19, 4)
+  /// Transaction code the generated line is posted with.
+  transactionCodeId String         @map("transaction_code_id") @db.Uuid
+  effectiveFrom     DateTime       @map("effective_from") @db.Date
+  effectiveTo       DateTime?      @map("effective_to") @db.Date
+  status            RecordStatus   @default(ACTIVE)
+
+  property        Property             @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  transactionCode TransactionCode      @relation("TaxRulePostingCode", fields: [propertyId, transactionCodeId], references: [propertyId, id], onDelete: Restrict)
+  appliesTo       TransactionCodeTax[]
+
+  @@unique([propertyId, code])
+  @@unique([propertyId, id])
+  @@map("tax_rules")
+}
+
+model TransactionCodeTax {
+  propertyId        String @map("property_id") @db.Uuid
+  transactionCodeId String @map("transaction_code_id") @db.Uuid
+  taxRuleId         String @map("tax_rule_id") @db.Uuid
+  sequence          Int    @default(1)
+
+  transactionCode TransactionCode @relation(fields: [propertyId, transactionCodeId], references: [propertyId, id], onDelete: Cascade)
+  taxRule         TaxRule         @relation(fields: [propertyId, taxRuleId], references: [propertyId, id], onDelete: Restrict)
+
+  @@id([transactionCodeId, taxRuleId])
+  @@map("transaction_code_taxes")
+}
+
+model Folio {
+  id                String         @id @default(uuid(7)) @db.Uuid
+  propertyId        String         @map("property_id") @db.Uuid
+  ownerType         FolioOwnerType @map("owner_type")
+  /// Billing window 1..PropertyConfiguration.maxFolioWindows.
+  window            Int            @default(1)
+  reservationRoomId String?        @map("reservation_room_id") @db.Uuid
+  blockId           String?        @map("block_id") @db.Uuid
+  /// Payee: who this window is billed to (guest or account).
+  payeeGuestId      String?        @map("payee_guest_id") @db.Uuid
+  payeeAccountId    String?        @map("payee_account_id") @db.Uuid
+  status            FolioStatus    @default(OPEN)
+  currencyCode      String         @map("currency_code") @db.Char(3)
+  chargesTotal      Decimal        @default(0) @map("charges_total") @db.Decimal(19, 4)
+  creditsTotal      Decimal        @default(0) @map("credits_total") @db.Decimal(19, 4)
+  balance           Decimal        @default(0) @db.Decimal(19, 4)
+  openedById        String         @map("opened_by_id") @db.Uuid
+  openedAt          DateTime       @default(now()) @map("opened_at") @db.Timestamptz(3)
+  closedAt          DateTime?      @map("closed_at") @db.Timestamptz(3)
+  version           Int            @default(1)
+  updatedAt         DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  property            Property             @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  reservationRoom     ReservationRoom?     @relation(fields: [propertyId, reservationRoomId], references: [propertyId, id], onDelete: Restrict)
+  block               Block?               @relation(fields: [propertyId, blockId], references: [propertyId, id], onDelete: Restrict)
+  payeeGuest          Guest?               @relation(fields: [payeeGuestId], references: [id], onDelete: Restrict)
+  payeeAccount        AccountProfile?      @relation(fields: [payeeAccountId], references: [id], onDelete: Restrict)
+  items               FolioItem[]
+  invoices            Invoice[]
+  routingInstructions RoutingInstruction[]
+  payments            Payment[]
+
+  @@unique([propertyId, id])
+  @@unique([reservationRoomId, window], where: raw("reservation_room_id IS NOT NULL"))
+  @@unique([blockId, window], where: raw("block_id IS NOT NULL"))
+  @@index([propertyId, status])
+  @@index([payeeAccountId])
+  @@map("folios")
+}
+
+/// Ledger line. "Charge" in business language = FolioItem of kind CHARGE.
+model FolioItem {
+  id                      String        @id @default(uuid(7)) @db.Uuid
+  propertyId              String        @map("property_id") @db.Uuid
+  folioId                 String        @map("folio_id") @db.Uuid
+  kind                    FolioItemKind
+  source                  PostingSource
+  transactionCodeId       String        @map("transaction_code_id") @db.Uuid
+  /// Business date of posting (drives all financial reports).
+  businessDate            DateTime      @map("business_date") @db.Date
+  /// Revenue date when different (room charge for a stay night, future-dated adj.).
+  revenueDate             DateTime?     @map("revenue_date") @db.Date
+  quantity                Decimal       @default(1) @db.Decimal(12, 3)
+  unitAmount              Decimal       @map("unit_amount") @db.Decimal(19, 4)
+  /// Signed amount in folio currency.
+  amount                  Decimal       @db.Decimal(19, 4)
+  currencyCode            String        @map("currency_code") @db.Char(3)
+  /// Original currency and rate when posted in a foreign currency.
+  originalAmount          Decimal?      @map("original_amount") @db.Decimal(19, 4)
+  originalCurrency        String?       @map("original_currency") @db.Char(3)
+  exchangeRate            Decimal?      @map("exchange_rate") @db.Decimal(18, 8)
+  description             String        @db.VarChar(200)
+  /// External reference: POS check number, voucher, gateway reference.
+  reference               String?       @db.VarChar(100)
+  /// Generated tax/service lines point at the item that generated them.
+  parentItemId            String?       @map("parent_item_id") @db.Uuid
+  /// REVERSAL / ADJUSTMENT: the item being corrected.
+  correctsItemId          String?       @map("corrects_item_id") @db.Uuid
+  /// TRANSFER_IN / TRANSFER_OUT pairs share a transfer id.
+  transferId              String?       @map("transfer_id") @db.Uuid
+  /// Reservation room the charge originated from (differs from folio owner
+  /// when routed to another reservation / group master).
+  originReservationRoomId String?       @map("origin_reservation_room_id") @db.Uuid
+  roomId                  String?       @map("room_id") @db.Uuid
+  paymentId               String?       @map("payment_id") @db.Uuid
+  refundId                String?       @map("refund_id") @db.Uuid
+  packageComponentId      String?       @map("package_component_id") @db.Uuid
+  cashierShiftId          String?       @map("cashier_shift_id") @db.Uuid
+  reasonCodeId            String?       @map("reason_code_id") @db.Uuid
+  comment                 String?       @db.VarChar(500)
+  postedById              String?       @map("posted_by_id") @db.Uuid
+  postedAt                DateTime      @default(now()) @map("posted_at") @db.Timestamptz(3)
+
+  folio           Folio           @relation(fields: [propertyId, folioId], references: [propertyId, id], onDelete: Restrict)
+  transactionCode TransactionCode @relation(fields: [propertyId, transactionCodeId], references: [propertyId, id], onDelete: Restrict)
+  parentItem      FolioItem?      @relation("GeneratedItems", fields: [parentItemId], references: [id], onDelete: Restrict)
+  generatedItems  FolioItem[]     @relation("GeneratedItems")
+  correctsItem    FolioItem?      @relation("Corrections", fields: [correctsItemId], references: [id], onDelete: Restrict)
+  corrections     FolioItem[]     @relation("Corrections")
+  payment         Payment?        @relation(fields: [propertyId, paymentId], references: [propertyId, id], onDelete: Restrict)
+  refund          Refund?         @relation(fields: [propertyId, refundId], references: [propertyId, id], onDelete: Restrict)
+  cashierShift    CashierShift?   @relation(fields: [propertyId, cashierShiftId], references: [propertyId, id], onDelete: Restrict)
+  reasonCode      ReasonCode?     @relation(fields: [propertyId, reasonCodeId], references: [propertyId, id], onDelete: Restrict)
+
+  /// An item can be reversed at most once.
+  @@unique([correctsItemId, kind], map: "folio_items_one_reversal_per_item", where: raw("kind = 'REVERSAL'"))
+  @@index([folioId, postedAt])
+  @@index([propertyId, businessDate, transactionCodeId])
+  @@index([propertyId, cashierShiftId])
+  @@index([originReservationRoomId])
+  @@index([correctsItemId])
+  @@index([transferId])
+  @@map("folio_items")
+}
+
+/// Automatic charge routing from a reservation room to another window,
+/// reservation room or folio, for selected transaction codes and dates.
+model RoutingInstruction {
+  id                      String            @id @default(uuid(7)) @db.Uuid
+  propertyId              String            @map("property_id") @db.Uuid
+  sourceReservationRoomId String            @map("source_reservation_room_id") @db.Uuid
+  targetKind              RoutingTargetKind @map("target_kind")
+  targetWindow            Int?              @map("target_window")
+  targetReservationRoomId String?           @map("target_reservation_room_id") @db.Uuid
+  targetFolioId           String?           @map("target_folio_id") @db.Uuid
+  /// true = route every transaction code (codes list ignored).
+  allCodes                Boolean           @default(false) @map("all_codes")
+  /// Inclusive date range of postings the rule applies to.
+  startDate               DateTime          @map("start_date") @db.Date
+  endDate                 DateTime          @map("end_date") @db.Date
+  daysOfWeek              Int               @default(127) @map("days_of_week")
+  /// Optional cap; overage stays on window 1.
+  limitAmount             Decimal?          @map("limit_amount") @db.Decimal(19, 4)
+  isActive                Boolean           @default(true) @map("is_active")
+  createdById             String            @map("created_by_id") @db.Uuid
+  createdAt               DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  sourceReservationRoom ReservationRoom          @relation("RoutingSource", fields: [propertyId, sourceReservationRoomId], references: [propertyId, id], onDelete: Cascade)
+  targetReservationRoom ReservationRoom?         @relation("RoutingTarget", fields: [propertyId, targetReservationRoomId], references: [propertyId, id], onDelete: Restrict)
+  targetFolio           Folio?                   @relation(fields: [propertyId, targetFolioId], references: [propertyId, id], onDelete: Restrict)
+  codes                 RoutingInstructionCode[]
+
+  @@index([sourceReservationRoomId, isActive])
+  @@map("routing_instructions")
+}
+
+model RoutingInstructionCode {
+  propertyId           String @map("property_id") @db.Uuid
+  routingInstructionId String @map("routing_instruction_id") @db.Uuid
+  transactionCodeId    String @map("transaction_code_id") @db.Uuid
+
+  routingInstruction RoutingInstruction @relation(fields: [routingInstructionId], references: [id], onDelete: Cascade)
+  transactionCode    TransactionCode    @relation(fields: [propertyId, transactionCodeId], references: [propertyId, id], onDelete: Restrict)
+
+  @@id([routingInstructionId, transactionCodeId])
+  @@map("routing_instruction_codes")
+}
+
+/// Immutable fiscal document produced when a folio is settled / printed.
+/// Lines and bill-to are snapshotted so later profile edits never alter it.
+model Invoice {
+  id              String        @id @default(uuid(7)) @db.Uuid
+  propertyId      String        @map("property_id") @db.Uuid
+  folioId         String        @map("folio_id") @db.Uuid
+  type            InvoiceType   @default(INVOICE)
+  status          InvoiceStatus @default(ISSUED)
+  /// Gap-free per property (PropertySequence "invoice" / "credit_note").
+  invoiceNumber   String        @map("invoice_number") @db.VarChar(30)
+  businessDate    DateTime      @map("business_date") @db.Date
+  currencyCode    String        @map("currency_code") @db.Char(3)
+  netTotal        Decimal       @map("net_total") @db.Decimal(19, 4)
+  taxTotal        Decimal       @map("tax_total") @db.Decimal(19, 4)
+  grossTotal      Decimal       @map("gross_total") @db.Decimal(19, 4)
+  paidTotal       Decimal       @map("paid_total") @db.Decimal(19, 4)
+  billTo          Json          @map("bill_to")
+  lines           Json
+  creditNoteForId String?       @unique @map("credit_note_for_id") @db.Uuid
+  storageKey      String?       @map("storage_key") @db.VarChar(500)
+  issuedById      String        @map("issued_by_id") @db.Uuid
+  issuedAt        DateTime      @default(now()) @map("issued_at") @db.Timestamptz(3)
+
+  folio         Folio    @relation(fields: [propertyId, folioId], references: [propertyId, id], onDelete: Restrict)
+  creditNoteFor Invoice? @relation("CreditNote", fields: [creditNoteForId], references: [id], onDelete: Restrict)
+  creditNote    Invoice? @relation("CreditNote")
+
+  @@unique([propertyId, invoiceNumber])
+  @@index([folioId])
+  @@index([propertyId, businessDate])
+  @@map("invoices")
+}

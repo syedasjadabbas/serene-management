@@ -1,0 +1,233 @@
+// Commissions, loyalty and operational stock items. These are modular:
+// the reservation / billing core never depends on them. They consume core
+// facts (checked-out stays, folio revenue) through services and events.
+
+enum CommissionType {
+  PERCENT
+  FLAT_PER_NIGHT
+  FLAT_PER_STAY
+
+  @@map("commission_type")
+}
+
+enum CommissionBasis {
+  ROOM_REVENUE
+  TOTAL_REVENUE
+
+  @@map("commission_basis")
+}
+
+enum CommissionStatus {
+  PENDING // calculated at check-out
+  APPROVED
+  ON_HOLD
+  PAID
+  CANCELLED
+
+  @@map("commission_status")
+}
+
+enum LoyaltyTransactionType {
+  EARN
+  REDEEM
+  ADJUST
+  EXPIRE
+
+  @@map("loyalty_transaction_type")
+}
+
+enum StockMovementType {
+  RECEIPT
+  ISSUE
+  CONSUMPTION
+  ADJUSTMENT
+  TRANSFER_OUT
+  TRANSFER_IN
+
+  @@map("stock_movement_type")
+}
+
+model CommissionPlan {
+  id             String          @id @default(uuid(7)) @db.Uuid
+  organizationId String          @map("organization_id") @db.Uuid
+  code           String          @db.VarChar(20)
+  name           String          @db.VarChar(100)
+  type           CommissionType
+  basis          CommissionBasis @default(ROOM_REVENUE)
+  value          Decimal         @db.Decimal(19, 4)
+  includeNoShows Boolean         @default(false) @map("include_no_shows")
+  status         RecordStatus    @default(ACTIVE)
+
+  organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  commissions     Commission[]
+  accountProfiles AccountProfile[]
+  ratePlans       RatePlan[]
+
+  @@unique([organizationId, code])
+  @@map("commission_plans")
+}
+
+/// Commission owed to an agent / source for one reservation room.
+model Commission {
+  id                String           @id @default(uuid(7)) @db.Uuid
+  propertyId        String           @map("property_id") @db.Uuid
+  reservationRoomId String           @map("reservation_room_id") @db.Uuid
+  accountProfileId  String           @map("account_profile_id") @db.Uuid
+  planId            String           @map("plan_id") @db.Uuid
+  basisAmount       Decimal          @map("basis_amount") @db.Decimal(19, 4)
+  amount            Decimal          @db.Decimal(19, 4)
+  currencyCode      String           @map("currency_code") @db.Char(3)
+  status            CommissionStatus @default(PENDING)
+  calculatedAt      DateTime         @default(now()) @map("calculated_at") @db.Timestamptz(3)
+  paidAt            DateTime?        @map("paid_at") @db.Timestamptz(3)
+  paymentReference  String?          @map("payment_reference") @db.VarChar(100)
+  version           Int              @default(1)
+
+  reservationRoom ReservationRoom @relation(fields: [propertyId, reservationRoomId], references: [propertyId, id], onDelete: Restrict)
+  account         AccountProfile  @relation(fields: [accountProfileId], references: [id], onDelete: Restrict)
+  plan            CommissionPlan  @relation(fields: [planId], references: [id], onDelete: Restrict)
+
+  @@unique([reservationRoomId, accountProfileId])
+  @@index([propertyId, status])
+  @@index([accountProfileId, status])
+  @@map("commissions")
+}
+
+model LoyaltyProgram {
+  id             String       @id @default(uuid(7)) @db.Uuid
+  organizationId String       @map("organization_id") @db.Uuid
+  code           String       @db.VarChar(20)
+  name           String       @db.VarChar(100)
+  /// External programs are mastered elsewhere; we store membership only.
+  isExternal     Boolean      @default(false) @map("is_external")
+  status         RecordStatus @default(ACTIVE)
+
+  organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  tiers        LoyaltyTier[]
+  memberships  LoyaltyMembership[]
+
+  @@unique([organizationId, code])
+  @@map("loyalty_programs")
+}
+
+model LoyaltyTier {
+  id        String @id @default(uuid(7)) @db.Uuid
+  programId String @map("program_id") @db.Uuid
+  code      String @db.VarChar(20)
+  name      String @db.VarChar(100)
+  rank      Int    @default(0)
+
+  program     LoyaltyProgram      @relation(fields: [programId], references: [id], onDelete: Cascade)
+  memberships LoyaltyMembership[]
+
+  @@unique([programId, code])
+  @@map("loyalty_tiers")
+}
+
+model LoyaltyMembership {
+  id               String       @id @default(uuid(7)) @db.Uuid
+  programId        String       @map("program_id") @db.Uuid
+  guestId          String       @map("guest_id") @db.Uuid
+  membershipNumber String       @map("membership_number") @db.VarChar(40)
+  tierId           String?      @map("tier_id") @db.Uuid
+  pointsBalance    Decimal      @default(0) @map("points_balance") @db.Decimal(19, 2)
+  enrolledAt       DateTime     @default(now()) @map("enrolled_at") @db.Timestamptz(3)
+  expiresAt        DateTime?    @map("expires_at") @db.Timestamptz(3)
+  status           RecordStatus @default(ACTIVE)
+
+  program      LoyaltyProgram       @relation(fields: [programId], references: [id], onDelete: Restrict)
+  guest        Guest                @relation(fields: [guestId], references: [id], onDelete: Restrict)
+  tier         LoyaltyTier?         @relation(fields: [tierId], references: [id], onDelete: Restrict)
+  transactions LoyaltyTransaction[]
+
+  @@unique([programId, membershipNumber])
+  @@index([guestId])
+  @@map("loyalty_memberships")
+}
+
+model LoyaltyTransaction {
+  id           String                 @id @default(uuid(7)) @db.Uuid
+  membershipId String                 @map("membership_id") @db.Uuid
+  propertyId   String?                @map("property_id") @db.Uuid
+  stayId       String?                @map("stay_id") @db.Uuid
+  type         LoyaltyTransactionType
+  points       Decimal                @db.Decimal(19, 2)
+  description  String?                @db.VarChar(200)
+  createdById  String?                @map("created_by_id") @db.Uuid
+  createdAt    DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  membership LoyaltyMembership @relation(fields: [membershipId], references: [id], onDelete: Restrict)
+
+  @@index([membershipId, createdAt])
+  @@map("loyalty_transactions")
+}
+
+/// Operational item (minibar, amenity, linen, supplies, retail).
+model StockItem {
+  id             String       @id @default(uuid(7)) @db.Uuid
+  organizationId String       @map("organization_id") @db.Uuid
+  sku            String       @db.VarChar(40)
+  name           String       @db.VarChar(200)
+  /// MINIBAR, AMENITY, HOUSEKEEPING_SUPPLY, LINEN, MAINTENANCE_SUPPLY, RETAIL
+  category       String       @db.VarChar(40)
+  unit           String       @db.VarChar(20)
+  unitCost       Decimal?     @map("unit_cost") @db.Decimal(19, 4)
+  status         RecordStatus @default(ACTIVE)
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  levels       StockLevel[]
+  movements    StockMovement[]
+
+  @@unique([organizationId, sku])
+  @@map("stock_items")
+}
+
+model StockLocation {
+  id         String       @id @default(uuid(7)) @db.Uuid
+  propertyId String       @map("property_id") @db.Uuid
+  code       String       @db.VarChar(20)
+  name       String       @db.VarChar(100)
+  status     RecordStatus @default(ACTIVE)
+
+  property  Property        @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  levels    StockLevel[]
+  movements StockMovement[]
+
+  @@unique([propertyId, code])
+  @@map("stock_locations")
+}
+
+model StockLevel {
+  itemId     String   @map("item_id") @db.Uuid
+  locationId String   @map("location_id") @db.Uuid
+  quantity   Decimal  @default(0) @db.Decimal(14, 3)
+  parLevel   Decimal? @map("par_level") @db.Decimal(14, 3)
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  item     StockItem     @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  location StockLocation @relation(fields: [locationId], references: [id], onDelete: Restrict)
+
+  @@id([itemId, locationId])
+  @@map("stock_levels")
+}
+
+model StockMovement {
+  id          String            @id @default(uuid(7)) @db.Uuid
+  itemId      String            @map("item_id") @db.Uuid
+  locationId  String            @map("location_id") @db.Uuid
+  type        StockMovementType
+  /// Signed quantity change.
+  quantity    Decimal           @db.Decimal(14, 3)
+  unitCost    Decimal?          @map("unit_cost") @db.Decimal(19, 4)
+  roomId      String?           @map("room_id") @db.Uuid
+  folioItemId String?           @map("folio_item_id") @db.Uuid
+  reference   String?           @db.VarChar(100)
+  createdById String            @map("created_by_id") @db.Uuid
+  createdAt   DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  item     StockItem     @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  location StockLocation @relation(fields: [locationId], references: [id], onDelete: Restrict)
+
+  @@index([itemId, locationId, createdAt])
+  @@map("stock_movements")
+}

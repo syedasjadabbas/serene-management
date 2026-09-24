@@ -1,0 +1,26 @@
+// SERENE MANAGEMENT — Prisma schema root.
+//
+// The schema is split by bounded context (one file per domain) in this folder.
+// Conventions (see docs/DATABASE_DESIGN.md):
+//   * Primary keys: UUIDv7 (`uuid(7)`), time-ordered for index locality.
+//   * Tables and columns are snake_case in PostgreSQL (@@map / @map).
+//   * Money: NUMERIC(19,4) + ISO-4217 CHAR(3) currency. Never float.
+//   * Instants: TIMESTAMPTZ(3). Hotel business dates / stay nights: DATE.
+//   * Property-scoped children reference property-scoped parents through
+//     composite foreign keys (property_id, id) so a row can never point at
+//     another property's data, even through a service-layer bug.
+//   * Actor columns (`*_by_id`) are plain UUIDs, not foreign keys: users are
+//     never hard-deleted and the audit log is the authoritative actor record.
+//   * Check constraints, exclusion constraints and immutability triggers
+//     that Prisma cannot express live in hand-written migrations
+//     (prisma/migrations/*_constraints).
+
+generator client {
+  provider        = "prisma-client"
+  output          = "../../generated/prisma"
+  previewFeatures = ["partialIndexes"]
+}
+
+datasource db {
+  provider = "postgresql"
+}

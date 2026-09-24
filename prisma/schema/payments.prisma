@@ -1,0 +1,275 @@
+// Payments, refunds, card authorizations, tokenised instruments and cashiering.
+// No PAN, CVV or track data is ever stored: only provider tokens plus
+// brand / last4 / expiry for display (PCI DSS scope reduction).
+
+enum PaymentMethodKind {
+  CASH
+  CREDIT_CARD
+  DEBIT_CARD
+  BANK_TRANSFER
+  ONLINE
+  CHEQUE
+  CITY_LEDGER // direct bill to an AR account
+  VOUCHER
+  COMPLIMENTARY
+
+  @@map("payment_method_kind")
+}
+
+enum PaymentKind {
+  PAYMENT // settles a folio
+  DEPOSIT // advance payment held in the deposit ledger until check-in
+
+  @@map("payment_kind")
+}
+
+enum PaymentStatus {
+  PENDING // awaiting gateway result
+  AUTHORIZED // card authorised, not captured
+  CAPTURED // money received (cash/transfer are captured immediately)
+  FAILED
+  VOIDED // cancelled before settlement
+
+  @@map("payment_status")
+}
+
+enum RefundStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+
+  @@map("refund_status")
+}
+
+enum CardAuthorizationStatus {
+  APPROVED
+  DECLINED
+  RELEASED
+  CAPTURED
+  EXPIRED
+
+  @@map("card_authorization_status")
+}
+
+enum CashierShiftStatus {
+  OPEN
+  CLOSED
+
+  @@map("cashier_shift_status")
+}
+
+enum CashMovementType {
+  OPENING_FLOAT
+  CASH_IN // cash payment received
+  CASH_OUT // cash refund
+  PAID_OUT // cash advanced on behalf of a guest
+  DROP // cash dropped to safe
+  EXCHANGE // foreign currency exchange
+
+  @@map("cash_movement_type")
+}
+
+model PaymentMethod {
+  id                String            @id @default(uuid(7)) @db.Uuid
+  propertyId        String            @map("property_id") @db.Uuid
+  code              String            @db.VarChar(20)
+  name              String            @db.VarChar(100)
+  kind              PaymentMethodKind
+  /// Payment transaction code posted to the folio.
+  transactionCodeId String            @map("transaction_code_id") @db.Uuid
+  requiresReference Boolean           @default(false) @map("requires_reference")
+  status            RecordStatus      @default(ACTIVE)
+
+  property        Property        @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  transactionCode TransactionCode @relation(fields: [propertyId, transactionCodeId], references: [propertyId, id], onDelete: Restrict)
+  payments        Payment[]
+
+  @@unique([propertyId, code])
+  @@unique([propertyId, id])
+  @@map("payment_methods")
+}
+
+/// Tokenised card / wallet stored at the payment provider.
+model PaymentInstrument {
+  id               String       @id @default(uuid(7)) @db.Uuid
+  organizationId   String       @map("organization_id") @db.Uuid
+  guestId          String?      @map("guest_id") @db.Uuid
+  accountProfileId String?      @map("account_profile_id") @db.Uuid
+  provider         String       @db.VarChar(40)
+  providerToken    String       @map("provider_token") @db.VarChar(255)
+  brand            String?      @db.VarChar(20)
+  last4            String?      @db.VarChar(4)
+  expiryMonth      Int?         @map("expiry_month")
+  expiryYear       Int?         @map("expiry_year")
+  holderName       String?      @map("holder_name") @db.VarChar(200)
+  status           RecordStatus @default(ACTIVE)
+  createdAt        DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  organization       Organization        @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  guest              Guest?              @relation(fields: [guestId], references: [id], onDelete: Restrict)
+  account            AccountProfile?     @relation(fields: [accountProfileId], references: [id], onDelete: Restrict)
+  payments           Payment[]
+  cardAuthorizations CardAuthorization[]
+
+  @@unique([provider, providerToken])
+  @@index([guestId])
+  @@map("payment_instruments")
+}
+
+model Payment {
+  id                String        @id @default(uuid(7)) @db.Uuid
+  propertyId        String        @map("property_id") @db.Uuid
+  kind              PaymentKind
+  status            PaymentStatus
+  /// Folio settled (PAYMENT), or the folio a deposit was transferred to.
+  folioId           String?       @map("folio_id") @db.Uuid
+  /// Booking a DEPOSIT belongs to.
+  reservationId     String?       @map("reservation_id") @db.Uuid
+  depositRequestId  String?       @map("deposit_request_id") @db.Uuid
+  methodId          String        @map("method_id") @db.Uuid
+  instrumentId      String?       @map("instrument_id") @db.Uuid
+  amount            Decimal       @db.Decimal(19, 4)
+  currencyCode      String        @map("currency_code") @db.Char(3)
+  refundedAmount    Decimal       @default(0) @map("refunded_amount") @db.Decimal(19, 4)
+  businessDate      DateTime      @map("business_date") @db.Date
+  cashierShiftId    String?       @map("cashier_shift_id") @db.Uuid
+  gatewayProvider   String?       @map("gateway_provider") @db.VarChar(40)
+  gatewayReference  String?       @map("gateway_reference") @db.VarChar(100)
+  authorizationCode String?       @map("authorization_code") @db.VarChar(40)
+  cardBrand         String?       @map("card_brand") @db.VarChar(20)
+  cardLast4         String?       @map("card_last4") @db.VarChar(4)
+  /// Cheque number, transfer reference, voucher number ...
+  reference         String?       @db.VarChar(100)
+  receiptNumber     String?       @map("receipt_number") @db.VarChar(30)
+  failureReason     String?       @map("failure_reason") @db.VarChar(500)
+  createdById       String        @map("created_by_id") @db.Uuid
+  createdAt         DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  capturedAt        DateTime?     @map("captured_at") @db.Timestamptz(3)
+  voidedAt          DateTime?     @map("voided_at") @db.Timestamptz(3)
+  voidReasonId      String?       @map("void_reason_id") @db.Uuid
+  version           Int           @default(1)
+
+  property       Property           @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  folio          Folio?             @relation(fields: [propertyId, folioId], references: [propertyId, id], onDelete: Restrict)
+  reservation    Reservation?       @relation(fields: [propertyId, reservationId], references: [propertyId, id], onDelete: Restrict)
+  depositRequest DepositRequest?    @relation(fields: [depositRequestId], references: [id], onDelete: Restrict)
+  method         PaymentMethod      @relation(fields: [propertyId, methodId], references: [propertyId, id], onDelete: Restrict)
+  instrument     PaymentInstrument? @relation(fields: [instrumentId], references: [id], onDelete: Restrict)
+  cashierShift   CashierShift?      @relation(fields: [propertyId, cashierShiftId], references: [propertyId, id], onDelete: Restrict)
+  voidReason     ReasonCode?        @relation(fields: [propertyId, voidReasonId], references: [propertyId, id], onDelete: Restrict)
+  refunds        Refund[]
+  folioItems     FolioItem[]
+
+  @@unique([propertyId, id])
+  @@unique([propertyId, receiptNumber])
+  @@unique([gatewayProvider, gatewayReference], where: raw("gateway_reference IS NOT NULL"))
+  @@index([propertyId, businessDate])
+  @@index([folioId])
+  @@index([reservationId])
+  @@map("payments")
+}
+
+model Refund {
+  id               String       @id @default(uuid(7)) @db.Uuid
+  propertyId       String       @map("property_id") @db.Uuid
+  paymentId        String       @map("payment_id") @db.Uuid
+  amount           Decimal      @db.Decimal(19, 4)
+  currencyCode     String       @map("currency_code") @db.Char(3)
+  status           RefundStatus @default(PENDING)
+  reasonCodeId     String       @map("reason_code_id") @db.Uuid
+  comment          String?      @db.VarChar(500)
+  businessDate     DateTime     @map("business_date") @db.Date
+  cashierShiftId   String?      @map("cashier_shift_id") @db.Uuid
+  gatewayReference String?      @map("gateway_reference") @db.VarChar(100)
+  failureReason    String?      @map("failure_reason") @db.VarChar(500)
+  /// Refunds above the configured threshold require a second approver.
+  approvedById     String?      @map("approved_by_id") @db.Uuid
+  createdById      String       @map("created_by_id") @db.Uuid
+  createdAt        DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  completedAt      DateTime?    @map("completed_at") @db.Timestamptz(3)
+
+  payment      Payment       @relation(fields: [propertyId, paymentId], references: [propertyId, id], onDelete: Restrict)
+  reasonCode   ReasonCode    @relation(fields: [propertyId, reasonCodeId], references: [propertyId, id], onDelete: Restrict)
+  cashierShift CashierShift? @relation(fields: [propertyId, cashierShiftId], references: [propertyId, id], onDelete: Restrict)
+  folioItems   FolioItem[]
+
+  @@unique([propertyId, id])
+  @@index([paymentId])
+  @@index([propertyId, businessDate])
+  @@map("refunds")
+}
+
+/// Card pre-authorisation held against a stay (check-in incidentals).
+model CardAuthorization {
+  id                String                  @id @default(uuid(7)) @db.Uuid
+  propertyId        String                  @map("property_id") @db.Uuid
+  reservationRoomId String                  @map("reservation_room_id") @db.Uuid
+  instrumentId      String                  @map("instrument_id") @db.Uuid
+  amount            Decimal                 @db.Decimal(19, 4)
+  currencyCode      String                  @map("currency_code") @db.Char(3)
+  status            CardAuthorizationStatus
+  gatewayReference  String?                 @map("gateway_reference") @db.VarChar(100)
+  approvalCode      String?                 @map("approval_code") @db.VarChar(40)
+  expiresAt         DateTime?               @map("expires_at") @db.Timestamptz(3)
+  createdById       String                  @map("created_by_id") @db.Uuid
+  createdAt         DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  reservationRoom ReservationRoom   @relation(fields: [propertyId, reservationRoomId], references: [propertyId, id], onDelete: Restrict)
+  instrument      PaymentInstrument @relation(fields: [instrumentId], references: [id], onDelete: Restrict)
+
+  @@index([reservationRoomId])
+  @@map("card_authorizations")
+}
+
+/// A cashier's shift. Every cash-affecting posting references the open shift
+/// of the posting user; closing reconciles expected vs counted cash.
+model CashierShift {
+  id           String             @id @default(uuid(7)) @db.Uuid
+  propertyId   String             @map("property_id") @db.Uuid
+  userId       String             @map("user_id") @db.Uuid
+  businessDate DateTime           @map("business_date") @db.Date
+  status       CashierShiftStatus @default(OPEN)
+  currencyCode String             @map("currency_code") @db.Char(3)
+  openingFloat Decimal            @default(0) @map("opening_float") @db.Decimal(19, 4)
+  expectedCash Decimal?           @map("expected_cash") @db.Decimal(19, 4)
+  countedCash  Decimal?           @map("counted_cash") @db.Decimal(19, 4)
+  variance     Decimal?           @db.Decimal(19, 4)
+  notes        String?            @db.VarChar(1000)
+  openedAt     DateTime           @default(now()) @map("opened_at") @db.Timestamptz(3)
+  closedAt     DateTime?          @map("closed_at") @db.Timestamptz(3)
+  closedById   String?            @map("closed_by_id") @db.Uuid
+
+  property   Property       @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  user       User           @relation(fields: [userId], references: [id], onDelete: Restrict)
+  movements  CashMovement[]
+  folioItems FolioItem[]
+  payments   Payment[]
+  refunds    Refund[]
+
+  @@unique([propertyId, id])
+  @@unique([propertyId, userId], map: "cashier_shifts_one_open_per_user", where: raw("status = 'OPEN'"))
+  @@index([propertyId, businessDate])
+  @@map("cashier_shifts")
+}
+
+model CashMovement {
+  id            String           @id @default(uuid(7)) @db.Uuid
+  propertyId    String           @map("property_id") @db.Uuid
+  shiftId       String           @map("shift_id") @db.Uuid
+  type          CashMovementType
+  /// Signed: cash into the drawer > 0, out of the drawer < 0.
+  amount        Decimal          @db.Decimal(19, 4)
+  currencyCode  String           @map("currency_code") @db.Char(3)
+  paymentId     String?          @map("payment_id") @db.Uuid
+  refundId      String?          @map("refund_id") @db.Uuid
+  folioItemId   String?          @map("folio_item_id") @db.Uuid
+  dropBagNumber String?          @map("drop_bag_number") @db.VarChar(40)
+  reference     String?          @db.VarChar(100)
+  createdById   String           @map("created_by_id") @db.Uuid
+  createdAt     DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  shift CashierShift @relation(fields: [propertyId, shiftId], references: [propertyId, id], onDelete: Restrict)
+
+  @@index([shiftId])
+  @@map("cash_movements")
+}

@@ -1,0 +1,150 @@
+# SERENE MANAGEMENT — Implementation Roadmap
+
+Every phase ends only when its features meet the Guide's **Definition of Done** (§53): model + migration, service, API, authentication, RBAC, Zod, RTK Query endpoints + tags, UI with loading/empty/error/permission states, audit, related modules updated, reports considered, tablet/mobile considered, accessibility, tests (integration for workflows), seed/demo data, and `npm run verify` green (typecheck, lint, tests, production build).
+
+---
+
+## Dependency analysis — changes to the suggested sequence
+
+The Phase 0 brief proposed: 1 Auth/RBAC/Org/Property → 2 Rooms → 3 Guests → 4 Rates/Availability → 5 Reservations → 6 Front desk/Room rack → 7 Check-in/In-house/Check-out → 8 Housekeeping → 9 Billing → 10 Night audit → 11 Groups → 12 Reports → 13 Advanced.
+
+The architecture analysis changes it in four places:
+
+1. **Billing core moves before check-in/check-out.** Check-in opens folios and transfers deposits; check-out requires zero balances, invoices and payments. Building check-out before folios would mean fake balances or rework. Billing & cashiering therefore becomes Phase 6, and Front Desk (room rack + check-in + in-house + check-out) becomes a single Phase 7 that completes the guest lifecycle end to end.
+2. **Business date, audit log, outbox and transaction codes are platform foundations.** Every posting and status change needs the property business date and an audit record from day one, so they land in Phase 1 (business date: open/read; the roll comes with night audit). Transaction codes and taxes are configuration needed by rate plans (room charge code), so they are set up in Phase 2.
+3. **Minimal housekeeping status is part of rooms (Phase 2)**; the full housekeeping module (tasks, sheets, inspections, discrepancies) stays after the front desk because it is driven by check-outs and stays.
+4. **Groups need the inventory engine, not reports**: block allocations feed the same counters from Phase 4, so the availability engine is designed with the `blocked` counter from the start, and Groups follow Night Audit (which runs cutoff/wash).
+
+## Phase overview
+
+| Phase | Name                                                                | Depends on | Core outcome                                                                                         |
+| ----- | ------------------------------------------------------------------- | ---------- | ---------------------------------------------------------------------------------------------------- |
+| 0     | Architecture                                                        | —          | This foundation (done)                                                                               |
+| 1     | Platform: auth, RBAC, organization & property, business date, audit | 0          | Staff can log in, switch property, and see only what they are allowed to                             |
+| 2     | Property configuration & rooms                                      | 1          | Rooms, types, statuses, OOO/OOS, code tables, transaction codes & taxes                              |
+| 3     | Profiles                                                            | 1          | Central guest and account profiles with search and duplicate detection                               |
+| 4     | Rates & availability                                                | 2          | Rate plans, seasons, derived rates, restrictions, packages, live availability                        |
+| 5     | Reservations                                                        | 3, 4       | Full reservation lifecycle before arrival + room assignment                                          |
+| 6     | Billing, payments & cashiering core                                 | 5          | Folios, posting engine, taxes, routing, payments, deposits, refunds, cashier shifts, invoices        |
+| 7     | Front desk & in-house                                               | 5, 6       | Room rack, arrivals/departures, check-in, in-house operations, check-out, real-time updates          |
+| 8     | Housekeeping & maintenance                                          | 7          | Task generation, sheets, inspection, discrepancies, maintenance ↔ OOO                                |
+| 9     | Night audit & business date roll                                    | 6, 7, 8    | Transactional end of day, statistics snapshot, audit reports                                         |
+| 10    | Groups & blocks                                                     | 5, 9       | Blocks, allocations, pickup, rooming lists, master folios, cutoff/wash                               |
+| 11    | Reports, dashboards & analytics                                     | 9          | Report framework, operational & financial reports, dashboards with drill-down, exports, scheduling   |
+| 12    | Advanced PMS                                                        | all        | Commissions, loyalty, AR/city ledger, advanced rates, integrations, multi-property operations, stock |
+
+## Phase 0 — Architecture ✅
+
+Delivered:
+
+- Next.js 16.3 / React 19.2 / TypeScript (strict + `noUncheckedIndexedAccess`) / Tailwind CSS v4 / App Router, ESLint with architectural import boundaries, Prettier, Vitest.
+- Prisma 7.10 multi-file schema (123 models across 11 domain files), baseline migration + hand-written constraints migration (checks, 3 exclusion constraints, append-only/immutability triggers), verified with zero drift.
+- Shared foundations: Prisma client (`@prisma/adapter-pg`), env validation, API envelope and error codes, error mapping, Zod primitives, permission catalog (78 permissions) and 13 role templates with evaluation helpers, RTK Query `baseApi` + store factory + provider, Zustand UI store, i18n config (en/ur/ar, RTL), design tokens (light/dark, status colors, density), security headers, idempotent reference-data seed, Docker Compose PostgreSQL.
+- Tests: unit (permissions, validation) + database-rule tests on PGlite (isolation, business date, room assignment conflicts incl. share-with and day use, append-only audit, reservation checks) — 18 passing.
+- Documentation: this set.
+
+## Phase 1 — Platform
+
+Scope:
+
+- `identity`: login, logout, refresh rotation with reuse detection, lockout, password reset, session list/revoke; argon2id; cookies.
+- `access`: access-profile loader, `GET /me`, `defineRoute` (authenticate, scope, authorize, validate, CSRF origin check, idempotency, rate limiting, error mapping incl. exclusion/check/SM codes), `requireSession()` for server components.
+- `proxy.ts`: optimistic gating + nonce CSP.
+- `properties`: organization and property CRUD (admin), property configuration, go-live (first business date).
+- `business-date`: read current date, `IN_AUDIT` lock helper used by posting services.
+- `audit` writer + audit log viewer (read); `events` outbox writer.
+- Users & roles admin (invite, assign roles per property, disable, unlock) with no-privilege-escalation rule.
+- UI: `(auth)` pages, `(workspace)` shell (navigation, property switcher, business-date indicator, user menu, command menu skeleton), first design-system primitives (Button, Input, Select/Combobox, Dialog, Drawer, Tabs, Badge, Tooltip, Toast, DataTable base, EmptyState, ErrorState, PermissionDenied, Skeleton, Kbd).
+- Decide open questions 3, 4, 6, 7 (ARCHITECTURE.md §16).
+- Seed: demo organization with two properties and users for every role template.
+
+Exit criteria: integration tests for login/refresh/reuse/lockout/reset; 401/403/404 matrix; property isolation (user of property A cannot read property B); audit written for user/role changes.
+
+## Phase 2 — Property configuration & rooms
+
+- Buildings, floors, room classes, room types, rooms, features, connections, component suites, conditions, housekeeping sections.
+- Room status service (four axes, history, derived display status), manual housekeeping status changes, room status board (read).
+- OOO/OOS (room service blocks) with reason codes, overlap protection, inventory effect (`room_type_inventory.physical/out_of_order` maintenance).
+- Code tables: market groups/codes, source codes, channels, reason codes, reservation types, VIP levels, preference codes.
+- Transaction code groups/codes, tax rules, payment methods (configuration only).
+- Inventory horizon job: create `room_type_inventory` rows for the rolling horizon.
+- Seed: floors, room types, rooms (~120 + ~60), features, codes, transaction codes, taxes.
+
+Exit: integration tests for status transitions, OOO on occupied room rejected, inventory physical counts.
+
+## Phase 3 — Profiles
+
+- Guests (contacts, addresses, documents encrypted, preferences, notes/alerts, VIP, restrictions, consent), accounts (company/agent/source/OTA/wholesaler), account contacts.
+- Search (trigram), duplicate detection, merge (HIGH), privacy export/anonymize.
+- Recognition indicators (VIP, returning, loyalty placeholder, restricted, special occasion).
+- Seed: ~2 000 guests, ~50 companies, ~20 agents.
+
+Exit: search performance check with `EXPLAIN` on 100 k guests; merge re-points references (tests); sensitive-field permission tests.
+
+## Phase 4 — Rates & availability
+
+- Rate categories, rate plans (all kinds), seasons & amounts, derived rates, sell/stay windows, negotiated rates, policies (cancellation, deposit), packages & components & prices.
+- Restrictions management (bulk by date range), house/room-type overbooking and sell limits.
+- Availability engine + look-to-book search (single property; cross-property fan-out), rate quote with nightly breakdown, availability grid (room types × dates).
+- Rate change audit (HIGH).
+- Seed: BAR/corporate/package/promo rates, seasons for 18 months.
+
+Exit: unit tests for pricing (occupancy, extra persons, derived, rounding, day-of-week, priority), restriction evaluation; integration tests for availability counters.
+
+## Phase 5 — Reservations
+
+- Create (single & multi-room, walk-in-ready service), modify, cancel, reinstate, copy, waitlist accept, no-show (manual), confirmation numbers, cancellation numbers.
+- Nights (multi-segment, daily overrides), guests/sharers, special requests, packages, fixed charges, notes/alerts/traces, deposit requests, turnaways.
+- Room assignment: manual, auto-assign batch, holds, conflict detection, upgrade/downgrade (pre-arrival).
+- Reservation search (all Guide §5 criteria), reservation history (audit-based), confirmation letter (template), registration card (template).
+- Concurrency test: two agents booking the last room → exactly one succeeds.
+- Seed: past, current and future reservations for both properties.
+
+## Phase 6 — Billing, payments & cashiering core
+
+- Folios & windows, posting engine (generated taxes, tax-inclusive split, routing), manual postings, reversals, adjustments, transfers, splits, folio history, printing (PDF), invoices & credit notes (gap-free numbers).
+- Payments: cash, card (provider adapter + hosted fields — open question 1), bank transfer, deposits (deposit ledger), split payments, foreign currency, receipts, refunds (with approval threshold), voids, card authorizations; webhook reconciliation.
+- Cashier shifts: open, float, drops, paid-outs, close & reconciliation, cashier report.
+- Decide open questions 1 and 2 before starting.
+
+Exit: ledger invariants tested (balance equation, one reversal per item, closed folio rejects postings); idempotency replay tests; refund > payment rejected.
+
+## Phase 7 — Front desk & in-house
+
+- Arrivals, departures, in-house lists (derived due-in/due-out), room rack (rooms × dates, virtualized), queue, pre-registration, advance check-in.
+- Check-in (standard, walk-in, mass), reverse check-in, room move/swap, upgrade in-house, extend/shorten, early/late check-out, check-out with settlement and direct bill, reinstate check-out.
+- Guest messages, wake-up calls, traces dashboard, registration card, key packet info (door-lock adapter stub via outbox).
+- Real-time: outbox relay + SSE → RTK Query invalidation (room status, arrivals, folio balances).
+- Playwright E2E: book → check-in → post → pay → check-out.
+
+## Phase 8 — Housekeeping & maintenance
+
+- Task types, attendants, task generation (departure/stayover/arrival priority), task sheets (balanced by credits, by floor/section), tablet workflow (touch density), inspection, discrepancies (skip/sleep/person), turndown, DND/MUR, lost & found, housekeeping forecast, productivity.
+- Maintenance requests (photos), assignment, activity history, OOO/OOS integration, preventive plans.
+
+## Phase 9 — Night audit & business date roll
+
+- Run orchestration (phases A/B/C), validation steps, room & tax posting (set-based), packages (rhythms, allowances), fixed charges, no-shows, releases (holds, OOO/OOS, waitlist), room status roll, next-day task generation, inventory reconciliation, statistics snapshot, date close/open, recovery of stale runs, audit report pack.
+- Tests: success path; failure injected at each step → nothing posted, date OPEN; retry; concurrent posting during audit → `BUSINESS_DATE_LOCKED`; performance test with 1 000 in-house rooms.
+
+## Phase 10 — Groups & blocks
+
+- Groups, block statuses (configurable), blocks, allocation grid, rates, pickup, elastic/non-elastic, shoulder dates, cutoff (date and rolling days), wash, rooming list import (CSV/XLSX), group master folio & routing, group check-in/out, group reports.
+
+## Phase 11 — Reports, dashboards & analytics
+
+- Report framework (server-side SQL, parameters, role-based access, pagination, export CSV/XLSX/PDF, print layouts, scheduled generation as background jobs).
+- Reports from Guide §25 (occupancy, ADR, RevPAR, revenue, arrivals/departures/stayovers, no-shows, cancellations, pickup, room status, housekeeping, maintenance, guest history, production by source/company/agent/rate, cashier, payment, folio, tax, deposit, commission, night audit, financial summaries).
+- Operational dashboards (Guide §3.1) with drill-down, charts with Recharts, based on live queries for the open date and snapshots for history.
+
+## Phase 12 — Advanced PMS
+
+- Commissions (plans, calculation at check-out, approval, payment, reconciliation), loyalty (programs, tiers, points, member rates, multi-property recognition), AR / city ledger (invoices, aging, payments, statements), advanced rate management (dynamic BAR, LOS pricing, rate strategy), integrations (channel manager, booking engine, POS, accounting export, door locks, SMS/WhatsApp/email, ID scanning, BI), multi-property operations (itineraries, organization reports, central reservations), stock items (minibar postings, amenities, linen), sales & catering bounded context (separate roadmap).
+
+## Cross-cutting tracks (every phase)
+
+- Localization: strings externalized as features are built; Urdu/Arabic RTL review each phase.
+- Accessibility: keyboard paths and screen-reader labels reviewed per screen.
+- Performance: `EXPLAIN` on new list/report queries; seed volumes large enough to expose problems.
+- Security: permission tests per endpoint; dependency audit in CI.
+- Documentation: update the relevant doc when a domain or pattern is introduced (Guide §54).
