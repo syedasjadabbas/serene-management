@@ -236,3 +236,16 @@ export async function allocateNumber(
   const { value, prefix } = await nextSequenceValue(tx, propertyId, name, SEQUENCES[name]);
   return `${prefix}${value.toString()}`;
 }
+
+/**
+ * Front-office rules from the property configuration, for use inside a
+ * command's transaction. A property without a configuration row uses the
+ * schema defaults.
+ */
+export async function frontOfficeRules(
+  tx: Tx,
+  propertyId: string,
+): Promise<{ requireInspectedForCheckIn: boolean }> {
+  const configuration = await findConfiguration(tx, propertyId);
+  return { requireInspectedForCheckIn: configuration?.requireInspectedForCheckIn ?? false };
+}

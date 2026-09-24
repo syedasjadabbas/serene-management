@@ -7,6 +7,8 @@ import { create } from "zustand";
  * from the API, and the server re-validates everything on create.
  */
 export interface BookingDraft {
+  /** "walk-in": arrival today, one specific room, checked in on creation. */
+  mode: "booking" | "walk-in";
   step: 1 | 2 | 3 | 4;
   stay: {
     arrival: string;
@@ -47,6 +49,7 @@ const EMPTY_DETAILS: BookingDraft["details"] = {
 };
 
 interface BookingDraftStore extends BookingDraft {
+  setMode: (mode: BookingDraft["mode"]) => void;
   setStep: (step: BookingDraft["step"]) => void;
   setStay: (stay: NonNullable<BookingDraft["stay"]>) => void;
   select: (selection: NonNullable<BookingDraft["selection"]>) => void;
@@ -56,11 +59,13 @@ interface BookingDraftStore extends BookingDraft {
 }
 
 export const useBookingDraft = create<BookingDraftStore>()((set) => ({
+  mode: "booking",
   step: 1,
   stay: null,
   selection: null,
   guest: null,
   details: EMPTY_DETAILS,
+  setMode: (mode) => set({ mode }),
   setStep: (step) => set({ step }),
   // Changing the stay invalidates the selected room type / rate and room.
   setStay: (stay) => set((s) => ({ stay, selection: null, details: { ...s.details, roomId: "" } })),
@@ -68,5 +73,13 @@ export const useBookingDraft = create<BookingDraftStore>()((set) => ({
     set((s) => ({ selection, step: 2, details: { ...s.details, roomId: "" } })),
   setGuest: (guest) => set({ guest }),
   setDetails: (details) => set((s) => ({ details: { ...s.details, ...details } })),
-  reset: () => set({ step: 1, stay: null, selection: null, guest: null, details: EMPTY_DETAILS }),
+  reset: () =>
+    set({
+      mode: "booking",
+      step: 1,
+      stay: null,
+      selection: null,
+      guest: null,
+      details: EMPTY_DETAILS,
+    }),
 }));

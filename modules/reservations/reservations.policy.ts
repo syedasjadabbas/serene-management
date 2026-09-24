@@ -81,7 +81,15 @@ export function consumesInventory(status: ReservationStatus, deductsInventory: b
 }
 
 export type ReservationAction =
-  "modify" | "confirm" | "cancel" | "no_show" | "reinstate" | "assign_room";
+  | "modify"
+  | "confirm"
+  | "cancel"
+  | "no_show"
+  | "reinstate"
+  | "assign_room"
+  | "check_in"
+  | "check_out"
+  | "room_move";
 
 /**
  * State machine guard. Returns null when allowed, otherwise the reason.
@@ -125,6 +133,20 @@ export function transitionProblem(
       return current.arrival >= businessDate
         ? null
         : "Only cancellations with an arrival on or after the business date can be reinstated";
+    case "check_in":
+      if (status !== "RESERVED") return `A ${label(status)} reservation cannot be checked in`;
+      if (!current.deductsInventory) return "Confirm the reservation before checking the guest in";
+      if (current.arrival > businessDate)
+        return `The guest arrives on ${current.arrival}; check-in opens on the arrival date`;
+      if (current.arrival < businessDate)
+        return `The arrival date ${current.arrival} has passed. Update the arrival date or mark the reservation as a no-show`;
+      return current.departure > businessDate ? null : "Day-use stays cannot be checked in yet";
+    case "check_out":
+      return status === "IN_HOUSE" ? null : `A ${label(status)} reservation cannot be checked out`;
+    case "room_move":
+      return status === "IN_HOUSE"
+        ? null
+        : `Only in-house guests can be moved; use room assignment for a ${label(status)} reservation`;
   }
 }
 

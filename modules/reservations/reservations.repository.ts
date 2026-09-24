@@ -60,7 +60,7 @@ export function findReasonCode(
   tx: Tx,
   propertyId: string,
   id: string,
-  category: "CANCELLATION" | "NO_SHOW",
+  category: "CANCELLATION" | "NO_SHOW" | "ROOM_MOVE" | "EARLY_DEPARTURE",
 ) {
   return tx.reasonCode.findFirst({
     where: { id, propertyId, category, status: "ACTIVE" },
@@ -119,6 +119,36 @@ export function releaseActiveAssignments(
   return tx.roomAssignment.updateMany({
     where: { reservationRoomId, status: "ACTIVE" },
     data: { status: "RELEASED", releasedAt: at, releasedById: userId },
+  });
+}
+
+/**
+ * Ends the active assignment at `until` (a room move or check-out): the row
+ * is released and its range truncated to the nights actually spent in the
+ * room, so the assignment history shows where the guest slept.
+ */
+export function closeActiveAssignments(
+  tx: Tx,
+  reservationRoomId: string,
+  userId: string,
+  at: Date,
+  until: string,
+) {
+  return tx.$executeRaw`
+    UPDATE "room_assignments"
+    SET "status" = 'RELEASED', "released_at" = ${at}, "released_by_id" = ${userId}::uuid,
+        "to_date" = GREATEST("from_date", LEAST("to_date", ${until}::date))
+    WHERE "reservation_room_id" = ${reservationRoomId}::uuid AND "status" = 'ACTIVE'`;
+}
+
+export function countActiveAssignments(tx: Tx, reservationRoomId: string, roomId: string) {
+  return tx.roomAssignment.count({ where: { reservationRoomId, roomId, status: "ACTIVE" } });
+}
+
+/** Nights on or after `from` (early departure releases them). */
+export function deleteNightsFrom(tx: Tx, reservationRoomId: string, from: Date) {
+  return tx.reservationRoomNight.deleteMany({
+    where: { reservationRoomId, stayDate: { gte: from } },
   });
 }
 
@@ -297,6 +327,7 @@ export function findReservationDetail(tx: Tx, propertyId: string, reservationId:
           sourceCode: { select: codeSelect },
           cancellationPolicy: { select: { ...codeSelect, description: true } },
           cancelReason: { select: codeSelect },
+          stay: { select: { id: true, status: true, checkedInAt: true, checkedOutAt: true } },
           nights: {
             orderBy: { stayDate: "asc" },
             select: {
@@ -398,12 +429,13 @@ export function findAvailableRooms(
       number: string;
       floor: string | null;
       housekeeping_status: string;
+      front_office_status: string;
       is_accessible: boolean;
       is_smoking: boolean;
     }[]
   >`
     SELECT r."id", r."number", f."name" AS "floor", r."housekeeping_status"::text AS "housekeeping_status",
-           r."is_accessible", r."is_smoking"
+           r."front_office_status"::text AS "front_office_status", r."is_accessible", r."is_smoking"
     FROM "rooms" r
     LEFT JOIN "floors" f ON f."id" = r."floor_id"
     WHERE r."property_id" = ${propertyId}::uuid

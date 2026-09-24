@@ -6,6 +6,7 @@ PostgreSQL 18 (development: native Windows installation bootstrapped by `npm run
 - Migrations: [`prisma/migrations/`](../prisma/migrations)
   - `20260924000000_init` — generated baseline (123 tables) + extensions `pg_trgm`, `btree_gist`.
   - `20260924000100_constraints` — hand-written check constraints, exclusion constraints and triggers.
+  - `20260924160000_front_desk_occupancy_guards` — partial unique index `stays_one_in_house_per_room` and the stay check constraints `stays_checkout_chk`, `stays_business_dates_chk`, `stays_reinstated_chk` (Phase 3).
   - `20260924120327_reservation_search_created_index` — `reservation_rooms (property_id, created_at DESC)` for the reservation search's "created on" filter and newest-first sort (Phase 2).
 - Verified: migrations apply cleanly; `prisma migrate diff` from the migrated database to the schema is **empty** (Prisma does not try to drop the hand-written rules); `tests/db/constraints.test.ts` proves the key rules.
 
@@ -197,6 +198,12 @@ Custom SQLSTATEs: `SM001` (immutable/append-only violation), `SM002` (closed fol
 - **Document numbers**: `property_sequences` rows `confirmation` (starts at 100000, no prefix) and `cancellation` (starts at 1000, prefix `X`) are allocated with `UPDATE ... RETURNING` inside the booking transaction: gap-free and safe under concurrency (verified by a concurrent-booking integration test).
 - **Known upstream warning**: under concurrent interactive transactions `pg` 8.x prints a DeprecationWarning (client.query() when the client is already executing a query). It originates in Prisma 7's driver-adapter query interpreter, not in application code; queries are still serialized correctly. Revisit on the next Prisma upgrade.
 - **Room-level double booking** is prevented by the `room_assignments_no_overlap` exclusion constraint; the API maps its `23P01` to `409 CONFLICT`.
+
+### Phase 3 notes
+
+- **Stays** are created by check-in and are the operational record of an occupancy (1:1 with a reservation room). `stays_one_in_house_per_room` makes double occupancy impossible at the database level, including the case the assignment exclusion constraint cannot see: a departing guest who has not checked out yet while the next guest's assignment starts on the same day. It will be replaced by an occupancy-key-aware rule when share-with is built.
+- **Room assignments are history**: a room move or check-out releases the active assignment and truncates `to_date` to the business date, so released rows record the nights actually spent in each room; the exclusion constraint only considers active rows.
+- **Room status** changes made by the front desk (front office VACANT/OCCUPIED, housekeeping → DIRTY on departure or move) write `room_status_history` (append-only) with source `CHECK_IN`, `CHECK_OUT` or `ROOM_MOVE` in the same transaction.
 
 ## 6. Transaction boundaries
 

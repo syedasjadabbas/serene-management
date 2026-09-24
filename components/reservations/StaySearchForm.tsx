@@ -25,20 +25,23 @@ export function StaySearchForm({
   onSearch,
   pending,
   submitLabel = "Search availability",
+  walkIn = false,
 }: {
   initial: StaySearchValues;
   businessDate: string;
   onSearch: (values: StaySearchValues) => void;
   pending?: boolean;
   submitLabel?: string;
+  /** Walk-in: arrival fixed to the business date, one room. */
+  walkIn?: boolean;
 }) {
-  const [arrival, setArrival] = useState(initial.arrival);
+  const [arrival, setArrival] = useState(walkIn ? businessDate : initial.arrival);
   const [nights, setNights] = useState(
     String(Math.max(1, daysBetween(initial.arrival, initial.departure))),
   );
   const [adults, setAdults] = useState(String(initial.adults));
   const [children, setChildren] = useState(String(initial.children));
-  const [rooms, setRooms] = useState(String(initial.rooms));
+  const [rooms, setRooms] = useState(walkIn ? "1" : String(initial.rooms));
   const [errors, setErrors] = useState<Record<string, string[]>>({});
 
   const nightCount = Number.parseInt(nights, 10);
@@ -86,6 +89,8 @@ export function StaySearchForm({
         min={businessDate}
         onChange={(e) => setArrival(e.target.value)}
         errors={errors.arrival}
+        readOnly={walkIn}
+        hint={walkIn ? "Walk-ins arrive today" : undefined}
         required
       />
       <TextField
@@ -135,6 +140,7 @@ export function StaySearchForm({
         value={rooms}
         onChange={(e) => setRooms(e.target.value)}
         errors={errors.rooms}
+        readOnly={walkIn}
       />
       <Button type="submit" pending={pending} className="col-span-2 sm:col-span-1">
         {submitLabel}

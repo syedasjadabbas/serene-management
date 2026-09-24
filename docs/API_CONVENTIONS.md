@@ -85,6 +85,24 @@ PATCH /api/v1/properties/{id}/reservation-rooms/{rrId}          modify (version 
 POST  /api/v1/properties/{id}/reservation-rooms/{rrId}/confirm | cancel | no-show | reinstate | assign-room
 ```
 
+**Implemented in Phase 3 (front desk)**:
+
+```text
+GET   /api/v1/properties/{id}/front-desk/summary                 counts for the tabs and room board (business date)
+GET   /api/v1/properties/{id}/front-desk/arrivals?q=&filter=&cursor=&limit=     filter: all|pending|unassigned|assigned|checked_in|vip
+GET   /api/v1/properties/{id}/front-desk/in-house?q=&filter=&cursor=&limit=     filter: all|arrived_today|due_out
+GET   /api/v1/properties/{id}/front-desk/departures?q=&filter=&cursor=&limit=   filter: all|due_out|departed
+GET   /api/v1/properties/{id}/front-desk/rooms?filter=&roomTypeId=              room board (occupancy, readiness, today's arrival)
+POST  /api/v1/properties/{id}/front-desk/walk-ins                book + check in (one transaction), 201
+GET   /api/v1/properties/{id}/reservation-rooms/{rrId}/room-options           rooms usable for the remaining nights, with readiness
+POST  /api/v1/properties/{id}/reservation-rooms/{rrId}/check-in              { version, roomId?, acceptNotReady?, reason? } → stay, 201
+GET   /api/v1/properties/{id}/stays/{stayId}                     stay detail with room history, room status changes, audit history, allowed actions
+POST  /api/v1/properties/{id}/stays/{stayId}/room-move           { version, roomId, reasonCodeId, reason?, acceptNotReady? }
+POST  /api/v1/properties/{id}/stays/{stayId}/check-out           { version, earlyDeparture?, reasonCodeId?, reason? }
+```
+
+Check-in is addressed by reservation room (the stay does not exist yet); later commands by stay. Stay commands carry the stay's `version`. Permissions: `frontdesk:read` (lists, stay), `rooms:read` (room board, room options), `frontdesk:checkin` (+ `reservations:create` for walk-ins, `rooms:assign` to choose a room), `rooms:assign` (moves), `frontdesk:checkout`; accepting a room that is not ready needs `rooms:update_status`. Error reasons in `error.details.reason`: `ROOM_REQUIRED`, `ROOM_OCCUPIED` (409), `ROOM_NOT_READY`, `ROOM_OUT_OF_ORDER`, `ROOM_TYPE_MISMATCH`, `NO_REMAINING_NIGHTS`, `EARLY_DEPARTURE_NOT_CONFIRMED`, `SAME_DAY_CHECK_OUT` (422).
+
 The reservation **room** is the unit of every command (a multi-room booking has one per room); the booking (`reservations/{id}`) is the read aggregate.
 
 ## 3. Request validation

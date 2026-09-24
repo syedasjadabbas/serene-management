@@ -21,7 +21,8 @@ const toOptions = (rows: { id: string; code: string; name: string }[]) =>
 export function StepDetails() {
   const property = useProperty();
   const { can } = usePermissions(property.id);
-  const { stay, selection, details, setDetails, setStep } = useBookingDraft();
+  const { stay, selection, details, setDetails, setStep, mode } = useBookingDraft();
+  const walkIn = mode === "walk-in";
   const options = useBookingOptionsQuery(property.id);
   const canPickRoom = can("rooms:assign") && stay?.rooms === 1 && !selection?.waitlist;
   const rooms = useAvailableRoomsQuery(
@@ -111,12 +112,17 @@ export function StepDetails() {
         />
         {canPickRoom ? (
           <Select
-            label="Room (optional)"
-            placeholder={rooms.isLoading ? "Loading rooms…" : "Assign later"}
-            options={(rooms.data ?? []).map((r) => ({
-              value: r.id,
-              label: `${r.number}${r.floor ? ` · ${r.floor}` : ""} · ${r.housekeepingStatus.toLowerCase()}`,
-            }))}
+            label={walkIn ? "Room" : "Room (optional)"}
+            placeholder={
+              rooms.isLoading ? "Loading rooms…" : walkIn ? "Select a room" : "Assign later"
+            }
+            options={(rooms.data ?? [])
+              // A walk-in goes into the room now: only vacant rooms qualify.
+              .filter((r) => !walkIn || r.frontOfficeStatus === "VACANT")
+              .map((r) => ({
+                value: r.id,
+                label: `${r.number}${r.floor ? ` · ${r.floor}` : ""} · ${r.housekeepingStatus.toLowerCase()}`,
+              }))}
             value={details.roomId}
             onChange={set("roomId")}
             hint={rooms.data ? `${rooms.data.length} free for the whole stay` : undefined}
@@ -132,7 +138,12 @@ export function StepDetails() {
       <div className="flex gap-2">
         <Button
           onClick={() => setStep(4)}
-          disabled={!details.reservationTypeId || !details.marketCodeId || !details.sourceCodeId}
+          disabled={
+            !details.reservationTypeId ||
+            !details.marketCodeId ||
+            !details.sourceCodeId ||
+            (walkIn && !details.roomId)
+          }
         >
           Review
         </Button>

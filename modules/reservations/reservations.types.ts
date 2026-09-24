@@ -38,6 +38,10 @@ export interface ReservationAllowedActions {
   noShow: boolean;
   reinstate: boolean;
   assignRoom: boolean;
+  /** Front desk (Phase 3). */
+  checkIn: boolean;
+  checkOut: boolean;
+  moveRoom: boolean;
 }
 
 export interface ReservationRoomDetail {
@@ -72,6 +76,8 @@ export interface ReservationRoomDetail {
   nightly: { date: string; amount: string; roomTypeCode: string; ratePlanCode: string }[];
   cancellation: { number: string; at: string; reason: CodeRef | null } | null;
   noShowAt: string | null;
+  /** The operational stay once checked in. */
+  stay: { id: string; status: string; checkedInAt: string; checkedOutAt: string | null } | null;
   allowedActions: ReservationAllowedActions;
 }
 
@@ -117,6 +123,7 @@ export interface AvailableRoomView {
   number: string;
   floor: string | null;
   housekeepingStatus: string;
+  frontOfficeStatus: string;
   isAccessible: boolean;
   isSmoking: boolean;
 }

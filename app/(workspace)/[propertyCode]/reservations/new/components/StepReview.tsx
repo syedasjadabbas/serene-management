@@ -14,6 +14,7 @@ import {
   useBookingOptionsQuery,
   useCreateReservationMutation,
 } from "@/lib/api/endpoints/reservations.api";
+import { useWalkInMutation } from "@/lib/api/endpoints/front-desk.api";
 import { toClientApiError } from "@/lib/api/errors";
 import { formatCurrency, formatDate, pluralize } from "@/lib/utils/format";
 import { nightCount } from "@/modules/reservations/reservations.policy";
@@ -24,7 +25,8 @@ export function StepReview() {
   const property = useProperty();
   const router = useRouter();
   const { can } = usePermissions(property.id);
-  const { stay, selection, guest, details, setStep, reset } = useBookingDraft();
+  const { stay, selection, guest, details, setStep, reset, mode } = useBookingDraft();
+  const walkIn = mode === "walk-in";
   const options = useBookingOptionsQuery(property.id);
   // Same arguments as step 3, so this is served from the cache.
   const rooms = useAvailableRoomsQuery(
@@ -36,7 +38,10 @@ export function StepReview() {
     },
     { skip: !details.roomId || !stay || !selection },
   );
-  const [createReservation, { isLoading, error }] = useCreateReservationMutation();
+  const [createReservation, created] = useCreateReservationMutation();
+  const [walkInMutation, walkedIn] = useWalkInMutation();
+  const isLoading = created.isLoading || walkedIn.isLoading;
+  const error = created.error ?? walkedIn.error;
   const [override, setOverride] = useState(false);
   const [reason, setReason] = useState("");
   const apiError = toClientApiError(error);
@@ -53,32 +58,40 @@ export function StepReview() {
     (t) => t.id === details.reservationTypeId,
   );
   const roomNumber = rooms.data?.find((room) => room.id === details.roomId)?.number;
-  const initialState = selection.waitlist
-    ? "Waitlisted (no inventory held)"
-    : reservationType && !reservationType.deductsInventory
-      ? "Tentative (inventory not deducted)"
-      : "Confirmed";
+  const initialState = walkIn
+    ? "In house (checked in on creation)"
+    : selection.waitlist
+      ? "Waitlisted (no inventory held)"
+      : reservationType && !reservationType.deductsInventory
+        ? "Tentative (inventory not deducted)"
+        : "Confirmed";
 
   async function create() {
     if (!stay || !selection || !guest) return;
-    const result = await createReservation({
-      propertyId: property.id,
-      body: {
-        ...stay,
-        roomTypeId: selection.roomTypeId,
-        ratePlanId: selection.ratePlanId,
-        reservationTypeId: details.reservationTypeId,
-        guestId: guest.id,
-        marketCodeId: details.marketCodeId,
-        sourceCodeId: details.sourceCodeId,
-        ...(details.channelId ? { channelId: details.channelId } : {}),
-        ...(details.roomId ? { roomId: details.roomId } : {}),
-        ...(details.eta ? { eta: details.eta } : {}),
-        ...(details.specialRequests ? { specialRequests: details.specialRequests } : {}),
-        waitlist: selection.waitlist,
-        ...(override ? { override: true, reason } : {}),
-      },
-    });
+    const body = {
+      ...stay,
+      roomTypeId: selection.roomTypeId,
+      ratePlanId: selection.ratePlanId,
+      reservationTypeId: details.reservationTypeId,
+      guestId: guest.id,
+      marketCodeId: details.marketCodeId,
+      sourceCodeId: details.sourceCodeId,
+      ...(details.channelId ? { channelId: details.channelId } : {}),
+      ...(details.roomId ? { roomId: details.roomId } : {}),
+      ...(details.eta ? { eta: details.eta } : {}),
+      ...(details.specialRequests ? { specialRequests: details.specialRequests } : {}),
+      waitlist: selection.waitlist,
+      ...(override ? { override: true, reason } : {}),
+    };
+    if (walkIn) {
+      const result = await walkInMutation({ propertyId: property.id, body });
+      if ("data" in result && result.data) {
+        reset();
+        router.push(`/${property.code}/front-desk/stays/${result.data.id}?checkedIn=1` as Route);
+      }
+      return;
+    }
+    const result = await createReservation({ propertyId: property.id, body });
     if ("data" in result && result.data) {
       reset();
       router.push(`/${property.code}/reservations/${result.data.id}?created=1` as Route);
@@ -161,7 +174,7 @@ export function StepReview() {
           pending={isLoading}
           disabled={override && reason.trim().length < 3}
         >
-          Create reservation
+          {walkIn ? "Create and check in" : "Create reservation"}
         </Button>
         <Button variant="ghost" onClick={() => setStep(3)}>
           Back

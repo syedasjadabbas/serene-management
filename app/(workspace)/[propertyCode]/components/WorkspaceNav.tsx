@@ -10,6 +10,7 @@ import type { Permission } from "@/lib/permissions/catalog";
 
 const ITEMS: { segment: string; label: string; permission: Permission | null }[] = [
   { segment: "", label: "Overview", permission: null },
+  { segment: "front-desk", label: "Front desk", permission: "frontdesk:read" },
   { segment: "availability", label: "Availability", permission: "availability:read" },
   { segment: "reservations", label: "Reservations", permission: "reservations:read" },
 ];

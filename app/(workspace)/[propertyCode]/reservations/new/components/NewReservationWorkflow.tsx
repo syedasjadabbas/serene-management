@@ -20,6 +20,8 @@ const STEPS = ["Stay & rate", "Guest", "Details", "Review"] as const;
  * Staff booking workflow: search → select room type/rate → guest → details →
  * review → create. Every step re-reads live data; the server re-validates
  * availability, price and permissions when the reservation is created.
+ * With `?walkIn=1` the same workflow books a walk-in: arrival today, one
+ * specific room, and an immediate check-in in the same transaction.
  */
 export function NewReservationWorkflow() {
   const property = useProperty();
@@ -27,14 +29,16 @@ export function NewReservationWorkflow() {
   const businessDate = useBusinessDate();
   const params = useSearchParams();
   const draft = useBookingDraft();
+  const walkIn = params.get("walkIn") === "1";
 
   // Start clean, or pre-filled from an availability "Book" link.
   useEffect(() => {
     const store = useBookingDraft.getState();
     store.reset();
+    store.setMode(walkIn ? "walk-in" : "booking");
     const arrival = params.get("arrival");
     const departure = params.get("departure");
-    if (arrival && departure && isDateOnly(arrival) && isDateOnly(departure)) {
+    if (!walkIn && arrival && departure && isDateOnly(arrival) && isDateOnly(departure)) {
       store.setStay({
         arrival,
         departure,
@@ -57,6 +61,15 @@ export function NewReservationWorkflow() {
       />
     );
   }
+  if (walkIn && !(can("frontdesk:checkin") && can("rooms:assign"))) {
+    return (
+      <StatusPanel
+        kind="forbidden"
+        title="Access denied"
+        description="Walk-ins need the frontdesk:checkin and rooms:assign permissions."
+      />
+    );
+  }
   const today = businessDate.data?.businessDate;
   if (!today) {
     return (
@@ -71,7 +84,7 @@ export function NewReservationWorkflow() {
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-4">
       <header className="flex flex-wrap items-baseline justify-between gap-2">
-        <h1 className="text-xl font-semibold">New reservation</h1>
+        <h1 className="text-xl font-semibold">{walkIn ? "Walk-in" : "New reservation"}</h1>
         <p className="text-xs text-fg-muted">Business date {today}</p>
       </header>
       <nav aria-label="Booking steps">

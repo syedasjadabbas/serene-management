@@ -411,6 +411,9 @@ model Stay {
   @@unique([propertyId, id])
   /// 1:1 with ReservationRoom.
   @@unique([propertyId, reservationRoomId])
+  /// A room holds at most one in-house stay (share-with, when built, replaces
+  /// this with an occupancy-key-aware rule like room_assignments_no_overlap).
+  @@unique([propertyId, roomId], map: "stays_one_in_house_per_room", where: raw("status = 'IN_HOUSE'"))
   @@index([propertyId, status])
   @@index([propertyId, roomId, status])
   @@index([primaryGuestId, checkedInAt(sort: Desc)])

@@ -307,7 +307,7 @@ model RoomStatusHistory {
   fromValue    String?         @map("from_value") @db.VarChar(40)
   toValue      String?         @map("to_value") @db.VarChar(40)
   businessDate DateTime        @map("business_date") @db.Date
-  /// USER, CHECK_IN, CHECK_OUT, NIGHT_AUDIT, HOUSEKEEPING, MAINTENANCE, INTERFACE
+  /// USER, CHECK_IN, CHECK_OUT, ROOM_MOVE, NIGHT_AUDIT, HOUSEKEEPING, MAINTENANCE, INTERFACE
   source       String          @db.VarChar(20)
   changedById  String?         @map("changed_by_id") @db.Uuid
   createdAt    DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)

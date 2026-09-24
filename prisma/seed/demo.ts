@@ -10,17 +10,30 @@ import { prisma } from "../../lib/db/prisma";
 import type { PropertyContext, SessionContext } from "../../lib/http/context";
 import { ALL_PERMISSIONS } from "../../lib/permissions/catalog";
 import { bootstrapOrganization } from "../../modules/access/access.service";
-import { addDays, localDateInZone } from "../../modules/business-date/business-date.policy";
+import { runInTransaction } from "../../lib/db/transaction";
+import {
+  lockInventoryForRelease,
+  syncInventoryCounters,
+} from "../../modules/availability/availability.service";
+import {
+  addDays,
+  fromDateOnly,
+  localDateInZone,
+  localMidnightUtc,
+} from "../../modules/business-date/business-date.policy";
 import {
   getCurrentBusinessDate,
   initializeBusinessDate,
 } from "../../modules/business-date/business-date.service";
 import { guestSearchName } from "../../modules/guests/guests.policy";
+import { checkIn } from "../../modules/front-desk/front-desk.service";
 import { createProperty } from "../../modules/properties/properties.service";
+import { stayNights } from "../../modules/reservations/reservations.policy";
 import type { CreateReservationInput } from "../../modules/reservations/reservations.schema";
 import {
   cancelReservation,
   createReservation,
+  listAvailableRooms,
 } from "../../modules/reservations/reservations.service";
 import { type InventorySpec, buildPropertyInventory } from "./inventory-builder";
 
@@ -275,20 +288,188 @@ async function seedPropertyReservations(
   await book("DEMO-09", 14, 1, 8, secondType!.id, { adults: 1 });
   await book("DEMO-10", 20, 6, 9, firstType!.id, { ratePlanId: inventory.ratePlans.ADV! });
 
-  if ((await prisma.roomServiceBlock.count({ where: { propertyId: ctx.propertyId } })) > 0) return;
-  // One room out of order for a few nights, so availability reflects it.
-  await prisma.roomServiceBlock.create({
-    data: {
-      propertyId: ctx.propertyId,
-      roomId: secondType!.roomIds.at(-1)!,
-      kind: "OUT_OF_ORDER",
-      status: "SCHEDULED",
-      fromDate: new Date(`${addDays(businessDate, 2)}T00:00:00.000Z`),
-      toDate: new Date(`${addDays(businessDate, 6)}T00:00:00.000Z`),
-      reasonCodeId: inventory.reasonCodes["OUT_OF_ORDER:MAINT"]!,
-      notes: "Bathroom refit (demo data)",
-      createdById: ctx.userId,
-    },
+  if ((await prisma.roomServiceBlock.count({ where: { propertyId: ctx.propertyId } })) === 0) {
+    // One room out of order for a few nights, so availability reflects it.
+    await prisma.roomServiceBlock.create({
+      data: {
+        propertyId: ctx.propertyId,
+        roomId: secondType!.roomIds.at(-1)!,
+        kind: "OUT_OF_ORDER",
+        status: "SCHEDULED",
+        fromDate: new Date(`${addDays(businessDate, 2)}T00:00:00.000Z`),
+        toDate: new Date(`${addDays(businessDate, 6)}T00:00:00.000Z`),
+        reasonCodeId: inventory.reasonCodes["OUT_OF_ORDER:MAINT"]!,
+        notes: "Bathroom refit (demo data)",
+        createdById: ctx.userId,
+      },
+    });
+  }
+
+  await seedFrontDesk(ctx, businessDate, inventory, guestIds, book);
+}
+
+type Inventory = Awaited<ReturnType<typeof buildPropertyInventory>>;
+type ReadyRoom = (
+  roomTypeId: string,
+  arrival: string,
+  departure: string,
+) => Promise<{ id: string } | undefined>;
+
+/**
+ * Front desk sample data (Phase 3): arrivals to check in, guests in house
+ * and guests due out on the business date.
+ */
+async function seedFrontDesk(
+  ctx: PropertyContext,
+  businessDate: string,
+  inventory: Inventory,
+  guestIds: string[],
+  book: (
+    reference: string,
+    offset: number,
+    nights: number,
+    guest: number,
+    roomTypeId: string,
+    extra?: Partial<CreateReservationInput>,
+  ) => Promise<unknown>,
+) {
+  const [firstType, secondType] = Object.values(inventory.roomTypes);
+  const readyRoom: ReadyRoom = async (roomTypeId, arrival, departure) => {
+    const rooms = await listAvailableRooms(ctx, { roomTypeId, arrival, departure });
+    return rooms.find(
+      (room) =>
+        room.frontOfficeStatus === "VACANT" &&
+        (room.housekeepingStatus === "CLEAN" || room.housekeepingStatus === "INSPECTED"),
+    );
+  };
+
+  // Due in today with a ready room, and due in today still tentative.
+  if (!(await referenceExists(ctx, "DEMO-11"))) {
+    const room = await readyRoom(firstType!.id, businessDate, addDays(businessDate, 3));
+    await book("DEMO-11", 0, 3, 2, firstType!.id, room ? { roomId: room.id } : {});
+  }
+  await book("DEMO-12", 0, 1, 3, secondType!.id, {
+    reservationTypeId: inventory.reservationTypes.TENT!,
+    adults: 1,
+  });
+
+  // In house: one arrived today (checked in through the service) and guests
+  // who arrived before the demo's business date, two of them due out today.
+  const stays: [string, number, string, number, number][] = [
+    ["DEMO-13", 4, secondType!.id, 0, 2],
+    ["DEMO-14", 5, firstType!.id, 2, 0],
+    ["DEMO-15", 6, secondType!.id, 3, 0],
+    ["DEMO-16", 7, firstType!.id, 1, 2],
+  ];
+  for (const [reference, guest, roomTypeId, before, after] of stays) {
+    await seedStay(ctx, businessDate, inventory, readyRoom, {
+      reference,
+      guestId: guestIds[guest % guestIds.length]!,
+      roomTypeId,
+      nightsBefore: before,
+      nightsAfter: after,
+    });
+  }
+}
+
+async function referenceExists(ctx: PropertyContext, reference: string) {
+  const row = await prisma.reservation.findFirst({
+    where: { propertyId: ctx.propertyId, externalReference: reference },
+    select: { id: true },
+  });
+  return row !== null;
+}
+
+/**
+ * A checked-in guest. The booking and the check-in go through the services
+ * on the business date. For a guest who arrived `nightsBefore` nights
+ * earlier, the stay is then moved back in time (reservation dates, nights,
+ * assignment, stay arrival): the demo has no night-audit history that would
+ * have produced it naturally.
+ */
+async function seedStay(
+  ctx: PropertyContext,
+  businessDate: string,
+  inventory: Inventory,
+  readyRoom: ReadyRoom,
+  spec: {
+    reference: string;
+    guestId: string;
+    roomTypeId: string;
+    nightsBefore: number;
+    nightsAfter: number;
+  },
+) {
+  if (await referenceExists(ctx, spec.reference)) return;
+  const arrival = addDays(businessDate, -spec.nightsBefore);
+  const departure = addDays(businessDate, spec.nightsAfter);
+  const bookedDeparture = addDays(businessDate, Math.max(spec.nightsAfter, 1));
+  const room = await readyRoom(spec.roomTypeId, arrival, bookedDeparture);
+  if (!room) return;
+
+  const created = await createReservation(ctx, {
+    arrival: businessDate,
+    departure: bookedDeparture,
+    adults: 2,
+    children: 0,
+    rooms: 1,
+    roomTypeId: spec.roomTypeId,
+    roomId: room.id,
+    ratePlanId: inventory.ratePlans.BAR!,
+    reservationTypeId: inventory.reservationTypes.GTD!,
+    guestId: spec.guestId,
+    channelId: inventory.channels.FD,
+    specialRequests: undefined,
+    externalReference: spec.reference,
+    waitlist: false,
+    override: false,
+  });
+  const line = created.rooms[0]!;
+  await checkIn(ctx, line.id, { version: line.version, acceptNotReady: false });
+  if (spec.nightsBefore === 0 && departure === bookedDeparture) return;
+
+  await runInTransaction(async (tx) => {
+    const demand = {
+      roomTypeId: spec.roomTypeId,
+      arrival,
+      departure: bookedDeparture,
+      rooms: 1,
+    };
+    await lockInventoryForRelease(tx, ctx.propertyId, [demand]);
+    const night = await tx.reservationRoomNight.findFirstOrThrow({
+      where: { reservationRoomId: line.id },
+      select: { roomTypeId: true, ratePlanId: true, rateAmount: true, currencyCode: true },
+    });
+    await tx.reservationRoomNight.deleteMany({ where: { reservationRoomId: line.id } });
+    await tx.reservationRoomNight.createMany({
+      data: stayNights(arrival, departure).map((date) => ({
+        propertyId: ctx.propertyId,
+        reservationRoomId: line.id,
+        stayDate: fromDateOnly(date),
+        roomTypeId: night.roomTypeId,
+        ratePlanId: night.ratePlanId,
+        rateAmount: night.rateAmount,
+        currencyCode: night.currencyCode,
+        adults: 2,
+        children: 0,
+      })),
+    });
+    await tx.reservationRoom.update({
+      where: { id: line.id },
+      data: { arrivalDate: fromDateOnly(arrival), departureDate: fromDateOnly(departure) },
+    });
+    await tx.roomAssignment.updateMany({
+      where: { reservationRoomId: line.id, status: "ACTIVE" },
+      data: { fromDate: fromDateOnly(arrival), toDate: fromDateOnly(departure) },
+    });
+    const checkedInAt = new Date(
+      localMidnightUtc(arrival, ctx.timezone).getTime() + 15 * 3_600_000,
+    );
+    await tx.stay.updateMany({
+      where: { reservationRoomId: line.id },
+      data: { arrivalBusinessDate: fromDateOnly(arrival), checkedInAt },
+    });
+    await syncInventoryCounters(tx, ctx.propertyId, [demand]);
   });
 }
 

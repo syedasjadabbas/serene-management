@@ -5,7 +5,12 @@ import { AppError } from "@/lib/http/errors";
 import { decodeCursor, encodeCursor } from "@/lib/utils/cursor";
 import { toDateOnly } from "@/modules/business-date/business-date.policy";
 import type { CursorPageMeta } from "@/types/api";
-import { findPropertyAuditLogs, findUserNames, insertAuditLog } from "./audit.repository";
+import {
+  findPropertyAuditLogs,
+  findResourceHistory,
+  findUserNames,
+  insertAuditLog,
+} from "./audit.repository";
 import type { AuditLogQuery } from "./audit.schema";
 import type { AuditActor, AuditEntry, AuditLogView } from "./audit.types";
 
@@ -106,4 +111,53 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 function toJson(value: unknown): Prisma.InputJsonValue | undefined {
   if (value === undefined || value === null) return undefined;
   return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
+}
+
+export interface ResourceHistoryEntry {
+  id: string;
+  at: string;
+  action: string;
+  userId: string | null;
+  userDisplayName: string | null;
+  risk: string;
+  reason: string | null;
+  before: unknown;
+  after: unknown;
+}
+
+/** Newest-first audit entries for the given resources, with actor names (organization-scoped). */
+export async function resourceHistory(
+  tx: Tx,
+  organizationId: string,
+  resourceIds: string[],
+  take = 100,
+): Promise<ResourceHistoryEntry[]> {
+  if (resourceIds.length === 0) return [];
+  const rows = await findResourceHistory(tx, organizationId, resourceIds, take);
+  const names = await userDisplayNames(
+    tx,
+    organizationId,
+    rows.map((r) => r.userId).filter((id): id is string => !!id),
+  );
+  return rows.map((row) => ({
+    id: row.id,
+    at: row.createdAt.toISOString(),
+    action: row.action,
+    userId: row.userId,
+    userDisplayName: row.userId ? (names.get(row.userId) ?? null) : null,
+    risk: row.risk,
+    reason: row.reason,
+    before: row.before,
+    after: row.after,
+  }));
+}
+
+/** Display names of users of the organization, by id. */
+export async function userDisplayNames(
+  tx: Tx,
+  organizationId: string,
+  userIds: string[],
+): Promise<Map<string, string>> {
+  const rows = await findUserNames(tx, organizationId, [...new Set(userIds)]);
+  return new Map(rows.map((u) => [u.id, u.displayName]));
 }

@@ -85,6 +85,19 @@ The product owner re-sequenced Phase 2 to **Reservations + Availability**. It de
 
 Moved to later phases: configuration screens for rooms, rate plans and restrictions; full guest profiles (documents, preferences, merge); room holds and auto-assign; deposits and cancellation penalties (billing); negotiated, member and day-use rates; block pickup (groups); turnaway capture.
 
+## Phase 3 (as executed) — Front desk: check-in, room moves, check-out (pending commit)
+
+Delivered on the existing schema (`Stay`, `RoomAssignment`, room status, `room_status_history`, reason categories, `frontdesk:*` permissions were already modelled):
+
+- **Front desk workspace**: arrivals (due in), in house, departures (due out / departed today) and a room board for the property's business date; server-side filters, search and cursor pagination; counts per tab; 60 s refresh while focused.
+- **Check-in**: from the arrivals list or the reservation detail; verify guest and stay, choose / confirm the room with its readiness; one transaction creates the stay, assigns the room if needed, marks it occupied and audits.
+- **Walk-in**: the booking workflow in walk-in mode (`?walkIn=1`), booked and checked in in one transaction through the regular reservation engine.
+- **Room move** (same room type, reason code, HIGH audit) with assignment history; **check-out** including confirmed early departure (unused nights released).
+- **Rooms module** (`modules/rooms`): room readiness rules, locked status changes with history — the base the housekeeping phase builds on.
+- **Schema**: one migration (stay occupancy guard and stay check constraints). **Tests**: unit (policies, contracts) and integration (27 scenarios incl. concurrent check-in into the only room, concurrent moves and concurrent check-outs).
+
+Deferred: folios, settlement and deposits at check-in/out (billing), housekeeping tasks and room readiness workflow (housekeeping), upgrades, extensions, reverse check-in, same-day reinstatement, swaps, share-with, room holds, door-lock integration, `Idempotency-Key` on front desk commands (D14).
+
 ## Phase 2 — Property configuration & rooms
 
 - Buildings, floors, room classes, room types, rooms, features, connections, component suites, conditions, housekeeping sections.

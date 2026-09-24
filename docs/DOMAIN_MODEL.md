@@ -434,6 +434,10 @@ Prohibited: setting OCCUPIED/VACANT manually; marking an occupied room OOO; CLEA
 
 Room moves update `room_id` without changing status. Prohibited: CHECKED_OUT → IN_HOUSE after the business date closed.
 
+**As implemented (Phase 3).** There is no stored "expected" stay: a due-in guest is a `RESERVED` reservation room with an inventory-deducting type and `arrival_date = D`; the `Stay` row is created by check-in. Check-in (`RESERVED → IN_HOUSE`) requires a confirmed reservation, `arrival = D < departure`, and a room of the booked type that is not out of order, vacant (the previous guest has checked out) and clean — or inspected when `requireInspectedForCheckIn` — for the whole stay; a dirty / uninspected room needs `rooms:update_status` and a reason (HIGH audit). Check-out (`IN_HOUSE → CHECKED_OUT` on both the stay and the reservation room) records `checked_out_at` and `departure_business_date = D`, ends the room assignment at D and sets the room VACANT + DIRTY. An early departure (departure > D, at least one night used) is confirmed explicitly with an `EARLY_DEPARTURE` reason code: the unused nights are deleted and their inventory released in the same transaction. A guest who checked in on D cannot be checked out (reverse check-in, `frontdesk:reverse_checkin`, is deferred). Room moves close the current assignment at D (its range keeps the nights spent in the old room), add a `MOVE` assignment `[D, departure)` for a room of the same type, and set the old room VACANT + DIRTY. Upgrades, extensions, reverse check-in and same-day reinstatement are deferred.
+
+Database guards: `stays_one_in_house_per_room` (at most one in-house stay per room) and `stays_checkout_chk` (check-out fields set together, only when checked out).
+
 ### 6.4 Folio
 
 ```mermaid

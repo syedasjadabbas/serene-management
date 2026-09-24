@@ -4,13 +4,13 @@ import Link from "next/link";
 import type { Route } from "next";
 import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
+import { AuditHistory } from "@/components/audit/AuditHistory";
 import { StatusPanel } from "@/components/ui/StatusPanel";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useProperty } from "@/hooks/useProperty";
 import { useReservationQuery } from "@/lib/api/endpoints/reservations.api";
 import { toClientApiError } from "@/lib/api/errors";
 import { formatDateTime } from "@/lib/utils/format";
-import { ReservationHistory } from "./ReservationHistory";
 import { ReservationRoomPanel } from "./ReservationRoomPanel";
 
 export function ReservationDetailView({
@@ -115,7 +115,7 @@ export function ReservationDetailView({
         </section>
       ) : null}
 
-      <ReservationHistory entries={reservation.history} timezone={property.timezone} />
+      <AuditHistory entries={reservation.history} timezone={property.timezone} />
     </div>
   );
 }

@@ -54,3 +54,27 @@ export function findUserNames(tx: Tx, organizationId: string, userIds: string[])
     select: { id: true, displayName: true },
   });
 }
+
+/** Audit trail of specific resources (e.g. a stay and its reservation room), oldest first. */
+export function findResourceHistory(
+  tx: Tx,
+  organizationId: string,
+  resourceIds: string[],
+  take: number,
+) {
+  return tx.auditLog.findMany({
+    where: { organizationId, resourceId: { in: resourceIds } },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    take,
+    select: {
+      id: true,
+      createdAt: true,
+      action: true,
+      userId: true,
+      risk: true,
+      reason: true,
+      before: true,
+      after: true,
+    },
+  });
+}

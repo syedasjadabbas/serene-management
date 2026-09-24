@@ -101,6 +101,7 @@ export const reservationsApi = baseApi.injectEndpoints({
       invalidatesTags: (_r, _e, { propertyId }) => [
         { type: "Reservation", id: `LIST-${propertyId}` },
         { type: "Availability", id: propertyId },
+        { type: "Stay", id: `FD-${propertyId}` },
       ],
     }),
     updateReservationRoom: build.mutation<
@@ -177,6 +178,8 @@ function invalidateAfterCommand(
   return [
     { type: "Reservation" as const, id: `LIST-${arg.propertyId}` },
     { type: "Availability" as const, id: arg.propertyId },
+    // Front desk lists (arrivals, room board) show reservation state too.
+    { type: "Stay" as const, id: `FD-${arg.propertyId}` },
     ...(result ? [{ type: "Reservation" as const, id: result.id }] : []),
   ];
 }

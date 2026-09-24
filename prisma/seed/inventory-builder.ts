@@ -121,6 +121,11 @@ export async function buildPropertyInventory(db: Db, spec: InventorySpec): Promi
     ["NO_SHOW", "NOSHOW", "Guest did not arrive"],
     ["NO_SHOW", "LATE", "Arrived after release time"],
     ["OUT_OF_ORDER", "MAINT", "Maintenance work"],
+    ["ROOM_MOVE", "GUEST", "Guest request"],
+    ["ROOM_MOVE", "NOISE", "Noise or comfort complaint"],
+    ["ROOM_MOVE", "MAINT", "Maintenance issue in room"],
+    ["EARLY_DEPARTURE", "PLANS", "Change of plans"],
+    ["EARLY_DEPARTURE", "EMERG", "Personal emergency"],
   ] as const) {
     const row = await upsertByCode(
       await db.reasonCode.findFirst({

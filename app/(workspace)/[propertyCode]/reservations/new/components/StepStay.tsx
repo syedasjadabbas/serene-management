@@ -27,7 +27,8 @@ export function StepStay({
 }) {
   const property = useProperty();
   const { can } = usePermissions(property.id);
-  const { stay, setStay, select } = useBookingDraft();
+  const { stay, setStay, select, mode } = useBookingDraft();
+  const walkIn = mode === "walk-in";
   const availability = useAvailabilityQuery(
     { propertyId: property.id, ...(stay ?? {}) },
     { skip: !stay },
@@ -50,6 +51,7 @@ export function StepStay({
   const sellable = (roomType: RoomTypeAvailabilityView, rate: RateQuoteView) =>
     rate.bookable && roomType.status === "AVAILABLE";
   const waitlistable = (roomType: RoomTypeAvailabilityView, rate: RateQuoteView) =>
+    !walkIn &&
     can("reservations:waitlist") &&
     rate.total !== null &&
     (roomType.status === "SOLD_OUT" || roomType.status === "LIMITED");
@@ -81,6 +83,7 @@ export function StepStay({
             }
           }
           businessDate={businessDate}
+          walkIn={walkIn}
           onSearch={setStay}
           pending={availability.isFetching}
         />

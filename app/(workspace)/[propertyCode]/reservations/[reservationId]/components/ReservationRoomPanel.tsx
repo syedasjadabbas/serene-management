@@ -1,6 +1,10 @@
 "use client";
 
+import Link from "next/link";
+import type { Route } from "next";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { CheckInDialog } from "@/components/front-desk/CheckInDialog";
 import { BookingStateBadge } from "@/components/reservations/BookingStateBadge";
 import { Button } from "@/components/ui/Button";
 import { formatCurrency, formatDate, formatDateTime, pluralize } from "@/lib/utils/format";
@@ -14,7 +18,8 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { ModifyDialog } from "./ModifyDialog";
 import { ReasonDialog } from "./ReasonDialog";
 
-type DialogName = "modify" | "confirm" | "cancel" | "noShow" | "reinstate" | "assign" | null;
+type DialogName =
+  "modify" | "confirm" | "cancel" | "noShow" | "reinstate" | "assign" | "checkIn" | null;
 
 /** One reservation room: facts, nightly rates and the actions the server allows. */
 export function ReservationRoomPanel({
@@ -25,6 +30,7 @@ export function ReservationRoomPanel({
   reservation: ReservationDetail;
 }) {
   const property = useProperty();
+  const router = useRouter();
   const [dialog, setDialog] = useState<DialogName>(null);
   const close = () => setDialog(null);
   const actions = room.allowedActions;
@@ -64,6 +70,19 @@ export function ReservationRoomPanel({
         </h2>
         <BookingStateBadge state={room.bookingState} />
         <div className="ms-auto flex flex-wrap gap-1.5">
+          {room.stay ? (
+            <Link
+              href={`/${property.code}/front-desk/stays/${room.stay.id}` as Route}
+              className="inline-flex h-7 items-center rounded-md border border-border px-2.5 text-xs hover:bg-surface-sunken"
+            >
+              Open stay
+            </Link>
+          ) : null}
+          {actions.checkIn ? (
+            <Button size="sm" onClick={() => setDialog("checkIn")}>
+              Check in
+            </Button>
+          ) : null}
           {actions.modify ? (
             <Button size="sm" variant="secondary" onClick={() => setDialog("modify")}>
               Modify
@@ -194,6 +213,29 @@ export function ReservationRoomPanel({
         room={room}
         action="reinstate"
       />
+      {actions.checkIn ? (
+        <CheckInDialog
+          key={`i${room.version}`}
+          open={dialog === "checkIn"}
+          onClose={close}
+          target={{
+            reservationRoomId: room.id,
+            version: room.version,
+            confirmation: room.displayConfirmation,
+            guestName: room.primaryGuest.name,
+            roomType: room.roomType,
+            arrival: room.arrival,
+            departure: room.departure,
+            nights: room.nights,
+            adults: room.adults,
+            children: room.children,
+            room: room.room,
+          }}
+          onCheckedIn={(stay) =>
+            router.push(`/${property.code}/front-desk/stays/${stay.id}?checkedIn=1` as Route)
+          }
+        />
+      ) : null}
     </section>
   );
 }

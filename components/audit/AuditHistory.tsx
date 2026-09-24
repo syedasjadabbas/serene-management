@@ -1,6 +1,16 @@
 import { Badge } from "@/components/ui/Badge";
 import { formatDateTime } from "@/lib/utils/format";
-import type { ReservationHistoryEntry } from "@/modules/reservations/reservations.types";
+
+export interface AuditHistoryEntry {
+  id: string;
+  at: string;
+  action: string;
+  userDisplayName: string | null;
+  risk: string;
+  reason: string | null;
+  before: unknown;
+  after: unknown;
+}
 
 const ACTIONS: Record<string, string> = {
   "reservation.create": "Created",
@@ -11,6 +21,9 @@ const ACTIONS: Record<string, string> = {
   "reservation.reinstate": "Reinstated",
   "reservation.room_assign": "Room assigned",
   "reservation.room_unassign": "Room removed",
+  "stay.check_in": "Checked in",
+  "stay.room_move": "Room move",
+  "stay.check_out": "Checked out",
 };
 
 function summarize(value: unknown): string {
@@ -21,12 +34,12 @@ function summarize(value: unknown): string {
     .join(", ");
 }
 
-/** Audit-based reservation history (newest first). */
-export function ReservationHistory({
+/** Audit-based history of a reservation or stay (newest first). Shared by both detail pages. */
+export function AuditHistory({
   entries,
   timezone,
 }: {
-  entries: ReservationHistoryEntry[];
+  entries: AuditHistoryEntry[];
   timezone: string;
 }) {
   return (
