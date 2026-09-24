@@ -9,12 +9,17 @@ export function formatCurrency(
   amount: string | null | undefined,
   currency: string,
   locale = "en",
+  /** Fixed fraction digits (e.g. the currency's configured minor units for ledgers). */
+  fractionDigits?: number,
 ): string {
   if (amount == null) return "—";
   const formatter = new Intl.NumberFormat(locale, {
     style: "currency",
     currency,
     currencyDisplay: "code",
+    ...(fractionDigits === undefined
+      ? {}
+      : { minimumFractionDigits: fractionDigits, maximumFractionDigits: fractionDigits }),
   });
   // Intl accepts decimal strings exactly (ECMA-402 "StringNumericLiteral").
   return formatter.format(amount as unknown as number);

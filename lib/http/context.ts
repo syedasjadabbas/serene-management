@@ -9,6 +9,17 @@ export interface RequestMeta {
   userAgent: string | null;
 }
 
+/**
+ * Replay protection for a financial command (docs/ARCHITECTURE.md §5): the
+ * client's `Idempotency-Key` header, the route it was sent to and a hash of
+ * the validated request, stored with the response in `idempotency_keys`.
+ */
+export interface IdempotencyRequest {
+  key: string;
+  route: string;
+  requestHash: string;
+}
+
 /** An authenticated request (docs/ARCHITECTURE.md §4). */
 export interface SessionContext extends RequestMeta {
   userId: string;

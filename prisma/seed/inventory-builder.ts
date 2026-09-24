@@ -37,7 +37,52 @@ export interface InventorySpec {
   seasonEnd: string;
   roomTypes: RoomTypeSpec[];
   roomsPerFloor?: number;
+  /** Tax / service-charge rules (Phase 5); none when omitted. */
+  taxes?: TaxSpec[];
 }
+
+export interface TaxSpec {
+  code: string;
+  name: string;
+  calculation: "PERCENT" | "FLAT_PER_UNIT";
+  basis: "NET" | "COMPOUND";
+  /** Percent ("16") or flat amount per unit, as a decimal string. */
+  rate: string;
+  /** Application order on a code (compound taxes include earlier ones). */
+  sequence: number;
+  bucket?: "TAX" | "SERVICE_CHARGE";
+  /** Charge codes (e.g. "1000") that generate this tax. */
+  appliesTo: string[];
+}
+
+/**
+ * Chart of postable codes every property gets (Phase 5). Amounts are not
+ * set here: prices are entered at posting time or come from rates/packages.
+ */
+const CHARGE_GROUPS = [
+  ["FNB", "Food & beverage", "REVENUE", 2],
+  ["MISC", "Guest services", "REVENUE", 3],
+  ["TAX", "Taxes & service charges", "REVENUE", 8],
+  ["PAY", "Payments", "PAYMENT", 9],
+] as const;
+
+const CHARGE_CODES = [
+  ["2000", "Restaurant", "FNB", "FOOD_BEVERAGE"],
+  ["2010", "Room service", "FNB", "FOOD_BEVERAGE"],
+  ["2020", "Minibar", "FNB", "MINIBAR"],
+  ["2030", "Breakfast", "FNB", "FOOD_BEVERAGE"],
+  ["3000", "Laundry", "MISC", "LAUNDRY"],
+  ["3010", "Telephone", "MISC", "TELEPHONE"],
+  ["3020", "Airport transfer", "MISC", "TRANSPORT"],
+  ["3030", "Spa", "MISC", "SPA"],
+  ["3090", "Miscellaneous", "MISC", "OTHER"],
+] as const;
+
+const PAYMENT_METHODS = [
+  ["CASH", "Cash", "CASH", "9000", "Cash", false],
+  ["CARD", "Card (hotel terminal)", "CREDIT_CARD", "9100", "Card payment", true],
+  ["BANK", "Bank transfer", "BANK_TRANSFER", "9200", "Bank transfer", true],
+] as const;
 
 export interface BuiltInventory {
   roomTypes: Record<string, { id: string; roomIds: string[]; roomNumbers: string[] }>;
@@ -50,6 +95,10 @@ export interface BuiltInventory {
   cancellationPolicies: Record<string, string>;
   taskTypes: Record<string, string>;
   maintenanceCategories: Record<string, string>;
+  /** Transaction code ids by code ("1000", "2000", tax and payment codes). */
+  chargeCodes: Record<string, string>;
+  paymentMethods: Record<string, string>;
+  taxRules: Record<string, string>;
 }
 
 const date = (value: string) => new Date(`${value}T00:00:00.000Z`);
@@ -131,6 +180,14 @@ export async function buildPropertyInventory(db: Db, spec: InventorySpec): Promi
     ["ROOM_MOVE", "MAINT", "Maintenance issue in room"],
     ["EARLY_DEPARTURE", "PLANS", "Change of plans"],
     ["EARLY_DEPARTURE", "EMERG", "Personal emergency"],
+    ["ADJUSTMENT", "RATE", "Rate correction"],
+    ["ADJUSTMENT", "SVC", "Service recovery"],
+    ["ADJUSTMENT", "ERR", "Posting error"],
+    ["VOID", "ERR", "Posted in error"],
+    ["VOID", "DUP", "Duplicate posting"],
+    ["REFUND", "OVER", "Overpayment"],
+    ["REFUND", "GOOD", "Goodwill gesture"],
+    ["REFUND", "NSVC", "Service not provided"],
   ] as const) {
     const row = await upsertByCode(
       await db.reasonCode.findFirst({
@@ -234,6 +291,98 @@ export async function buildPropertyInventory(db: Db, spec: InventorySpec): Promi
         select: { id: true },
       }),
   );
+
+  // Billing configuration (Phase 5): codes, taxes, payment methods ------------------
+  const chargeCodes: Record<string, string> = { "1000": roomCharge.id };
+  const groups: Record<string, string> = {};
+  for (const [code, name, type, sortOrder] of CHARGE_GROUPS) {
+    const row = await upsertByCode(
+      await db.transactionCodeGroup.findFirst({
+        where: { propertyId, code },
+        select: { id: true },
+      }),
+      () =>
+        db.transactionCodeGroup.create({
+          data: { propertyId, code, name, type, sortOrder },
+          select: { id: true },
+        }),
+    );
+    groups[code] = row.id;
+  }
+  const upsertCode = async (
+    code: string,
+    data: Omit<Prisma.TransactionCodeUncheckedCreateInput, "propertyId" | "code">,
+  ) => {
+    const row = await upsertByCode(
+      await db.transactionCode.findFirst({ where: { propertyId, code }, select: { id: true } }),
+      () =>
+        db.transactionCode.create({ data: { propertyId, code, ...data }, select: { id: true } }),
+    );
+    chargeCodes[code] = row.id;
+    return row.id;
+  };
+  for (const [code, name, group, bucket] of CHARGE_CODES) {
+    await upsertCode(code, { groupId: groups[group]!, name, bucket, isManualPostAllowed: true });
+  }
+  const paymentMethods: Record<string, string> = {};
+  for (const [code, name, kind, txCode, txName, requiresReference] of PAYMENT_METHODS) {
+    const transactionCodeId = await upsertCode(txCode, {
+      groupId: groups.PAY!,
+      name: txName,
+      bucket: "PAYMENT",
+      isManualPostAllowed: false,
+    });
+    const row = await upsertByCode(
+      await db.paymentMethod.findFirst({ where: { propertyId, code }, select: { id: true } }),
+      () =>
+        db.paymentMethod.create({
+          data: { propertyId, code, name, kind, transactionCodeId, requiresReference },
+          select: { id: true },
+        }),
+    );
+    paymentMethods[code] = row.id;
+  }
+  const taxRules: Record<string, string> = {};
+  for (const [index, tax] of (spec.taxes ?? []).entries()) {
+    const transactionCodeId = await upsertCode(String(8000 + index * 10), {
+      groupId: groups.TAX!,
+      name: tax.name,
+      bucket: tax.bucket ?? "TAX",
+      isManualPostAllowed: false,
+    });
+    const rule = await upsertByCode(
+      await db.taxRule.findFirst({ where: { propertyId, code: tax.code }, select: { id: true } }),
+      () =>
+        db.taxRule.create({
+          data: {
+            propertyId,
+            code: tax.code,
+            name: tax.name,
+            calculation: tax.calculation,
+            basis: tax.basis,
+            rate: tax.rate,
+            transactionCodeId,
+            effectiveFrom: date(spec.seasonStart),
+          },
+          select: { id: true },
+        }),
+    );
+    taxRules[tax.code] = rule.id;
+    for (const code of tax.appliesTo) {
+      const codeId = chargeCodes[code];
+      if (!codeId) throw new Error(`Tax ${tax.code} applies to unknown code ${code}`);
+      await db.transactionCodeTax.upsert({
+        where: { transactionCodeId_taxRuleId: { transactionCodeId: codeId, taxRuleId: rule.id } },
+        update: {},
+        create: {
+          propertyId,
+          transactionCodeId: codeId,
+          taxRuleId: rule.id,
+          sequence: tax.sequence,
+        },
+      });
+    }
+  }
 
   // Floors, room types, rooms ------------------------------------------------------
   const roomsPerFloor = spec.roomsPerFloor ?? 12;
@@ -448,5 +597,8 @@ export async function buildPropertyInventory(db: Db, spec: InventorySpec): Promi
     cancellationPolicies,
     taskTypes,
     maintenanceCategories,
+    chargeCodes,
+    paymentMethods,
+    taxRules,
   };
 }

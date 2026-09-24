@@ -83,6 +83,7 @@ export function normalizeError(err: unknown): AppError {
     case "23514":
     case "SM001":
     case "SM002":
+    case "SM003":
       return new AppError("BUSINESS_RULE_VIOLATION", "The change violates a data integrity rule");
     case "40001":
     case "40P01":

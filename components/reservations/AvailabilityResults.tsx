@@ -54,7 +54,7 @@ export function AvailabilityResults({
     );
   }
   return (
-    <div className="overflow-x-auto rounded-lg border border-border-subtle bg-surface">
+    <div className="relative overflow-x-auto rounded-lg border border-border-subtle bg-surface">
       <table className="w-full min-w-[720px] text-sm">
         <caption className="sr-only">
           Availability for {view.nights} nights from {view.arrival}, {view.rooms} room(s)

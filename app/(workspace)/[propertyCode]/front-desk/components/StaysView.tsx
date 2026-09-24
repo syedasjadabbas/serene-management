@@ -48,7 +48,7 @@ export function StaysView({ kind, filter, q }: { kind: Kind; filter: string; q: 
           marked for cleaning.
         </Alert>
       ) : null}
-      <div className="overflow-x-auto rounded-lg border border-border-subtle bg-surface">
+      <div className="relative overflow-x-auto rounded-lg border border-border-subtle bg-surface">
         <table className="w-full min-w-[900px] text-sm">
           <caption className="sr-only">
             {kind === "in-house" ? "Guests in house" : "Departures for the business date"}

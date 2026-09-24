@@ -24,6 +24,15 @@ const ACTIONS: Record<string, string> = {
   "stay.check_in": "Checked in",
   "stay.room_move": "Room move",
   "stay.check_out": "Checked out",
+  "folio.open": "Folio window opened",
+  "folio.post_charge": "Charge posted",
+  "folio.post_room_charges": "Room charges posted",
+  "folio.reverse": "Charge reversed",
+  "folio.adjust": "Charge adjusted",
+  "folio.payment": "Payment taken",
+  "folio.void_payment": "Payment voided",
+  "folio.refund": "Payment refunded",
+  "folio.settle": "Window settled",
 };
 
 function summarize(value: unknown): string {
@@ -34,7 +43,7 @@ function summarize(value: unknown): string {
     .join(", ");
 }
 
-/** Audit-based history of a reservation or stay (newest first). Shared by both detail pages. */
+/** Audit-based history of a reservation, stay or folio (newest first). */
 export function AuditHistory({
   entries,
   timezone,

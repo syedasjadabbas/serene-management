@@ -10,14 +10,15 @@ import { TextArea } from "@/components/ui/TextArea";
 import { useProperty } from "@/hooks/useProperty";
 import { useCheckOutMutation, useStayQuery } from "@/lib/api/endpoints/front-desk.api";
 import { toClientApiError } from "@/lib/api/errors";
-import { formatDate, pluralize } from "@/lib/utils/format";
+import { formatCurrency, formatDate, pluralize } from "@/lib/utils/format";
 import { daysBetween } from "@/modules/business-date/business-date.policy";
 import type { StayDetail } from "@/modules/front-desk/front-desk.types";
 
 /**
  * Operational check-out: confirms the departure (and, when the guest leaves
  * before the booked date, the early departure with a reason). The room
- * becomes vacant and needs cleaning. Account settlement is not recorded here.
+ * becomes vacant and needs cleaning. The server checks the folio balance
+ * (zero-balance rule) and settles the windows in the same transaction.
  */
 export function CheckOutDialog({
   open,
@@ -132,10 +133,27 @@ export function CheckOutDialog({
             onChange={(e) => setNote(e.target.value)}
             maxLength={1000}
           />
+          {data.folio && data.folio.balance !== "0.0000" ? (
+            <Alert tone="warning">
+              The guest&apos;s account shows{" "}
+              {formatCurrency(
+                data.folio.balance,
+                data.folio.currencyCode,
+                "en",
+                data.folio.minorUnits,
+              )}{" "}
+              outstanding. Settle every folio window before check-out; the server refuses the
+              check-out while a balance remains (when the property requires a zero balance).
+            </Alert>
+          ) : data.folio ? (
+            <p className="text-sm text-fg-secondary">
+              Account balance{" "}
+              {formatCurrency("0", data.folio.currencyCode, "en", data.folio.minorUnits)}: the folio
+              windows are settled with the check-out.
+            </p>
+          ) : null}
           <p className="text-xs text-fg-muted">
-            Room {data.room.number} becomes vacant and is marked for cleaning. Charges and payments
-            are not recorded in SERENE yet: settle the guest&apos;s account according to hotel
-            procedure.
+            Room {data.room.number} becomes vacant and is marked for cleaning.
           </p>
           <label className="flex items-start gap-2 text-sm">
             <input

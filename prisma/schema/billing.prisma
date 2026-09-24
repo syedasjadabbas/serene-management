@@ -3,7 +3,8 @@
 // FolioItem is an append-only ledger: rows are never updated or deleted
 // (enforced by trigger). Corrections, adjustments and transfers are new rows
 // that reference the original. Folio totals are denormalised and maintained
-// in the posting transaction; night audit verifies them against the ledger.
+// by a database trigger on every ledger insert (no application code writes
+// them; a guard trigger rejects any other change).
 //
 // Sign convention: charges > 0, payments/credits < 0. balance = SUM(amount).
 
@@ -230,6 +231,10 @@ model Folio {
   balance           Decimal        @default(0) @db.Decimal(19, 4)
   openedById        String         @map("opened_by_id") @db.Uuid
   openedAt          DateTime       @default(now()) @map("opened_at") @db.Timestamptz(3)
+  /// Set while the folio is SETTLED (zero balance confirmed); cleared by the
+  /// ledger trigger when a new posting reopens it.
+  settledAt         DateTime?      @map("settled_at") @db.Timestamptz(3)
+  settledById       String?        @map("settled_by_id") @db.Uuid
   closedAt          DateTime?      @map("closed_at") @db.Timestamptz(3)
   version           Int            @default(1)
   updatedAt         DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -292,6 +297,9 @@ model FolioItem {
   cashierShiftId          String?       @map("cashier_shift_id") @db.Uuid
   reasonCodeId            String?       @map("reason_code_id") @db.Uuid
   comment                 String?       @db.VarChar(500)
+  /// Deterministic key of system postings (room night, package component):
+  /// the unique index makes a repeated posting run a no-op.
+  postingKey              String?       @map("posting_key") @db.VarChar(120)
   postedById              String?       @map("posted_by_id") @db.Uuid
   postedAt                DateTime      @default(now()) @map("posted_at") @db.Timestamptz(3)
 
@@ -308,6 +316,7 @@ model FolioItem {
 
   /// An item can be reversed at most once.
   @@unique([correctsItemId, kind], map: "folio_items_one_reversal_per_item", where: raw("kind = 'REVERSAL'"))
+  @@unique([propertyId, postingKey], map: "folio_items_posting_key_key", where: raw("posting_key IS NOT NULL"))
   @@index([folioId, postedAt])
   @@index([propertyId, businessDate, transactionCodeId])
   @@index([propertyId, cashierShiftId])

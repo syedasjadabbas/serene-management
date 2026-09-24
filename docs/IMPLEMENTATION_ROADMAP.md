@@ -85,7 +85,21 @@ The product owner re-sequenced Phase 2 to **Reservations + Availability**. It de
 
 Moved to later phases: configuration screens for rooms, rate plans and restrictions; full guest profiles (documents, preferences, merge); room holds and auto-assign; deposits and cancellation penalties (billing); negotiated, member and day-use rates; block pickup (groups); turnaway capture.
 
-## Phase 4 (as executed) — Housekeeping, rooms and maintenance (pending commit)
+## Phase 5 (as executed) — Folios, billing, payments and settlement (pending commit)
+
+Delivered on the existing schema (folios/windows, the append-only folio ledger, transaction codes, tax rules, payment methods, payments, refunds, idempotency keys and the `billing:*` / `payments:*` permissions were modelled in Phase 0; no permission was added):
+
+- **Ledger**: database-maintained folio totals (trigger + guard), sign/currency/lifecycle checks, reversal and adjustment integrity in the database, deterministic posting keys.
+- **Postings**: manual charges with server-side taxes (line-level, NET / COMPOUND / flat, exclusive and inclusive) and preview; room and package charges for past nights; same-day reversal; proportional adjustment.
+- **Payments**: cash / card terminal / bank transfer, balance-capped, version-checked, gap-free receipts; same-day void; refunds against the original payment.
+- **Settlement**: zero-balance window settle; check-out enforces `requireZeroBalanceCheckout` and settles the windows.
+- **Idempotency**: `Idempotency-Key` on every financial command, claimed in the command transaction.
+- **UI**: Billing workspace (accounts list), folio page (windows, totals, ledger with running balance, dialogs, audit history); stay page balance and folio link; check-out dialog balance warning.
+- **Demo**: charge codes, SMR 16% sales tax, SDX service charge + municipality fee + compound VAT + tourism fee, payment methods, financial reason codes.
+
+Deferred: night audit, deposits, routing and transfers, invoices / credit notes / CLOSED folios, cashier shifts and cash movements, payment gateway and card authorizations, foreign-currency payments, refund approval threshold, allowance packages, fixed charges, accounting exports.
+
+## Phase 4 (as executed) — Housekeeping, rooms and maintenance (tag `phase-4-complete`)
 
 Delivered on the existing schema (housekeeping tasks/types/attendants, maintenance requests/activities/categories, room service blocks and room status history were modelled in Phase 0; `housekeeping:*`, `maintenance:*`, `rooms:out_of_order` permissions and role templates already existed):
 

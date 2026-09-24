@@ -6,6 +6,7 @@ PostgreSQL 18 (development: native Windows installation bootstrapped by `npm run
 - Migrations: [`prisma/migrations/`](../prisma/migrations)
   - `20260924000000_init` — generated baseline (123 tables) + extensions `pg_trgm`, `btree_gist`.
   - `20260924000100_constraints` — hand-written check constraints, exclusion constraints and triggers.
+  - `20260926090000_billing_folio_ledger` — `folio_items.posting_key` with partial unique `folio_items_posting_key_key`, `folios.settled_at` / `settled_by_id`; checks `folio_items_sign_chk`, `folio_items_currency_chk`, `folios_settlement_chk`, `folios_closed_chk`, `folios_currency_chk`, `payments_lifecycle_chk`, `payments_currency_chk`, `refunds_lifecycle_chk`, `refunds_currency_chk`; triggers `folio_items_apply` (currency and correction integrity, folio totals), `folios_guard`, `payments_guard`, `refunds_guard` (Phase 5).
   - `20260925090000_housekeeping_maintenance_operations` — `housekeeping_tasks.completed_by_id`, `room_status_history.reason`, partial unique `housekeeping_attendants_user_key` (one roster row per user and property), check constraints `housekeeping_tasks_lifecycle_chk` and `maintenance_requests_lifecycle_chk` (Phase 4).
   - `20260924160000_front_desk_occupancy_guards` — partial unique index `stays_one_in_house_per_room` and the stay check constraints `stays_checkout_chk`, `stays_business_dates_chk`, `stays_reinstated_chk` (Phase 3).
   - `20260924120327_reservation_search_created_index` — `reservation_rooms (property_id, created_at DESC)` for the reservation search's "created on" filter and newest-first sort (Phase 2).
@@ -212,6 +213,14 @@ Custom SQLSTATEs: `SM001` (immutable/append-only violation), `SM002` (closed fol
 - **Service blocks** are the source of truth for out of order / out of service; `room_service_blocks_no_overlap` allows one live block per room and night. Out-of-order placement and release lock the room type's inventory cells and rewrite their counters (`out_of_order`).
 - **Room row lock**: every command that puts a guest into a room, assigns a room, blocks it or changes its housekeeping status locks the `rooms` row FOR UPDATE, after inventory and sequence locks (ARCHITECTURE §5, D15).
 - **Room status history** now records the reason of the change (cleaning task, inspection result, block reason, correction comment).
+
+### Phase 5 notes
+
+- **Reused tables**: `folios`, `folio_items`, `transaction_code_groups`, `transaction_codes`, `tax_rules`, `transaction_code_taxes`, `payment_methods`, `payments`, `refunds`, `reason_codes`, `property_sequences`, `idempotency_keys` were modelled in Phase 0; Phase 5 adds only the columns, constraints and triggers above. Invoices, routing, cashier shifts, cash movements, card authorizations and deposit requests are untouched.
+- **Totals by trigger**: `folio_items_apply` (AFTER INSERT) checks that the line's currency equals the folio's, that a `REVERSAL` negates its original exactly and that `ADJUSTMENT`s never exceed or add to it, then adds the amount to `charges_total` (non-payment codes) or `credits_total` (codes of a PAYMENT group), to `balance`, bumps `version` and reopens a SETTLED folio. `folios_guard` rejects writes to the totals except from that trigger (`pg_trigger_depth() > 1`), non-zero totals on insert, changes of ownership/currency and deletes.
+- **Deterministic postings**: system postings (room night, package component) carry `posting_key`; the unique index `(property_id, posting_key)` makes a duplicate posting impossible even if two runs raced.
+- **Money**: every amount is `NUMERIC(19,4)` holding values rounded to the currency's minor units (`currencies.minor_units`); rates of tax rules are percent `NUMERIC(19,4)` (16% = `16.0000`).
+- **Idempotency**: `idempotency_keys (user_id, key)` rows are inserted inside the command transaction (`INSERT … ON CONFLICT DO UPDATE … WHERE expires_at < now()`), so a concurrent duplicate waits on the uncommitted row and then replays the stored response.
 
 ## 6. Transaction boundaries
 

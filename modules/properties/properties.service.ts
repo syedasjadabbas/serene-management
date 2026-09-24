@@ -227,6 +227,7 @@ const SEQUENCES = {
   confirmation: { start: 100000, prefix: "" },
   cancellation: { start: 1000, prefix: "X" },
   maintenance: { start: 1000, prefix: "M" },
+  receipt: { start: 1, prefix: "R" },
 } as const;
 
 export async function allocateNumber(
@@ -243,6 +244,19 @@ export async function allocateNumber(
  * command's transaction. A property without a configuration row uses the
  * schema defaults.
  */
+/** Billing switches (Phase 5): zero-balance check-out rule and window limit. */
+export async function billingRules(
+  tx: Tx,
+  propertyId: string,
+): Promise<{ requireZeroBalanceCheckout: boolean; maxFolioWindows: number }> {
+  const configuration = await findConfiguration(tx, propertyId);
+  return {
+    requireZeroBalanceCheckout:
+      configuration?.requireZeroBalanceCheckout ?? DEFAULT_CONFIGURATION.requireZeroBalanceCheckout,
+    maxFolioWindows: configuration?.maxFolioWindows ?? DEFAULT_CONFIGURATION.maxFolioWindows,
+  };
+}
+
 export async function frontOfficeRules(
   tx: Tx,
   propertyId: string,

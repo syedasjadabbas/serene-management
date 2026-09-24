@@ -114,6 +114,31 @@ export function deleteNights(tx: Tx, reservationRoomId: string) {
   return tx.reservationRoomNight.deleteMany({ where: { reservationRoomId } });
 }
 
+/** A reservation room's stay nights, for room-charge posting (billing). */
+export function findNightsForPosting(tx: Tx, propertyId: string, reservationRoomId: string) {
+  return tx.reservationRoomNight.findMany({
+    where: { propertyId, reservationRoomId },
+    orderBy: { stayDate: "asc" },
+    select: {
+      stayDate: true,
+      rateAmount: true,
+      currencyCode: true,
+      adults: true,
+      children: true,
+      ratePlanId: true,
+      postedAt: true,
+    },
+  });
+}
+
+/** Marks a night posted / unposted; 0 rows when it already was (the caller treats that as a race). */
+export function setNightPosted(tx: Tx, reservationRoomId: string, stayDate: Date, posted: boolean) {
+  return tx.reservationRoomNight.updateMany({
+    where: { reservationRoomId, stayDate, postedAt: posted ? null : { not: null } },
+    data: { postedAt: posted ? new Date() : null },
+  });
+}
+
 export function insertAssignment(tx: Tx, data: Prisma.RoomAssignmentUncheckedCreateInput) {
   return tx.roomAssignment.create({ data, select: { id: true } });
 }

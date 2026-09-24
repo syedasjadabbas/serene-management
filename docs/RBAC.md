@@ -124,3 +124,21 @@ interface AccessProfile {
 | Folio contents                                              | `billing:read`                                                         |
 | Rates on reservations (negotiated, comp)                    | `rates:read`; housekeeping roles do not see rates                      |
 | Audit log                                                   | `audit:read`                                                           |
+
+## Financial permissions (Phase 5, as implemented)
+
+No permission was added; the Phase 0 catalog covers billing:
+
+| Action                                          | Permission                                 | Risk                          |
+| ----------------------------------------------- | ------------------------------------------ | ----------------------------- |
+| View folios, ledger, balances                   | `billing:read`                             | —                             |
+| Folio audit history                             | `billing:read` + `audit:read`              | —                             |
+| Post a charge, post room charges, open window 1 | `billing:post`                             | STANDARD audit                |
+| Open further windows                            | `billing:transfer`                         | STANDARD                      |
+| Reverse / adjust a charge                       | `billing:adjust` ★ (reason required)       | HIGH                          |
+| Take a payment, settle a zero window            | `payments:create`                          | payment HIGH, settle STANDARD |
+| Void a same-day payment                         | `payments:void` ★ (reason required)        | HIGH                          |
+| Refund a payment                                | `payments:refund` ★ (reason + reason code) | HIGH                          |
+| Check out (with the zero-balance rule)          | `frontdesk:checkout`                       | STANDARD / HIGH (early)       |
+
+The UI hides actions the user lacks (`actions` flags computed by the server); the routes enforce them regardless.

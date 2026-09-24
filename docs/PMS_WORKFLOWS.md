@@ -128,6 +128,8 @@ Same business date, no postings other than deposit transfer reversed automatical
 
 ## 7. In-house stay: charges and services
 
+> **Implementation status (Phase 5).** Implemented: manual postings with server-calculated taxes and a preview, room and package charges for past nights (the manual stand-in for night audit's room-and-tax run, deterministic posting keys), `Idempotency-Key` replay protection, balance recomputed from the ledger under the folio lock. Deferred: routing (steps 1 and §19), paid-outs and cash movements (cashiering), POS/interface postings, fixed charges, allowance packages.
+
 - **Entities**: Folio, FolioItem, TransactionCode, TaxRule, RoutingInstruction, CashierShift, CashMovement (paid-outs), PackageComponent.
 - **Posting pipeline (billing.postCharge)**:
   1. Resolve target folio: routing instructions of the reservation room for the code/date (window, other reservation room, group master, account folio), respecting limits (overage stays on window 1).
@@ -173,6 +175,8 @@ Same business date, no postings other than deposit transfer reversed automatical
 
 ## 11. Payment (including deposits and split payments)
 
+> **Implementation status (Phase 5).** Implemented: cash, card (hotel terminal, approval reference required) and bank transfer recorded as CAPTURED in one transaction; amount ≤ window balance (over-payment refused); the window `version` the cashier saw is required (409 `BALANCE_CHANGED` when it moved); folio-currency only (`CURRENCY_NOT_SUPPORTED` otherwise — no FX); gap-free receipt numbers; split payments as separate commands; audit `folio.payment` HIGH. Deferred: gateway flow (PENDING/AUTHORIZED, webhooks), deposits (kind DEPOSIT, deposit ledger, transfer at check-in), foreign currency, cashier shifts and cash movements.
+
 - **Entities**: Payment, PaymentMethod, PaymentInstrument, FolioItem (PAYMENT), Folio, DepositRequest, CashierShift, CashMovement, PropertySequence (receipt).
 - **Flow for gateway (card/online) payments**:
   1. Service creates a `Payment` PENDING in its own short Tx (idempotency key → stable gateway reference).
@@ -189,6 +193,8 @@ Same business date, no postings other than deposit transfer reversed automatical
 - **Failure**: gateway failure → Payment FAILED (kept for audit), folio unchanged; DB failure after capture → payment stays PENDING with gateway reference and is reconciled (never double-charged thanks to the idempotent reference).
 
 ## 12. Check-out
+
+> **Implementation status (Phase 5).** Operational check-out (Phase 3) now includes the financial rule in the same transaction: after the room locks, every window of the stay is locked, its balance recomputed from the ledger and, when `PropertyConfiguration.requireZeroBalanceCheckout` is on (default), any non-zero window refuses the check-out (`422 FOLIO_BALANCE_OUTSTANDING`, with the windows and balances). Zero windows become SETTLED; the check-out audit records the folio summary. With the rule off, the guest may leave with a balance and the windows stay OPEN. There is no override permission: the rule is the property's configuration. Invoices, direct-bill transfer and CLOSED folios are deferred.
 
 - **Entities**: ReservationRoom, Stay, Folio(s), FolioItem, Payment, Invoice, Room, HousekeepingTask, GuestStayStatistic, Commission, RoomAssignment, CardAuthorization.
 - **Database changes**: for every folio window: must be balance 0 (settled by payments or transferred to an account folio for direct bill) → issue invoice (gap-free number, snapshot) → folio CLOSED; stay CHECKED_OUT (checked_out_at, departure_business_date = D); reservation room CHECKED_OUT; assignment `to_date` := D if earlier; room: VACANT (if no remaining sharer), housekeeping DIRTY; create HK **departure** task for D (priority by next arrival); release unused card authorizations (after commit via outbox); update `guest_stay_statistics`; calculate commission (PENDING) if an agent/source is commissionable.
@@ -297,6 +303,8 @@ Move selected items between windows, to another reservation room's folio, or to 
 
 ## 22. Posting correction and adjustment
 
+> **Implementation status (Phase 5).** As written: same-day `REVERSAL` of a charge with its taxes (reason required; reversing a room night re-opens it for posting), `ADJUSTMENT` of part or all of a charge on any date with the code's adjustment code (or the original code when none is configured), the credit amount including tax, split proportionally. Both require `billing:adjust` (HIGH audit `folio.reverse` / `folio.adjust`) and an `Idempotency-Key`.
+
 - **Same business date (void/correct)**: `REVERSAL` row = exact negation of the item and its generated taxes (`corrects_item_id`, one reversal per item by unique index), then a new correct posting. Reason required. Not shown on the adjustment report.
 - **Prior business date (adjustment)**: `ADJUSTMENT` row with the code's adjustment transaction code, amount or percent (≤ 100 %), reason code and comment; taxes adjusted proportionally.
 - **Not adjustable**: payment lines (use refund/void), deposit transfers, lines on CLOSED folios (use credit note).
@@ -304,6 +312,8 @@ Move selected items between windows, to another reservation room's folio, or to 
 - **Tx**: one Tx. **Failure**: rollback.
 
 ## 23. Refund
+
+> **Implementation status (Phase 5).** Without a gateway a refund completes in one transaction (Refund SUCCEEDED, `refunded_amount` raised, positive ledger line); reason code (category REFUND) and reason required; amount ≤ what remains refundable. Same-day mistakes are voided instead (`payments:void`). Deferred: approval threshold with a second user, gateway refunds, cash-out movements.
 
 - **Entities**: Refund, Payment, FolioItem, CashierShift, CashMovement, ReasonCode.
 - **Flow**: validate (payment CAPTURED; refund ≤ `amount − refunded_amount`; reason; approval above threshold by a second user with `payments:refund`) → Refund PENDING (Tx) → gateway refund (outside Tx, idempotent reference) → Tx: SUCCEEDED → `payments.refunded_amount +=`, folio item (positive, `refund_id`) if the payment was on a folio, cash movement (CASH_OUT) for cash; FAILED → recorded with reason.
@@ -315,6 +325,8 @@ Move selected items between windows, to another reservation room's folio, or to 
 Open: one OPEN shift per user & property (unique index), opening float (CASH_MOVEMENT OPENING_FLOAT). During: cash payments/refunds/paid-outs/drops recorded as signed movements. Close: expected cash = float + Σ movements; counted cash entered; variance stored; drops recorded with bag number; closed shifts immutable (movements append-only). Night audit checks no shift is OPEN for D (or auto-closes per config). Permissions `cashier:operate` (own), `cashier:manage` (others, HIGH). Audit HIGH on close with variance. One Tx per action.
 
 ## 25. Deposit handling
+
+> **Implementation status.** Deferred beyond Phase 5: deposits need the reservation-level deposit ledger, allocation to deposit requests and the transfer at check-in; none of them is modelled as a stay field.
 
 Deposit request schedule (§2) → deposit payment (§11, kind DEPOSIT) → allocation to request (status PAID/PARTIALLY_PAID) → at check-in `DEPOSIT_TRANSFER` credit to window 1 → on cancellation: forfeited (posted as cancellation revenue against penalty) or refunded (§23) per policy. Deposit ledger report = DEPOSIT payments not yet transferred. Night audit flags overdue deposit requests (optional auto-cancel per policy).
 

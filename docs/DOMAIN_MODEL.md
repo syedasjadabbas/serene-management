@@ -358,6 +358,18 @@ Inventory effect: **OOO removes the room from sellable inventory** (`room_type_i
 - Corrections never edit rows: `REVERSAL` (exact negation, same business date), `ADJUSTMENT` (prior-date correction using the adjustment code, with reason), `TRANSFER_OUT/IN` pairs (move/split between folios).
 - Deposits are payments of kind `DEPOSIT` held against the reservation (deposit ledger) and transferred to the guest folio at check-in (`DEPOSIT_TRANSFER`).
 
+**As implemented (Phase 5).**
+
+- **Folio = billing window.** A `Folio` row is one window (1..`maxFolioWindows`) of a reservation room (decision D6); check-in opens window 1 (payee: primary guest; currency: the property currency). Further windows are opened on demand (`billing:transfer`). The UI groups the windows of a stay as its _account_.
+- **Ledger is the authority.** `folio_items` is append-only (trigger). `folios.charges_total / credits_total / balance / version` are maintained **only** by the `folio_items_apply` trigger on insert (payment-group codes count as credits, every other code as charges); a guard trigger rejects any other change to them, a new folio starts at zero, folios are never deleted. Every command still recomputes `SUM(amount)` under the folio lock and refuses to continue if it differs from the stored balance.
+- **Charges.** A posting is a `CHARGE` line (net amount) plus one `TAX` line per tax rule in force (`parent_item_id`). Manual postings: active REVENUE codes with `is_manual_post_allowed`, never tax/payment/paid-out codes; `min_amount`/`max_amount` apply to the unit price; quantity is an integer 1–999. The client sends code, quantity, unit price, reference and comment only.
+- **Room and package charges.** For a checked-in stay, every night _before_ the business date without a live posting is posted from `reservation_room_nights.rate_amount` with the rate plan's room code (tonight's charge belongs to night audit). Package components (rate-plan and reservation packages) post as their own lines (`source = PACKAGE`); included components are carved out of the room line so the night's total stays the rate; combined components are added to it; allowances are not posted (package ledger deferred). Each line carries a deterministic `posting_key` (`ROOM:<rr>:<night>:<generation>`, `PKG:<rr>:<night>:<component>:<generation>`) under a unique index, and the night's `posted_at` is set in the same transaction: a repeated run posts nothing. Reversing a room line clears `posted_at`; the next run posts generation 2.
+- **Corrections** never change a posted line: `REVERSAL` (same business date, exact negation of a charge and its taxes, `billing:adjust`), `ADJUSTMENT` (any date, credits part or all of a charge — tax included — split proportionally across the charge and its taxes, reason code required, `billing:adjust`). The database refuses a reversal that does not negate exactly, adjustments beyond the original, and mixing reversal and adjustment on one line.
+- **Payments** (`Payment`, kind `PAYMENT`, status `CAPTURED`) are taken against one window, in the folio currency only, never above the window balance, with the window `version` the cashier saw (409 when anything was posted since). The ledger line is a `PAYMENT` credit (negative) with the method's payment code and a gap-free receipt number (`R1`, `R2`, …). No gateway is called: card payments are recorded from the hotel's terminal with its approval reference.
+- **Void** (same business date, nothing refunded, `payments:void`): payment `VOIDED` + exact `REVERSAL` of its line. **Refund** (`payments:refund`): a `Refund` row (SUCCEEDED) against the original payment, `payments.refunded_amount` raised (never above the amount — check constraint; never lowered — trigger) and a positive `PAYMENT` line with `refund_id`.
+- **Money, currency and rounding.** Arithmetic uses exact bigint units of 1/10 000 (`lib/utils/money.ts`), never JavaScript numbers. A folio's currency is the property currency, fixed at opening (trigger); every ledger line must be in it (trigger); client amounts may not carry more decimals than the currency's `minor_units` (400). One rounding rule everywhere: **half away from zero, once, to the minor unit**. Taxes are **line-level**: each tax rule's amount is calculated on the posted line and rounded on its own (NET: percent of the net; COMPOUND: percent of net + earlier taxes in `sequence` order; FLAT_PER_UNIT: rate × quantity). Tax-inclusive lines (code `is_tax_inclusive`, or a rate plan with `tax_inclusive` for room and included package lines): the net is estimated as gross ÷ (1 + tax multiplier), taxes are calculated forward from it, and the net is gross − taxes, so the line always totals the gross exactly. Line amounts, folio totals and balances are exact sums of rounded lines and are never rounded again. Adjustments split the credited amount proportionally, each part rounded, the residual absorbed without exceeding any line. Payments and refunds must already be in minor units. No foreign-currency payment or FX conversion exists.
+- **Settlement**: a window with a zero ledger balance may be marked `SETTLED` (`settled_at`, `settled_by_id`); any later posting reopens it (trigger). CLOSED (invoiced) is not reachable yet (invoices deferred).
+
 ## 6. State machines
 
 Transitions are implemented as pure functions in `modules/<domain>/<domain>.policy.ts` (shared by server and UI) and enforced in services; the database backs the critical ones with constraints. Any transition not listed is **prohibited** and returns `INVALID_STATE_TRANSITION`.
@@ -452,6 +464,8 @@ stateDiagram-v2
 
 CLOSED is terminal (trigger rejects postings). Corrections to a closed folio are made by a credit note plus postings on a new folio. Prohibited: closing with non-zero balance; deleting folios; posting to another property's folio.
 
+**Phase 5:** OPEN → SETTLED by the settle command or by check-out (zero balance), SETTLED → OPEN by the ledger trigger on any new posting. `settled_at` is set exactly while SETTLED (check constraint). CLOSED arrives with invoices.
+
 ### 6.5 Payment
 
 ```mermaid
@@ -467,6 +481,8 @@ stateDiagram-v2
 ```
 
 Refunds are separate `Refund` rows (PENDING → SUCCEEDED | FAILED) against a CAPTURED payment; `payments.refunded_amount ≤ amount` (DB check). Prohibited: refunding FAILED/VOIDED payments; voiding after the business date closed (use refund); changing amount after capture.
+
+**Phase 5:** desk payments are created CAPTURED (no PENDING/AUTHORIZED without a gateway); CAPTURED → VOIDED only on the payment's business date and while nothing was refunded; refunds complete immediately (SUCCEEDED). A trigger keeps amount, currency, kind, folio, method and business date immutable and forbids deleting payments and completed refunds.
 
 ### 6.6 Housekeeping task
 

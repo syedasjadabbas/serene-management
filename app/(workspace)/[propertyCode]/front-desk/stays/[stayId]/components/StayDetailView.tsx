@@ -12,7 +12,7 @@ import { usePermissions } from "@/hooks/usePermissions";
 import { useProperty } from "@/hooks/useProperty";
 import { useStayQuery } from "@/lib/api/endpoints/front-desk.api";
 import { toClientApiError } from "@/lib/api/errors";
-import { formatDate, formatDateTime, pluralize } from "@/lib/utils/format";
+import { formatCurrency, formatDate, formatDateTime, pluralize } from "@/lib/utils/format";
 import { CheckOutDialog } from "../../../components/CheckOutDialog";
 import { RoomMoveDialog } from "./RoomMoveDialog";
 
@@ -102,6 +102,16 @@ export function StayDetailView({
       `${pluralize(stay.adults, "adult")}${stay.children ? `, ${pluralize(stay.children, "child", "children")}` : ""}`,
     ],
     ["Rate plan", `${stay.ratePlan.code} · ${stay.ratePlan.name}`],
+    ...(stay.allowedActions.viewFolio
+      ? ([
+          [
+            "Balance",
+            stay.folio
+              ? `${formatCurrency(stay.folio.balance, stay.folio.currencyCode, "en", stay.folio.minorUnits)} · ${pluralize(stay.folio.windows, "window")}${stay.folio.status === "SETTLED" ? " · settled" : ""}`
+              : "No folio yet",
+          ],
+        ] as [string, string][])
+      : []),
     [
       "Checked in",
       `${formatDateTime(stay.checkedInAt, property.timezone)}${stay.checkedInBy ? ` by ${stay.checkedInBy}` : ""} · business date ${formatDate(stay.arrivalBusinessDate)}`,
@@ -152,6 +162,14 @@ export function StayDetailView({
           ) : null}
           {stay.isWalkIn ? <Badge>Walk-in</Badge> : null}
           <div className="ms-auto flex flex-wrap gap-1.5">
+            {stay.allowedActions.viewFolio ? (
+              <Link
+                href={`/${property.code}/billing/${stay.reservationRoomId}` as Route}
+                className="inline-flex h-7 items-center rounded-md border border-border bg-surface px-2.5 text-xs hover:bg-surface-sunken"
+              >
+                Folio
+              </Link>
+            ) : null}
             {stay.allowedActions.moveRoom ? (
               <Button size="sm" variant="secondary" onClick={() => setDialog("move")}>
                 Change room

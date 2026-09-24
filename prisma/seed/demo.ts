@@ -26,6 +26,7 @@ import {
   initializeBusinessDate,
 } from "../../modules/business-date/business-date.service";
 import { guestSearchName } from "../../modules/guests/guests.policy";
+import { ensureGuestFolioInTx } from "../../modules/billing/billing.service";
 import { checkIn } from "../../modules/front-desk/front-desk.service";
 import { assignTask, queueCleaningInTx } from "../../modules/housekeeping/housekeeping.service";
 import { createRequest } from "../../modules/maintenance/maintenance.service";
@@ -144,6 +145,66 @@ const ROOM_TYPES: Record<string, InventorySpec["roomTypes"]> = {
   ],
 };
 
+/**
+ * Demo tax configuration (Phase 5), stored as tax rules in the database.
+ * SMR: 16% sales tax on rooms, food & beverage and spa. SDX: 10% service
+ * charge and 7% municipality fee, 5% VAT compounded on top of both, and a
+ * flat tourism fee per room night (after VAT, so not taxed itself).
+ */
+const ROOM_AND_OUTLETS = ["1000", "2000", "2010", "2020", "2030", "3030"];
+const TAXES: Record<string, InventorySpec["taxes"]> = {
+  SMR: [
+    {
+      code: "GST",
+      name: "Sales tax 16%",
+      calculation: "PERCENT",
+      basis: "NET",
+      rate: "16",
+      sequence: 1,
+      appliesTo: [...ROOM_AND_OUTLETS, "3000"],
+    },
+  ],
+  SDX: [
+    {
+      code: "SVC",
+      name: "Service charge 10%",
+      calculation: "PERCENT",
+      basis: "NET",
+      rate: "10",
+      sequence: 1,
+      bucket: "SERVICE_CHARGE",
+      appliesTo: ROOM_AND_OUTLETS,
+    },
+    {
+      code: "MUNI",
+      name: "Municipality fee 7%",
+      calculation: "PERCENT",
+      basis: "NET",
+      rate: "7",
+      sequence: 2,
+      appliesTo: ROOM_AND_OUTLETS,
+    },
+    {
+      code: "VAT",
+      name: "VAT 5%",
+      calculation: "PERCENT",
+      basis: "COMPOUND",
+      rate: "5",
+      sequence: 3,
+      appliesTo: [...ROOM_AND_OUTLETS, "3000", "3010", "3020", "3090"],
+    },
+    {
+      code: "TDIR",
+      name: "Tourism dirham",
+      calculation: "FLAT_PER_UNIT",
+      basis: "NET",
+      rate: "15",
+      sequence: 4,
+      appliesTo: ["1000"],
+    },
+  ],
+};
+
 /** [email local part, display name, role code, scope: "ORG" or property codes] */
 const USERS: [string, string, string, "ORG" | readonly string[]][] = [
   ["admin", "Organization Admin", "ORGANIZATION_ADMIN", "ORG"],
@@ -189,6 +250,7 @@ export async function seedDemo(): Promise<void> {
       seasonStart: addDays(businessDate, -30),
       seasonEnd: addDays(businessDate, 730),
       roomTypes: ROOM_TYPES[spec.code]!,
+      taxes: TAXES[spec.code]!,
     });
     const ctx: PropertyContext = {
       ...organization.adminCtx,
@@ -201,6 +263,7 @@ export async function seedDemo(): Promise<void> {
     };
     await seedPropertyReservations(ctx, organization.id, businessDate, inventory);
     await seedOperations(ctx, businessDate, inventory);
+    await seedFolios(ctx, businessDate);
     console.warn(`Seeded inventory and sample reservations for ${spec.code}.`);
   }
 }
@@ -742,5 +805,19 @@ async function seedOperations(ctx: PropertyContext, businessDate: string, invent
       description: "Reported by the guest in the last stay (demo data).",
       priority: "NORMAL",
     });
+  }
+}
+
+/**
+ * Billing (Phase 5): check-in opens window 1; stays checked in before
+ * folios existed get theirs here, through the same service.
+ */
+async function seedFolios(ctx: PropertyContext, businessDate: string) {
+  const rooms = await prisma.reservationRoom.findMany({
+    where: { propertyId: ctx.propertyId, status: "IN_HOUSE", folios: { none: {} } },
+    select: { id: true, primaryGuestId: true },
+  });
+  for (const room of rooms) {
+    await runInTransaction((tx) => ensureGuestFolioInTx(tx, ctx, businessDate, room, 1));
   }
 }

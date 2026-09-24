@@ -6,7 +6,7 @@ import type { RoleCode } from "@/lib/permissions/roles";
 import { bootstrapOrganization } from "@/modules/access/access.service";
 import { addDays, localDateInZone } from "@/modules/business-date/business-date.policy";
 import { guestSearchName } from "@/modules/guests/guests.policy";
-import { buildPropertyInventory } from "@/prisma/seed/inventory-builder";
+import { type TaxSpec, buildPropertyInventory } from "@/prisma/seed/inventory-builder";
 import { initializeBusinessDate } from "@/modules/business-date/business-date.service";
 import { createProperty } from "@/modules/properties/properties.service";
 import { uniqueSuffix } from "./http";
@@ -170,6 +170,7 @@ export async function buildFixtureInventory(
     oneAdult?: string;
     twoAdults?: string;
   }[],
+  options: { taxes?: TaxSpec[] } = {},
 ) {
   const property = org.properties[propertyKey]!;
   const current = await prisma.businessDate.findFirstOrThrow({
@@ -195,6 +196,7 @@ export async function buildFixtureInventory(
       extraChild: "1000",
       weekendUplift: "3000",
     })),
+    taxes: options.taxes,
   });
   return { ...inventory, businessDate };
 }

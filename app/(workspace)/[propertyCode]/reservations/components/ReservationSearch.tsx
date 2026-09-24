@@ -72,7 +72,7 @@ export function ReservationSearch() {
         ) : null}
       </header>
       <ReservationFilters key={filterKey} initial={filters} onApply={apply} />
-      <div className="overflow-x-auto rounded-lg border border-border-subtle bg-surface">
+      <div className="relative overflow-x-auto rounded-lg border border-border-subtle bg-surface">
         <table className="w-full min-w-[900px] text-sm">
           <caption className="sr-only">Reservations matching the filters</caption>
           <thead className="bg-surface-sunken text-left text-xs text-fg-secondary">

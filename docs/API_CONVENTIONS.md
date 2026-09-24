@@ -101,6 +101,28 @@ POST  /api/v1/properties/{id}/stays/{stayId}/room-move           { version, room
 POST  /api/v1/properties/{id}/stays/{stayId}/check-out           { version, earlyDeparture?, reasonCodeId?, reason? }
 ```
 
+**Implemented in Phase 5 (folios, charges, payments)**:
+
+```text
+GET   /api/v1/properties/{id}/billing/options                                  charge codes, payment methods, financial reason codes, currency + minor units
+GET   /api/v1/properties/{id}/folios?view=in_house|open_balance|all&q=&cursor=&limit=
+GET   /api/v1/properties/{id}/reservation-rooms/{rrId}/folio                   account: windows (ledger totals), room-night posting state, actions
+POST  /api/v1/properties/{id}/reservation-rooms/{rrId}/folio                   {}  open next window (1: billing:post; 2+: billing:transfer)
+GET   /api/v1/properties/{id}/reservation-rooms/{rrId}/folio/history           audit trail of the windows (billing:read + audit:read)
+POST  /api/v1/properties/{id}/reservation-rooms/{rrId}/room-charges            { through? }  past unposted nights · Idempotency-Key
+GET   /api/v1/properties/{id}/folios/{folioId}/items?cursor=&limit=            ledger, oldest first, running balance
+POST  /api/v1/properties/{id}/folios/{folioId}/charges/preview                 { transactionCodeId, quantity, unitAmount, reference?, comment? }  posts nothing
+POST  /api/v1/properties/{id}/folios/{folioId}/charges                         same body · billing:post · Idempotency-Key
+POST  /api/v1/properties/{id}/folios/{folioId}/payments                        { methodId, amount, version, currencyCode?, reference?, comment? } · payments:create · Idempotency-Key
+POST  /api/v1/properties/{id}/folios/{folioId}/settle                          { version } · payments:create
+POST  /api/v1/properties/{id}/folio-items/{itemId}/reverse                     { reason, reasonCodeId? } · billing:adjust (HIGH) · Idempotency-Key
+POST  /api/v1/properties/{id}/folio-items/{itemId}/adjust                      { amount, reasonCodeId, reason } · billing:adjust (HIGH) · Idempotency-Key
+POST  /api/v1/properties/{id}/payments/{paymentId}/void                        { reason, reasonCodeId? } · payments:void (HIGH) · Idempotency-Key
+POST  /api/v1/properties/{id}/payments/{paymentId}/refund                      { amount, reasonCodeId, reason, reference? } · payments:refund (HIGH) · Idempotency-Key
+```
+
+Bodies are strict: totals, taxes, balances, business dates and currency conversions are never accepted from the client (`currencyCode` on a payment is only an echo, and anything but the folio currency is refused). Amounts are decimal strings with at most the currency's minor units. Error reasons: `CODE_NOT_POSTABLE`, `PAID_OUT_NOT_SUPPORTED`, `FOLIO_CLOSED`, `NIGHT_NOT_OVER`, `NOTHING_TO_POST`, `NOT_CHECKED_IN`, `MAX_WINDOWS`, `CURRENCY_MISMATCH`, `PACKAGE_EXCEEDS_RATE`, `NOT_A_CHARGE`, `NOT_REVERSIBLE`, `NOT_ADJUSTABLE`, `ADJUSTMENT_EXCEEDS_CHARGE`, `PAYMENT_EXCEEDS_BALANCE`, `CURRENCY_NOT_SUPPORTED`, `METHOD_MISCONFIGURED`, `NOT_VOIDABLE`, `REFUND_NOT_ALLOWED`, `NOT_SETTLEABLE`, `FOLIO_BALANCE_OUTSTANDING` (422); `BALANCE_CHANGED`, `STALE_VERSION`, `NIGHT_POSTING_CHANGED` (409); `IDEMPOTENCY_CONFLICT` (409).
+
 **Implemented in Phase 4 (rooms, housekeeping, maintenance)**:
 
 ```text
@@ -227,6 +249,7 @@ Rules: messages are safe to show; the client localizes by `code` (+ `details`), 
 - Required header `Idempotency-Key` (UUID) on: payments, refunds, postings, transfers, check-in, check-out, night audit start, reservation create.
 - Stored per `(user, key)` with a SHA-256 of the request; replay with the same body returns the stored status/body; a different body → `409 IDEMPOTENCY_CONFLICT`; keys expire after 24 h.
 - RTK Query mutations generate the key once per user intent (not per retry).
+- **As implemented (Phase 5):** required (16–80 characters of `[A-Za-z0-9_-]`, 400 otherwise) on the financial commands — charges, room charges, payments, reversals, adjustments, voids, refunds — through `definePropertyRoute({ idempotent: true })`. The hash covers method, path and the _validated_ body. The key row is claimed inside the command's transaction right after the business-date lock: a concurrent duplicate blocks until the first commits and then receives the stored result; if the first failed, its key rolled back with it and the retry runs normally. Each dialog in the UI chooses its key when it opens. Check-in, check-out and room moves keep relying on the aggregate `version` (D14).
 
 ## 12. Concurrency
 

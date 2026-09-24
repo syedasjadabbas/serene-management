@@ -1,3 +1,4 @@
+import type { FolioSummary } from "@/modules/billing/billing.types";
 import type { RoomBoardStatus, RoomReadiness } from "@/modules/rooms/rooms.policy";
 import type { ArrivalState, CheckoutTiming } from "./front-desk.policy";
 
@@ -154,7 +155,9 @@ export interface StayDetail {
     by: string | null;
   }[];
   history: StayHistoryEntry[];
-  allowedActions: { checkOut: boolean; moveRoom: boolean };
+  /** Ledger balance of the stay's billing windows (null before a folio is opened). */
+  folio: FolioSummary | null;
+  allowedActions: { checkOut: boolean; moveRoom: boolean; viewFolio: boolean };
   /** Operational reason codes for the dialogs. */
   reasonCodes: { roomMove: CodeRef[]; earlyDeparture: CodeRef[] };
 }

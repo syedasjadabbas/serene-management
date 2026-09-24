@@ -1,5 +1,5 @@
 import "server-only";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 import { z } from "zod";
 import { ACCESS_COOKIE } from "@/lib/auth/cookies";
@@ -13,7 +13,7 @@ import {
 } from "@/lib/permissions/evaluate";
 import { type ResolvedSession, resolveSession } from "@/modules/access/access.service";
 import { getCurrentBusinessDate } from "@/modules/business-date/business-date.service";
-import type { PropertyContext, RequestMeta, SessionContext } from "./context";
+import type { IdempotencyRequest, PropertyContext, RequestMeta, SessionContext } from "./context";
 import { AppError, forbidden } from "./errors";
 import { consumeRateLimit, type RateLimitRule } from "./rate-limit";
 import { ok, toErrorResponse } from "./response";
@@ -109,7 +109,14 @@ export function definePropertyRoute<P extends { propertyId: string }, Q = undefi
   options: CommonOptions<P, Q, B> & {
     params: z.ZodType<P>;
     permission?: Permission;
-    handler: (args: Parsed<P, Q, B> & { ctx: PropertyContext }) => Promise<unknown>;
+    /**
+     * Financial commands: the `Idempotency-Key` header is required and passed
+     * to the service as `idempotency` (null on routes without this flag).
+     */
+    idempotent?: boolean;
+    handler: (
+      args: Parsed<P, Q, B> & { ctx: PropertyContext; idempotency: IdempotencyRequest | null },
+    ) => Promise<unknown>;
   },
 ): RouteFn {
   return (request, context) =>
@@ -131,6 +138,7 @@ export function definePropertyRoute<P extends { propertyId: string }, Q = undefi
 
       const parsed = await parse(request, context, options);
       assertReasonForHighRisk(request, options.permission, parsed.body);
+      const idempotency = options.idempotent ? idempotencyOf(request, parsed.body) : null;
 
       const ctx: PropertyContext = {
         ...session.ctx,
@@ -140,11 +148,34 @@ export function definePropertyRoute<P extends { propertyId: string }, Q = undefi
         currencyCode: property.currencyCode,
         businessDate: await getCurrentBusinessDate(property.id),
       };
-      return options.handler({ ...parsed, ctx });
+      return options.handler({ ...parsed, ctx, idempotency });
     });
 }
 
 // ---------------------------------------------------------------------------
+
+const IDEMPOTENCY_KEY = /^[A-Za-z0-9_-]{16,80}$/;
+
+/**
+ * Reads the client's Idempotency-Key and fingerprints the request (method,
+ * path and the validated body), so a key reused for a different request is
+ * detected instead of replaying the wrong response.
+ */
+function idempotencyOf(request: NextRequest, body: unknown): IdempotencyRequest {
+  const key = request.headers.get("idempotency-key")?.trim() ?? "";
+  if (!IDEMPOTENCY_KEY.test(key)) {
+    throw new AppError(
+      "VALIDATION_FAILED",
+      "An Idempotency-Key header (16-80 letters, digits, '-' or '_') is required",
+      { fields: { "Idempotency-Key": ["Missing or invalid"] } },
+    );
+  }
+  const route = `${request.method} ${request.nextUrl.pathname}`.slice(0, 200);
+  const requestHash = createHash("sha256")
+    .update(`${route} ${JSON.stringify(body ?? null)}`)
+    .digest("hex");
+  return { key, route, requestHash };
+}
 
 const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const GLOBAL_WRITE_LIMIT: RateLimitRule = { name: "api.write.ip", limit: 300, windowMs: 60_000 };

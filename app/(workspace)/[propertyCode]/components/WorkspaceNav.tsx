@@ -11,6 +11,7 @@ import type { Permission } from "@/lib/permissions/catalog";
 const ITEMS: { segment: string; label: string; permission: Permission | null }[] = [
   { segment: "", label: "Overview", permission: null },
   { segment: "front-desk", label: "Front desk", permission: "frontdesk:read" },
+  { segment: "billing", label: "Billing", permission: "billing:read" },
   { segment: "housekeeping", label: "Housekeeping", permission: "housekeeping:read" },
   { segment: "maintenance", label: "Maintenance", permission: "maintenance:read" },
   { segment: "availability", label: "Availability", permission: "availability:read" },
@@ -39,7 +40,7 @@ export function WorkspaceNav() {
                 href={href as Route}
                 aria-current={active ? "page" : undefined}
                 className={cn(
-                  "rounded-md px-2.5 py-1.5 text-sm whitespace-nowrap",
+                  "rounded-md px-2.5 py-1.5 text-sm whitespace-nowrap lg:px-2 xl:px-2.5",
                   active
                     ? "bg-brand-subtle font-medium text-brand"
                     : "text-fg-secondary hover:bg-surface-sunken hover:text-fg",

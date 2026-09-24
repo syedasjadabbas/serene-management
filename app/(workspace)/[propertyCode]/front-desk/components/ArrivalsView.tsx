@@ -40,7 +40,7 @@ export function ArrivalsView({ filter, q }: { filter: string; q: string }) {
           </Link>
         </Alert>
       ) : null}
-      <div className="overflow-x-auto rounded-lg border border-border-subtle bg-surface">
+      <div className="relative overflow-x-auto rounded-lg border border-border-subtle bg-surface">
         <table className="w-full min-w-[980px] text-sm">
           <caption className="sr-only">Arrivals for the business date</caption>
           <thead className="bg-surface-sunken text-left text-xs text-fg-secondary">

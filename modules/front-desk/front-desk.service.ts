@@ -33,6 +33,11 @@ import {
   isOverridableReadiness,
   roomReadiness,
 } from "@/modules/rooms/rooms.policy";
+import {
+  ensureGuestFolioInTx,
+  folioSummary,
+  settleForCheckoutInTx,
+} from "@/modules/billing/billing.service";
 import { queueCleaningInTx } from "@/modules/housekeeping/housekeeping.service";
 import {
   type LockedRoom,
@@ -91,8 +96,8 @@ import type {
  * takes a guest out of a room; the stays_one_in_house_per_room index and the
  * room_assignments_no_overlap constraint are the database-level backstop.
  *
- * Settlement (folio balances, payments, deposits) is Phase 5: check-out
- * records the operational departure only.
+ * Check-in opens billing window 1; check-out settles the windows through the
+ * billing service (folios are locked after the rooms).
  */
 
 // --- Helpers ------------------------------------------------------------------------
@@ -248,6 +253,8 @@ async function checkInInTx(
     "CHECK_IN",
     businessDate,
   );
+  // The guest's billing window 1 (property currency, primary guest as payee).
+  const folioId = await ensureGuestFolioInTx(tx, ctx, businessDate, current, 1);
 
   const notReadyAccepted = readiness !== "READY";
   await recordAudit(
@@ -274,6 +281,7 @@ async function checkInInTx(
         roomAssigned,
         roomFrontOfficeStatus: "OCCUPIED",
         arrivalBusinessDate: businessDate,
+        folioId,
         ...(notReadyAccepted ? { acceptedReadiness: readiness } : {}),
         ...(walkIn ? { walkIn: true } : {}),
       },
@@ -417,9 +425,10 @@ export async function moveRoom(
 /**
  * Operational check-out: IN_HOUSE → CHECKED_OUT, room vacant and dirty,
  * departure business date recorded. An early departure (confirmed by the
- * client with a reason code) releases the unused nights. Settlement of the
- * guest's account is Phase 5 (PropertyConfiguration.requireZeroBalanceCheckout
- * is enforced here once folios exist).
+ * client with a reason code) releases the unused nights. Financial rule:
+ * when PropertyConfiguration.requireZeroBalanceCheckout is on, every folio
+ * window must be at zero (422 FOLIO_BALANCE_OUTSTANDING otherwise); the
+ * windows are then SETTLED in the same transaction.
  */
 export async function checkOut(
   ctx: PropertyContext,
@@ -475,6 +484,10 @@ export async function checkOut(
       stayId: stay!.id,
       note: "Departure",
     });
+    // Financial check-out (Phase 5): with requireZeroBalanceCheckout every
+    // window must be at zero (recomputed from the ledger under the folio
+    // locks, taken after the room locks); zero windows become SETTLED.
+    const settlement = await settleForCheckoutInTx(tx, ctx, current.id);
     const { count } = await updateStayVersioned(tx, stay!.id, stay!.version, {
       status: "CHECKED_OUT",
       checkedOutAt: new Date(),
@@ -510,6 +523,7 @@ export async function checkOut(
           roomHousekeepingStatus: "DIRTY",
           cleaningTaskId: cleaning?.taskId ?? null,
           cleaningPriority: cleaning?.priority ?? null,
+          folio: settlement,
           ...(early ? { releasedNights: result.releasedNights, reasonCode: reasonCode?.code } : {}),
         },
         reason: input.reason ?? null,
@@ -869,7 +883,9 @@ export async function getStay(ctx: PropertyContext, stayId: string): Promise<Sta
       before: h.before,
       after: h.after,
     })),
+    folio: can("billing:read") ? await folioSummary(prisma, ctx.propertyId, rr.id) : null,
     allowedActions: {
+      viewFolio: can("billing:read"),
       checkOut:
         inHouse && businessDate !== null && can("frontdesk:checkout") && timing !== "SAME_DAY",
       moveRoom:

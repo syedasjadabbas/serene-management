@@ -43,6 +43,9 @@ function afterCommand(
     // Check-in / move / check-out change room status and queue cleaning tasks.
     ...operationsTags(arg.propertyId),
     { type: "Reservation" as const, id: `LIST-${arg.propertyId}` },
+    // Check-in opens window 1; check-out settles the windows.
+    { type: "Folio" as const, id: `LIST-${arg.propertyId}` },
+    ...(result ? [{ type: "Folio" as const, id: result.reservationRoomId }] : []),
     ...(result
       ? [
           { type: "Stay" as const, id: result.id },

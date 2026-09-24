@@ -60,6 +60,7 @@ import {
   findBookingOptions,
   findChannel,
   findMarketCode,
+  findNightsForPosting,
   findRatePlanDefaults,
   findReasonCode,
   findReservationDetail,
@@ -77,6 +78,7 @@ import {
   lockReservationRoom,
   releaseActiveAssignments,
   replacePrimaryGuest,
+  setNightPosted,
   sumNightAmounts,
   updateReservationRoomVersioned,
 } from "./reservations.repository";
@@ -1112,6 +1114,54 @@ export async function markCheckedOut(
   });
   if (early) await syncInventoryCounters(tx, ctx.propertyId, [unused]);
   return { departure: finalDeparture, releasedNights };
+}
+
+// --- Billing hooks ----------------------------------------------------------------------
+// Called by modules/billing inside its transaction, while it holds the
+// reservation room lock (lockReservationRoomById).
+
+/** The reservation room's stay nights with their priced rate and posting state. */
+export async function nightsForRoomCharges(
+  tx: Tx,
+  propertyId: string,
+  reservationRoomId: string,
+): Promise<
+  {
+    stayDate: string;
+    rateAmount: string;
+    currencyCode: string;
+    adults: number;
+    children: number;
+    ratePlanId: string;
+    posted: boolean;
+  }[]
+> {
+  const nights = await findNightsForPosting(tx, propertyId, reservationRoomId);
+  return nights.map((night) => ({
+    stayDate: toDateOnly(night.stayDate),
+    rateAmount: night.rateAmount.toFixed(4),
+    currencyCode: night.currencyCode,
+    adults: night.adults,
+    children: night.children,
+    ratePlanId: night.ratePlanId,
+    posted: night.postedAt !== null,
+  }));
+}
+
+/** Records that a night's room charge was posted (true) or reversed (false). */
+export async function markNightPosting(
+  tx: Tx,
+  reservationRoomId: string,
+  stayDate: string,
+  posted: boolean,
+): Promise<void> {
+  const { count } = await setNightPosted(tx, reservationRoomId, fromDateOnly(stayDate), posted);
+  if (count !== 1) {
+    throw new AppError("CONFLICT", "The night's room charge was changed by someone else", {
+      reason: "NIGHT_POSTING_CHANGED",
+      stayDate,
+    });
+  }
 }
 
 // --- Queries --------------------------------------------------------------------------

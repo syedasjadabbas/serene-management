@@ -29,7 +29,7 @@ export function formatMoney(units: MoneyUnits, fractionDigits = SCALE_DIGITS): s
 }
 
 /** Division rounding half away from zero. */
-function divideHalfUp(numerator: bigint, denominator: bigint): bigint {
+export function divideHalfUp(numerator: bigint, denominator: bigint): bigint {
   const negative = numerator < 0n !== denominator < 0n;
   const n = numerator < 0n ? -numerator : numerator;
   const d = denominator < 0n ? -denominator : denominator;
@@ -41,6 +41,16 @@ function divideHalfUp(numerator: bigint, denominator: bigint): bigint {
 function roundUnits(units: MoneyUnits, step: bigint): MoneyUnits {
   if (step <= 1n) return units;
   return divideHalfUp(units, step) * step;
+}
+
+/** Units of one minor currency unit (e.g. 100n = 0.01 for 2 minor units). */
+export function minorUnitStep(minorUnits: number): bigint {
+  return 10n ** BigInt(Math.max(0, SCALE_DIGITS - minorUnits));
+}
+
+/** True when the amount has no precision beyond the currency's minor units. */
+export function isMinorUnitAligned(units: MoneyUnits, minorUnits: number): boolean {
+  return units % minorUnitStep(minorUnits) === 0n;
 }
 
 /** Rounds to the currency's minor units (e.g. 2 for PKR, 3 for KWD). */
