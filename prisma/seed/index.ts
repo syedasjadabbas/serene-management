@@ -1,16 +1,19 @@
 /**
  * Seed entry point (`npm run db:seed`).
  *
- * Phase 0 seeds reference data only: the permission catalog, system role
- * templates and currencies. It is idempotent and safe in every environment.
- * The demo hotel dataset (properties, rooms, guests, reservations ...) is
- * added phase by phase behind SEED_DEMO=true (docs/IMPLEMENTATION_ROADMAP.md).
+ * Always seeds reference data: the permission catalog, system role templates
+ * and currencies (idempotent, safe in every environment). With
+ * SEED_DEMO=true it also creates the demo organization (prisma/seed/demo.ts),
+ * extended phase by phase (docs/IMPLEMENTATION_ROADMAP.md).
+ *
+ * Runs with the "react-server" export condition so domain services (which
+ * import "server-only") can be used outside Next.js.
  */
 import "dotenv/config";
-import { PrismaPg } from "@prisma/adapter-pg";
-import { PrismaClient } from "../../generated/prisma/client";
+import { prisma } from "../../lib/db/prisma";
 import { ALL_PERMISSIONS, PERMISSIONS, isHighRisk } from "../../lib/permissions/catalog";
 import { ROLE_TEMPLATES } from "../../lib/permissions/roles";
+import { seedDemo } from "./demo";
 
 const CURRENCIES = [
   { code: "PKR", name: "Pakistani Rupee", minorUnits: 2 },
@@ -25,10 +28,6 @@ const CURRENCIES = [
 ];
 
 async function main() {
-  const connectionString = process.env.DATABASE_URL;
-  if (!connectionString) throw new Error("DATABASE_URL is not set");
-  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString }) });
-
   try {
     await prisma.$transaction(async (tx) => {
       for (const currency of CURRENCIES) {
@@ -70,6 +69,7 @@ async function main() {
       `Seeded ${CURRENCIES.length} currencies, ${ALL_PERMISSIONS.length} permissions, ` +
         `${Object.keys(ROLE_TEMPLATES).length} system roles.`,
     );
+    if (process.env.SEED_DEMO === "true") await seedDemo();
   } finally {
     await prisma.$disconnect();
   }

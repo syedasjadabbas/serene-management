@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { ALL_PERMISSIONS, PERMISSIONS, isPermission } from "@/lib/permissions/catalog";
-import { canAccessProperty, hasPermission, type AccessProfile } from "@/lib/permissions/evaluate";
+import {
+  type AccessProfile,
+  canAccessProperty,
+  hasOrganizationPermission,
+  hasPermission,
+  hasPermissionAnywhere,
+  permissionsInScope,
+} from "@/lib/permissions/evaluate";
 import { ROLE_TEMPLATES } from "@/lib/permissions/roles";
 
 describe("permission catalog", () => {
@@ -36,7 +43,8 @@ describe("permission evaluation", () => {
     userId: "u1",
     organizationId: "o1",
     isSuperAdmin: false,
-    byProperty: { p1: ["reservations:read", "frontdesk:checkin"] },
+    organizationPermissions: [],
+    byProperty: { p1: ["reservations:read", "frontdesk:checkin", "users:manage"] },
   };
 
   it("grants only what the property grant contains", () => {
@@ -49,7 +57,26 @@ describe("permission evaluation", () => {
     expect(hasPermission(access, "p2", "reservations:read")).toBe(false);
   });
 
-  it("lets platform super admins through", () => {
-    expect(hasPermission({ ...access, isSuperAdmin: true }, "p2", "nightaudit:run")).toBe(true);
+  it("does not treat property grants as organization grants", () => {
+    expect(hasOrganizationPermission(access, "users:manage")).toBe(false);
+    expect(hasPermissionAnywhere(access, "users:manage")).toBe(true);
+    expect(permissionsInScope(access, null)).toEqual([]);
+    expect(permissionsInScope(access, "p1")).toContain("users:manage");
+  });
+
+  it("lets organization grants authorize organization-level actions", () => {
+    const orgAdmin: AccessProfile = { ...access, organizationPermissions: ["properties:manage"] };
+    expect(hasOrganizationPermission(orgAdmin, "properties:manage")).toBe(true);
+  });
+
+  it("lets super admins act only within properties resolved for them", () => {
+    const superAdmin: AccessProfile = {
+      ...access,
+      isSuperAdmin: true,
+      byProperty: { p1: [], p2: [] },
+    };
+    expect(hasPermission(superAdmin, "p2", "nightaudit:run")).toBe(true);
+    expect(hasPermission(superAdmin, "p3", "nightaudit:run")).toBe(false);
+    expect(hasOrganizationPermission(superAdmin, "roles:manage")).toBe(true);
   });
 });

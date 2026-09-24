@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { connection } from "next/server";
 import { IBM_Plex_Mono, IBM_Plex_Sans, IBM_Plex_Sans_Arabic } from "next/font/google";
 import { DEFAULT_LOCALE, directionOf } from "@/lib/i18n/config";
 import { Providers } from "./providers";
@@ -28,7 +29,9 @@ export const metadata: Metadata = {
   robots: { index: false, follow: false },
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default async function RootLayout({ children }: LayoutProps<"/">) {
+  // Every page renders per request so Next.js can apply the CSP nonce set by proxy.ts.
+  await connection();
   // Locale becomes per-user in Phase 1 (users.locale); the document direction
   // follows it so RTL layouts come from logical CSS properties, not forks.
   const locale = DEFAULT_LOCALE;

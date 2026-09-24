@@ -71,5 +71,15 @@ export const reasonSchema = z.object({
   comment: z.string().trim().max(1000).optional(),
 });
 
+/**
+ * Justification required by every command guarded by a high-risk permission
+ * (docs/RBAC.md). Stored on the HIGH audit record. `reasonCodeId` is optional
+ * for administrative actions that have no property reason-code category.
+ */
+export const highRiskReasonSchema = z.object({
+  reason: z.string().trim().min(3, "A reason is required").max(1000),
+  reasonCodeId: idSchema.optional(),
+});
+
 /** Optimistic concurrency: clients echo the version they edited. */
 export const versionSchema = z.object({ version: z.number().int().positive() });

@@ -1,6 +1,6 @@
 # SERENE MANAGEMENT — API Conventions
 
-Applies to every route handler under `app/api/v1/`. Implemented foundations: `types/api.ts` (envelope, error codes), `lib/http/errors.ts`, `lib/http/response.ts`, `lib/validation/common.ts`. The `defineRoute` helper (`lib/http/route.ts`) arrives in Phase 1 together with authentication.
+Applies to every route handler under `app/api/v1/`. Implemented foundations: `types/api.ts` (envelope, error codes), `lib/http/errors.ts`, `lib/http/response.ts`, `lib/validation/common.ts`. Route pipeline: `lib/http/route.ts` with three variants: `definePublicRoute` (login, refresh, logout, health), `defineSessionRoute` (authenticated; optional organization-level permission), `definePropertyRoute` (authenticated; property id from the path, property-level permission). "defineRoute" below refers to these.
 
 ---
 
@@ -145,7 +145,8 @@ Rules: messages are safe to show; the client localizes by `code` (+ `details`), 
 
 ## 8. Property scoping
 
-- `propertyId` in the path is authorized by `defineRoute` (`canAccessProperty`) before validation of the body.
+- `propertyId` in the path is authorized by `definePropertyRoute` (`canAccessProperty`) before the body is parsed. An inaccessible, foreign or non-existent property id all return the same `403 FORBIDDEN` ("You do not have access to this property"), so ids cannot be probed.
+- A property id supplied in a body (e.g. a role grant for a property) is authorized by the service in exactly that scope.
 - Services receive `ctx.propertyId`; repositories **must** include it in every `where` for property-scoped tables (and composite FKs make cross-property writes fail).
 - Loading a resource checks `resource.property_id = ctx.propertyId`; mismatch → `404`.
 - Organization-scoped endpoints filter by `ctx.organizationId`.

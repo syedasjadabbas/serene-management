@@ -19,11 +19,11 @@ Web-based hotel property management system (PMS) for single- and multi-property 
 
 ## Stack
 
-Next.js 16 (App Router) · React 19 · TypeScript (strict) · Tailwind CSS v4 · PostgreSQL 17 · Prisma 7 · Redux Toolkit / RTK Query (server state) · Zustand (UI state) · Zod · Vitest.
+Next.js 16 (App Router) · React 19 · TypeScript (strict) · Tailwind CSS v4 · PostgreSQL 18 · Prisma 7 · Redux Toolkit / RTK Query (server state) · Zustand (UI state) · Zod · Vitest.
 
 ## Getting started
 
-Requirements: Node.js ≥ 22.12, Docker (for PostgreSQL).
+Requirements: Node.js ≥ 22.12 and a native PostgreSQL 17+ installation (e.g. the Windows installer, service `postgresql-x64-18`, port 5432) including `psql`. Docker is not used.
 
 ```bash
 npm install
@@ -33,8 +33,10 @@ npm install
 cp .env.example .env
 ```
 
+Edit `.env`: replace `change-me` in `DATABASE_URL` with a strong password for the app role (16+ characters) and fill in the auth secrets. Then create the role `serene` and the databases `serene_management` and `serene_management_test` (once; prompts for your `postgres` superuser password):
+
 ```bash
-docker compose up -d
+npm run db:setup
 ```
 
 ```bash
@@ -51,16 +53,17 @@ npm run dev
 
 ## Scripts
 
-| Script                            | Does                                                                  |
-| --------------------------------- | --------------------------------------------------------------------- |
-| `npm run dev` / `build` / `start` | Next.js                                                               |
-| `npm run typecheck`               | Route type generation + `tsc --noEmit`                                |
-| `npm run lint`                    | ESLint (includes architectural import boundaries)                     |
-| `npm run test`                    | All Vitest suites (unit + database rules on PGlite, no Docker needed) |
-| `npm run verify`                  | typecheck → lint → test → production build                            |
-| `npm run db:migrate`              | Create/apply a development migration                                  |
-| `npm run db:deploy`               | Apply migrations                                                      |
-| `npm run db:seed`                 | Reference data (currencies, permissions, role templates)              |
-| `npm run db:validate`             | Validate the Prisma schema                                            |
+| Script                            | Does                                                                           |
+| --------------------------------- | ------------------------------------------------------------------------------ |
+| `npm run dev` / `build` / `start` | Next.js                                                                        |
+| `npm run typecheck`               | Route type generation + `tsc --noEmit`                                         |
+| `npm run lint`                    | ESLint (includes architectural import boundaries)                              |
+| `npm run test`                    | All Vitest suites (unit + database rules on PGlite, no database server needed) |
+| `npm run verify`                  | typecheck → lint → test → production build                                     |
+| `npm run db:setup`                | Create/update the app role and databases on native PostgreSQL (run once)       |
+| `npm run db:migrate`              | Create/apply a development migration                                           |
+| `npm run db:deploy`               | Apply migrations                                                               |
+| `npm run db:seed`                 | Reference data (currencies, permissions, role templates)                       |
+| `npm run db:validate`             | Validate the Prisma schema                                                     |
 
 Scripts invoke tools through `node node_modules/...` on purpose: npm's Windows command shims fail when the project path contains `&`.

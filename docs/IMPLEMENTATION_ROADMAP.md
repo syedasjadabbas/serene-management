@@ -39,7 +39,7 @@ Delivered:
 
 - Next.js 16.3 / React 19.2 / TypeScript (strict + `noUncheckedIndexedAccess`) / Tailwind CSS v4 / App Router, ESLint with architectural import boundaries, Prettier, Vitest.
 - Prisma 7.10 multi-file schema (123 models across 11 domain files), baseline migration + hand-written constraints migration (checks, 3 exclusion constraints, append-only/immutability triggers), verified with zero drift.
-- Shared foundations: Prisma client (`@prisma/adapter-pg`), env validation, API envelope and error codes, error mapping, Zod primitives, permission catalog (78 permissions) and 13 role templates with evaluation helpers, RTK Query `baseApi` + store factory + provider, Zustand UI store, i18n config (en/ur/ar, RTL), design tokens (light/dark, status colors, density), security headers, idempotent reference-data seed, Docker Compose PostgreSQL.
+- Shared foundations: Prisma client (`@prisma/adapter-pg`), env validation, API envelope and error codes, error mapping, Zod primitives, permission catalog (78 permissions) and 13 role templates with evaluation helpers, RTK Query `baseApi` + store factory + provider, Zustand UI store, i18n config (en/ur/ar, RTL), design tokens (light/dark, status colors, density), security headers, idempotent reference-data seed, native PostgreSQL bootstrap script (`npm run db:setup`, no Docker).
 - Tests: unit (permissions, validation) + database-rule tests on PGlite (isolation, business date, room assignment conflicts incl. share-with and day use, append-only audit, reservation checks) — 18 passing.
 - Documentation: this set.
 
@@ -59,6 +59,18 @@ Scope:
 - Seed: demo organization with two properties and users for every role template.
 
 Exit criteria: integration tests for login/refresh/reuse/lockout/reset; 401/403/404 matrix; property isolation (user of property A cannot read property B); audit written for user/role changes.
+
+### Phase 1 status (implemented, pending commit)
+
+Delivered: login/logout, access JWT + rotating refresh token with reuse detection and a 20 s race window, account lockout, session list/revoke, `GET /me`, `definePublicRoute` / `defineSessionRoute` / `definePropertyRoute` (CSRF origin check, per-IP rate limits, authentication, property scoping from the path, authorization, high-risk reason, Zod validation, envelope, database-error mapping incl. `23P01`/`23514`/`SM001`/`SM002`), `proxy.ts` (token gating + nonce CSP), organization/property retrieval and creation, property configuration (HIGH audit, time zone frozen after go-live), business-date view/initialization and the `requireOpenBusinessDate` posting lock, audit writer + paginated reader, users & roles administration (grant/revoke with no-escalation, disable, unlock), login/refresh/no-access pages and a minimal authenticated shell (property switcher, business-date badge, user menu), demo seed (`SEED_DEMO=true`), 82 tests (unit, PGlite database rules, integration against `serene_management_test`).
+
+Deferred, with reason:
+
+- **Password reset and user invitation**: need outbound email (integration not chosen yet). Schema (`password_reset_tokens`, `INVITED` status) is ready; users are created by the seed meanwhile.
+- **Idempotency keys**: no Phase 1 command needs replay protection; the mechanism lands with the first payment/posting command (Phase 5–6).
+- **Outbox writer / SSE**: no Phase 1 event has a consumer; introduced with the room rack (Phase 7).
+- **Design-system breadth**: only primitives used by Phase 1 screens were built (Button, TextField, Alert, Spinner, StatusPanel, header disclosure). React Aria Components remains the recommendation (open question 6) and is not yet adopted; current controls are native, accessible HTML.
+- **Open questions 3, 4, 7** remain open: rate limiting is in process memory (single instance), hosting undecided, Urdu typeface undecided.
 
 ## Phase 2 — Property configuration & rooms
 

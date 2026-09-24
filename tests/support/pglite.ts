@@ -9,7 +9,7 @@ const MIGRATIONS_DIR = join(process.cwd(), "prisma", "migrations");
 /**
  * In-process PostgreSQL (WASM) with every migration applied, for testing the
  * database-level rules (constraints, exclusion constraints, triggers) without
- * Docker. Service and API integration tests use a real PostgreSQL instead
+ * a running PostgreSQL server. Service and API integration tests use a real PostgreSQL instead
  * (docs/ARCHITECTURE.md §Testing strategy).
  */
 export async function createMigratedDatabase(): Promise<PGlite> {

@@ -13,6 +13,7 @@
     "test": "node node_modules/vitest/vitest.mjs run",
     "test:watch": "node node_modules/vitest/vitest.mjs",
     "test:db": "node node_modules/vitest/vitest.mjs run tests/db",
+    "db:setup": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/db/setup-native-postgres.ps1",
     "db:generate": "node node_modules/prisma/build/index.js generate",
     "db:validate": "node node_modules/prisma/build/index.js validate",
     "db:migrate": "node node_modules/prisma/build/index.js migrate dev",

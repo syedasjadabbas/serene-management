@@ -1,6 +1,6 @@
 # SERENE MANAGEMENT — Database Design
 
-PostgreSQL 17 (development via `docker-compose.yml`; constraint tests on PostgreSQL 18/PGlite) · Prisma 7.10 (`prisma-client` generator, `@prisma/adapter-pg`, multi-file schema, `partialIndexes` preview).
+PostgreSQL 18 (development: native Windows installation bootstrapped by `npm run db:setup`; supported: 17+; constraint tests on PGlite/PostgreSQL 18) · Prisma 7.10 (`prisma-client` generator, `@prisma/adapter-pg`, multi-file schema, `partialIndexes` preview).
 
 - Schema: [`prisma/schema/`](../prisma/schema) — one file per bounded context.
 - Migrations: [`prisma/migrations/`](../prisma/migrations)

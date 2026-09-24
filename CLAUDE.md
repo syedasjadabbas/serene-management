@@ -16,3 +16,4 @@ Non-negotiables:
 - New permissions go into `lib/permissions/catalog.ts` and the relevant role templates.
 - Before declaring work done: `npm run verify` (typecheck, lint, tests, build).
 - Run tools via the npm scripts (they call `node node_modules/...` because the repo path contains `&`, which breaks npm's Windows shims).
+- Development database is a **native PostgreSQL** installation (no Docker). `npm run db:setup` creates the app role and databases from `DATABASE_URL` in `.env`; never commit `.env`.

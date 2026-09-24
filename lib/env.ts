@@ -8,10 +8,12 @@ import { z } from "zod";
 const serverEnvSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   DATABASE_URL: z.url(),
-  AUTH_ACCESS_TOKEN_SECRET: z.string().min(32).optional(),
-  AUTH_REFRESH_TOKEN_SECRET: z.string().min(32).optional(),
-  AUTH_ACCESS_TOKEN_TTL_SECONDS: z.coerce.number().int().positive().default(900),
-  AUTH_REFRESH_TOKEN_TTL_SECONDS: z.coerce.number().int().positive().default(1_209_600),
+  /** HMAC key for access-token JWTs (HS256). */
+  AUTH_ACCESS_TOKEN_SECRET: z.string().min(32),
+  /** HMAC key (pepper) for hashing refresh and password-reset tokens at rest. */
+  AUTH_REFRESH_TOKEN_SECRET: z.string().min(32),
+  AUTH_ACCESS_TOKEN_TTL_SECONDS: z.coerce.number().int().min(60).max(3600).default(900),
+  AUTH_REFRESH_TOKEN_TTL_SECONDS: z.coerce.number().int().min(3600).default(1_209_600),
   FIELD_ENCRYPTION_KEY: z.string().optional(),
   APP_URL: z.url().default("http://localhost:3000"),
 });
