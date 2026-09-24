@@ -27,6 +27,8 @@ import {
 } from "../../modules/business-date/business-date.service";
 import { guestSearchName } from "../../modules/guests/guests.policy";
 import { checkIn } from "../../modules/front-desk/front-desk.service";
+import { assignTask, queueCleaningInTx } from "../../modules/housekeeping/housekeeping.service";
+import { createRequest } from "../../modules/maintenance/maintenance.service";
 import { createProperty } from "../../modules/properties/properties.service";
 import { stayNights } from "../../modules/reservations/reservations.policy";
 import type { CreateReservationInput } from "../../modules/reservations/reservations.schema";
@@ -149,6 +151,9 @@ const USERS: [string, string, string, "ORG" | readonly string[]][] = [
   ["fom.smr", "Bilal Ahmed (Front Office Manager)", "FRONT_OFFICE_MANAGER", ["SMR"]],
   ["agent.smr", "Sara Malik (Front Desk)", "FRONT_DESK_AGENT", ["SMR"]],
   ["hk.smr", "Imran Ali (Housekeeping)", "HOUSEKEEPER", ["SMR"]],
+  ["hksup.smr", "Farah Jamil (Housekeeping Supervisor)", "HOUSEKEEPING_MANAGER", ["SMR"]],
+  ["maint.smr", "Kashif Mehmood (Maintenance)", "MAINTENANCE_STAFF", ["SMR"]],
+  ["chief.smr", "Tariq Aziz (Chief Engineer)", "MAINTENANCE_MANAGER", ["SMR"]],
   ["gm.sdx", "Omar Haddad (GM, City Hotel)", "GENERAL_MANAGER", ["SDX"]],
   ["auditor", "Nadia Rahman (Auditor, both hotels)", "AUDITOR", ["SMR", "SDX"]],
 ];
@@ -195,6 +200,7 @@ export async function seedDemo(): Promise<void> {
       businessDate,
     };
     await seedPropertyReservations(ctx, organization.id, businessDate, inventory);
+    await seedOperations(ctx, businessDate, inventory);
     console.warn(`Seeded inventory and sample reservations for ${spec.code}.`);
   }
 }
@@ -481,8 +487,9 @@ async function ensureOrganization(): Promise<{ id: string; adminCtx: SessionCont
   if (existing) {
     const admin = await prisma.user.findUniqueOrThrow({
       where: { email: "admin@serene.test" },
-      select: { id: true },
+      select: { id: true, passwordHash: true },
     });
+    await ensureDemoUsers(existing.id, admin);
     return { id: existing.id, adminCtx: systemContext(existing.id, admin.id) };
   }
 
@@ -582,6 +589,55 @@ async function ensureOrganization(): Promise<{ id: string; adminCtx: SessionCont
   return { id: organization.id, adminCtx };
 }
 
+/**
+ * Demo users added in later phases, for an organization seeded earlier. They
+ * share the existing demo password (the admin's hash), like all demo users.
+ */
+async function ensureDemoUsers(
+  organizationId: string,
+  admin: { id: string; passwordHash: string | null },
+) {
+  const roles = await prisma.role.findMany({
+    where: { organizationId: null, isSystem: true },
+    select: { id: true, code: true },
+  });
+  const properties = await prisma.property.findMany({
+    where: { organizationId },
+    select: { id: true, code: true },
+  });
+  for (const [local, displayName, role, scope] of USERS.slice(1)) {
+    const email = `${local}@serene.test`;
+    if (await prisma.user.findUnique({ where: { email }, select: { id: true } })) continue;
+    const roleRow = roles.find((r) => r.code === role);
+    if (!roleRow || scope === "ORG" || !admin.passwordHash) continue;
+    const propertyIds = scope
+      .map((code) => properties.find((p) => p.code === code)?.id)
+      .filter((id): id is string => !!id);
+    const user = await prisma.user.create({
+      data: {
+        organizationId,
+        email,
+        displayName,
+        passwordHash: admin.passwordHash,
+        passwordChangedAt: new Date(),
+        status: "ACTIVE",
+        defaultPropertyId: propertyIds[0] ?? null,
+      },
+      select: { id: true },
+    });
+    await prisma.userRoleAssignment.createMany({
+      data: propertyIds.map((propertyId) => ({
+        userId: user.id,
+        roleId: roleRow.id,
+        scope: "PROPERTY" as const,
+        propertyId,
+        grantedById: admin.id,
+      })),
+    });
+    console.warn(`Added demo user ${email} (existing demo password).`);
+  }
+}
+
 /** The seed acts as the organization admin; audit records attribute to it. */
 function systemContext(organizationId: string, adminId: string): SessionContext {
   return {
@@ -605,4 +661,86 @@ function roleId(roleIdsByCode: Record<string, string>, code: string): string {
   const id = roleIdsByCode[code];
   if (!id) throw new Error(`Role template ${code} is missing`);
   return id;
+}
+
+/**
+ * Housekeeping and maintenance sample data (Phase 4). SMR only gives guests
+ * inspected rooms: when that rule is switched on, rooms that are vacant and
+ * clean at that moment are recorded as inspected once, so the demo keeps
+ * ready rooms. Every vacant dirty room gets a cleaning task; the first two
+ * go to the demo housekeeper. One open maintenance request.
+ */
+async function seedOperations(ctx: PropertyContext, businessDate: string, inventory: Inventory) {
+  if (ctx.propertyCode === "SMR") {
+    const configuration = await prisma.propertyConfiguration.findUnique({
+      where: { propertyId: ctx.propertyId },
+      select: { requireInspectedForCheckIn: true },
+    });
+    if (!configuration?.requireInspectedForCheckIn) {
+      await prisma.propertyConfiguration.upsert({
+        where: { propertyId: ctx.propertyId },
+        update: { requireInspectedForCheckIn: true },
+        create: { propertyId: ctx.propertyId, requireInspectedForCheckIn: true },
+      });
+      await prisma.room.updateMany({
+        where: {
+          propertyId: ctx.propertyId,
+          housekeepingStatus: "CLEAN",
+          frontOfficeStatus: "VACANT",
+        },
+        data: { housekeepingStatus: "INSPECTED" },
+      });
+    }
+  }
+
+  const dirtyRooms = await prisma.room.findMany({
+    where: {
+      propertyId: ctx.propertyId,
+      status: "ACTIVE",
+      frontOfficeStatus: "VACANT",
+      housekeepingStatus: { in: ["DIRTY", "PICKUP"] },
+    },
+    orderBy: { number: "asc" },
+    select: { id: true },
+  });
+  for (const room of dirtyRooms) {
+    await runInTransaction((tx) =>
+      queueCleaningInTx(tx, ctx, businessDate, {
+        roomId: room.id,
+        note: "Demo: vacant dirty room",
+      }),
+    );
+  }
+
+  const housekeeper = await prisma.user.findUnique({
+    where: { email: `hk.${ctx.propertyCode.toLowerCase()}@serene.test` },
+    select: { id: true },
+  });
+  if (housekeeper) {
+    const unassigned = await prisma.housekeepingTask.findMany({
+      where: { propertyId: ctx.propertyId, status: "PENDING", attendantId: null },
+      orderBy: [{ priority: "asc" }, { createdAt: "asc" }],
+      take: 2,
+      select: { id: true, version: true },
+    });
+    const alreadyAssigned = await prisma.housekeepingTask.count({
+      where: { propertyId: ctx.propertyId, attendant: { userId: housekeeper.id } },
+    });
+    if (alreadyAssigned === 0) {
+      for (const task of unassigned) {
+        await assignTask(ctx, task.id, { version: task.version, assigneeId: housekeeper.id });
+      }
+    }
+  }
+
+  if ((await prisma.maintenanceRequest.count({ where: { propertyId: ctx.propertyId } })) === 0) {
+    const [firstType] = Object.values(inventory.roomTypes);
+    await createRequest(ctx, {
+      roomId: firstType!.roomIds.at(-2),
+      categoryId: inventory.maintenanceCategories.HVAC!,
+      title: "Air conditioner rattles at night",
+      description: "Reported by the guest in the last stay (demo data).",
+      priority: "NORMAL",
+    });
+  }
 }

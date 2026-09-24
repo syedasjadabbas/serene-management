@@ -43,7 +43,9 @@ const FILTERS: Record<View, { value: string; label: string }[]> = {
     { value: "vacant_not_ready", label: "Vacant · not ready" },
     { value: "occupied", label: "Occupied" },
     { value: "out_of_order", label: "Out of order" },
+    { value: "out_of_service", label: "Out of service" },
     { value: "arriving", label: "Arrival assigned" },
+    { value: "departing", label: "Departing" },
   ],
 };
 

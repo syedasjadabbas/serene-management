@@ -50,6 +50,7 @@ import {
 import {
   type LockedReservationRoom,
   closeActiveAssignments,
+  lockRoomRow,
   countActiveAssignments,
   countRoomOutOfOrder,
   deleteNights,
@@ -192,7 +193,13 @@ async function requireRoomType(tx: Tx, propertyId: string, id: string) {
   return roomType;
 }
 
-/** Validates a specific room for a stay: same property, active, right type, not out of order. */
+/**
+ * Validates a specific room for a stay: same property, active, right type,
+ * not out of order. The room row is locked FOR UPDATE first, so the check
+ * and the assignment that follows serialize with out-of-order placement
+ * (which locks the same row before checking assignments). Lock order: call
+ * after any inventory and sequence locks of the command.
+ */
 async function requireAssignableRoom(
   tx: Tx,
   propertyId: string,
@@ -201,6 +208,7 @@ async function requireAssignableRoom(
   arrival: string,
   departure: string,
 ) {
+  await lockRoomRow(tx, propertyId, roomId);
   const room = await findRoom(tx, propertyId, roomId);
   if (!room) throw notFound("Room");
   if (room.roomTypeId !== roomTypeId) {
@@ -360,16 +368,6 @@ export async function createReservationInTx(
       reason: "GUEST_RESTRICTED",
     });
   }
-  const room = input.roomId
-    ? await requireAssignableRoom(
-        tx,
-        ctx.propertyId,
-        input.roomId,
-        roomType.id,
-        input.arrival,
-        input.departure,
-      )
-    : null;
 
   const stay = {
     arrival: input.arrival,
@@ -392,6 +390,18 @@ export async function createReservationInTx(
     await reserveInventory(tx, ctx.propertyId, [demand], { allowOverbooking: input.override });
 
   const confirmationNumber = await allocateNumber(tx, ctx.propertyId, "confirmation");
+  // The specific room is locked and checked after inventory and sequence (lock order).
+  const room = input.roomId
+    ? await requireAssignableRoom(
+        tx,
+        ctx.propertyId,
+        input.roomId,
+        roomType.id,
+        input.arrival,
+        input.departure,
+      )
+    : null;
+
   const reservation = await insertReservation(tx, {
     propertyId: ctx.propertyId,
     confirmationNumber,
@@ -1145,6 +1155,7 @@ export async function listAvailableRooms(
     floor: r.floor,
     housekeepingStatus: r.housekeeping_status,
     frontOfficeStatus: r.front_office_status,
+    outOfService: r.out_of_service,
     isAccessible: r.is_accessible,
     isSmoking: r.is_smoking,
   }));

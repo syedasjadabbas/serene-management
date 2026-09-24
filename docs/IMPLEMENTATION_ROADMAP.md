@@ -85,6 +85,18 @@ The product owner re-sequenced Phase 2 to **Reservations + Availability**. It de
 
 Moved to later phases: configuration screens for rooms, rate plans and restrictions; full guest profiles (documents, preferences, merge); room holds and auto-assign; deposits and cancellation penalties (billing); negotiated, member and day-use rates; block pickup (groups); turnaway capture.
 
+## Phase 4 (as executed) — Housekeeping, rooms and maintenance (pending commit)
+
+Delivered on the existing schema (housekeeping tasks/types/attendants, maintenance requests/activities/categories, room service blocks and room status history were modelled in Phase 0; `housekeeping:*`, `maintenance:*`, `rooms:out_of_order` permissions and role templates already existed):
+
+- **Rooms module**: readiness across occupancy, housekeeping and service; out of order (removed from inventory, oversell-checked) and out of service (sellable, not usable without override); return to service as vacant-dirty with a priority cleaning task; the single room board (filters by status, floor, room type; urgency ordering; guest names only with `frontdesk:read`); room detail with status history (now with reasons).
+- **Housekeeping**: tasks with assignment to permission holders, take/start/pause/complete/skip/cancel, inspection pass/fail, supervisor corrections; check-out and room moves queue the departure clean in their transaction; workspace with board, my tasks, open tasks, inspections.
+- **Maintenance**: requests with priority, assignment, start/hold/resume/resolve/close/reopen/cancel, activity log and notes, optional room block with release on resolve; workspace and request page.
+- **Front desk integration**: out-of-service readiness; room assignment locks the room row (fixes a block-vs-assignment race).
+- **Schema**: one migration (task completion by, status history reason, attendant roster uniqueness, lifecycle checks). **Demo**: housekeeping supervisor and maintenance users, SMR requires inspected rooms.
+
+Deferred: task sheets and credits, night-audit task generation and carry-over, discrepancies, DND / make-up room, turndown workflow, lost and found, preventive maintenance, attachments, parts and time, scheduled blocks activated by night audit.
+
 ## Phase 3 (as executed) — Front desk: check-in, room moves, check-out (pending commit)
 
 Delivered on the existing schema (`Stay`, `RoomAssignment`, room status, `room_status_history`, reason categories, `frontdesk:*` permissions were already modelled):

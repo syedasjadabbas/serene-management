@@ -1,4 +1,5 @@
 import "server-only";
+import { Prisma } from "@/generated/prisma/client";
 import type { Tx } from "@/lib/db/prisma";
 
 export function findSessionWithUser(tx: Tx, sessionId: string) {
@@ -44,6 +45,33 @@ export function findGrantedPermissions(tx: Tx, userId: string, organizationId: s
     WHERE a."user_id" = ${userId}::uuid
       AND (r."organization_id" = ${organizationId}::uuid OR r."organization_id" IS NULL)
       AND (a."property_id" IS NULL OR (p."organization_id" = ${organizationId}::uuid AND p."status" = 'ACTIVE'))`;
+}
+
+/**
+ * Active users of the organization holding `permission` at the property,
+ * through an organization-wide or a property-scoped role grant.
+ */
+export function findUsersWithPermission(
+  tx: Tx,
+  organizationId: string,
+  propertyId: string,
+  permission: string,
+  userId: string | null,
+) {
+  return tx.$queryRaw<{ id: string; display_name: string }[]>`
+    SELECT DISTINCT u."id", u."display_name"
+    FROM "users" u
+    JOIN "user_role_assignments" a ON a."user_id" = u."id"
+    JOIN "roles" r ON r."id" = a."role_id"
+    JOIN "role_permissions" rp ON rp."role_id" = r."id"
+    WHERE u."organization_id" = ${organizationId}::uuid
+      AND u."status" = 'ACTIVE'
+      AND (r."organization_id" = ${organizationId}::uuid OR r."organization_id" IS NULL)
+      AND rp."permission_key" = ${permission}
+      AND (a."property_id" IS NULL OR a."property_id" = ${propertyId}::uuid)
+      ${userId ? Prisma.sql`AND u."id" = ${userId}::uuid` : Prisma.empty}
+    ORDER BY u."display_name"
+    LIMIT 500`;
 }
 
 export function findActiveProperties(tx: Tx, organizationId: string, ids: string[] | "ALL") {

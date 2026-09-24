@@ -175,9 +175,12 @@ function cursorCondition(cursor: { v: string; i: string } | null, idColumn: Pris
   return Prisma.sql`AND (g."search_name", ${idColumn}) > (${cursor.v}, ${cursor.i}::uuid)`;
 }
 
-const outOfOrderToday = (businessDate: string) => Prisma.sql`EXISTS (
+const blockedToday = (
+  businessDate: string,
+  kind: "OUT_OF_ORDER" | "OUT_OF_SERVICE",
+) => Prisma.sql`EXISTS (
   SELECT 1 FROM "room_service_blocks" b
-  WHERE b."room_id" = r."id" AND b."kind" = 'OUT_OF_ORDER' AND b."status" IN ('SCHEDULED', 'ACTIVE')
+  WHERE b."room_id" = r."id" AND b."kind" = ${kind}::"service_block_kind" AND b."status" IN ('SCHEDULED', 'ACTIVE')
     AND b."from_date" <= ${businessDate}::date AND b."to_date" > ${businessDate}::date)`;
 
 const latestNote = Prisma.sql`LEFT JOIN LATERAL (
@@ -215,6 +218,7 @@ export interface ArrivalSqlRow {
   housekeeping_status: string | null;
   front_office_status: string | null;
   room_out_of_order: boolean;
+  room_out_of_service: boolean;
   stay_id: string | null;
   latest_note: string | null;
 }
@@ -250,7 +254,8 @@ export function findArrivals(
            r."id" AS "room_id", r."number" AS "room_number",
            r."housekeeping_status"::text AS "housekeeping_status",
            r."front_office_status"::text AS "front_office_status",
-           (r."id" IS NOT NULL AND ${outOfOrderToday(businessDate)}) AS "room_out_of_order",
+           (r."id" IS NOT NULL AND ${blockedToday(businessDate, "OUT_OF_ORDER")}) AS "room_out_of_order",
+           (r."id" IS NOT NULL AND ${blockedToday(businessDate, "OUT_OF_SERVICE")}) AS "room_out_of_service",
            s."id" AS "stay_id", note."body" AS "latest_note"
     FROM "reservation_rooms" rr
     JOIN "reservations" res ON res."id" = rr."reservation_id"
@@ -388,61 +393,4 @@ export async function findSummaryCounts(tx: Tx, propertyId: string, businessDate
       AND ((rr."arrival_date" = ${businessDate}::date AND rr."status" IN ('RESERVED', 'IN_HOUSE'))
            OR rr."status" = 'IN_HOUSE')`;
   return rows[0]!;
-}
-
-export interface RoomBoardSqlRow {
-  id: string;
-  number: string;
-  floor: string | null;
-  room_type_id: string;
-  room_type_code: string;
-  housekeeping_status: string;
-  front_office_status: string;
-  out_of_order: boolean;
-  stay_id: string | null;
-  stay_guest: string | null;
-  stay_departure: Date | null;
-  arriving_reservation_room_id: string | null;
-  arriving_reservation_id: string | null;
-  arriving_guest: string | null;
-}
-
-/** Every active room with its status, current in-house stay and today's assigned arrival. */
-export function findRoomBoard(
-  tx: Tx,
-  propertyId: string,
-  businessDate: string,
-  roomTypeId: string | null,
-) {
-  return tx.$queryRaw<RoomBoardSqlRow[]>`
-    SELECT r."id", r."number", f."name" AS "floor",
-           rt."id" AS "room_type_id", rt."code" AS "room_type_code",
-           r."housekeeping_status"::text AS "housekeeping_status",
-           r."front_office_status"::text AS "front_office_status",
-           ${outOfOrderToday(businessDate)} AS "out_of_order",
-           ih."stay_id", ih."guest" AS "stay_guest", ih."departure_date" AS "stay_departure",
-           arr."id" AS "arriving_reservation_room_id", arr."reservation_id" AS "arriving_reservation_id",
-           arr."guest" AS "arriving_guest"
-    FROM "rooms" r
-    JOIN "room_types" rt ON rt."id" = r."room_type_id"
-    LEFT JOIN "floors" f ON f."id" = r."floor_id"
-    LEFT JOIN LATERAL (
-      SELECT s."id" AS "stay_id", rr."departure_date",
-             concat_ws(', ', g."last_name", g."first_name") AS "guest"
-      FROM "stays" s
-      JOIN "reservation_rooms" rr ON rr."id" = s."reservation_room_id"
-      JOIN "guests" g ON g."id" = s."primary_guest_id"
-      WHERE s."property_id" = r."property_id" AND s."room_id" = r."id" AND s."status" = 'IN_HOUSE'
-      LIMIT 1) ih ON TRUE
-    LEFT JOIN LATERAL (
-      SELECT rr."id", rr."reservation_id", concat_ws(', ', g."last_name", g."first_name") AS "guest"
-      FROM "reservation_rooms" rr
-      JOIN "guests" g ON g."id" = rr."primary_guest_id"
-      WHERE rr."property_id" = r."property_id" AND rr."room_id" = r."id"
-        AND rr."status" = 'RESERVED' AND rr."arrival_date" = ${businessDate}::date
-      ORDER BY rr."id" LIMIT 1) arr ON TRUE
-    WHERE r."property_id" = ${propertyId}::uuid AND r."status" = 'ACTIVE'
-      ${roomTypeId ? Prisma.sql`AND r."room_type_id" = ${roomTypeId}::uuid` : Prisma.empty}
-    ORDER BY r."sort_order", r."number"
-    LIMIT 2000`;
 }

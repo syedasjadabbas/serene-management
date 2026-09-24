@@ -1,7 +1,6 @@
 import { z } from "zod";
 import { cursorPageQuerySchema, idSchema } from "@/lib/validation/common";
 import { createReservationSchema } from "@/modules/reservations/reservations.schema";
-import { ROOM_BOARD_FILTERS } from "@/modules/rooms/rooms.policy";
 import { ARRIVAL_FILTERS, DEPARTURE_FILTERS, IN_HOUSE_FILTERS } from "./front-desk.policy";
 
 export const stayParamsSchema = z.object({ propertyId: idSchema, stayId: idSchema }).strict();
@@ -110,11 +109,3 @@ export const departuresQuerySchema = cursorPageQuerySchema
   .extend({ q: listSearch, filter: z.enum(DEPARTURE_FILTERS).default("all") })
   .strict();
 export type DeparturesQuery = z.infer<typeof departuresQuerySchema>;
-
-export const roomBoardQuerySchema = z
-  .object({
-    filter: z.enum(ROOM_BOARD_FILTERS).default("all"),
-    roomTypeId: idSchema.optional(),
-  })
-  .strict();
-export type RoomBoardQuery = z.infer<typeof roomBoardQuerySchema>;

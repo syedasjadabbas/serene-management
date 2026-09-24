@@ -309,6 +309,8 @@ model RoomStatusHistory {
   businessDate DateTime        @map("business_date") @db.Date
   /// USER, CHECK_IN, CHECK_OUT, ROOM_MOVE, NIGHT_AUDIT, HOUSEKEEPING, MAINTENANCE, INTERFACE
   source       String          @db.VarChar(20)
+  /// Why the status changed (reason code / comment), when the command has one.
+  reason       String?         @db.VarChar(500)
   changedById  String?         @map("changed_by_id") @db.Uuid
   createdAt    DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
 

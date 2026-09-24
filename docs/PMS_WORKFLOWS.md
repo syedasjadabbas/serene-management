@@ -213,6 +213,8 @@ Scheduled check-out executes §12 automatically at a time when the folio is sett
 
 ## 13. Housekeeping after departure → room available
 
+> **Implementation status (Phase 4).** Implemented: departure clean queued by check-out / room move / return to service; task assign, start (take), pause, complete, skip, cancel; room inspection pass/fail; supervisor corrections (mark dirty / mark clean, audited, with reason in the room history); housekeeping board shared with the front desk. Deferred: task sheets and credit balancing, night-audit generation of stayover tasks, discrepancies (§28), guest service status (DND / make-up room), turndown workflow, lost and found.
+
 - **Entities**: HousekeepingTask, HousekeepingTaskSheet, Room, RoomStatusHistory.
 - **Flow**: departure task PENDING → attendant IN_PROGRESS → COMPLETED (room DIRTY → CLEAN) → if inspection required: supervisor INSPECTED (room → INSPECTED) or FAILED_INSPECTION (room → DIRTY, task back to attendant). Room becomes **available for check-in** when VACANT + (CLEAN or INSPECTED per config) + IN_SERVICE. Queued arrivals are notified via outbox.
 - **Validation**: attendant owns the task (or supervisor), task belongs to D, room not OOO.
@@ -362,6 +364,8 @@ Only via §26 step 6. Effects visible to all modules: new postings dated D+1; ar
 - **Audit**: STANDARD. **Tx**: one Tx per report/resolve.
 
 ## 29. Maintenance
+
+> **Implementation status (Phase 4).** Implemented as written, except preventive maintenance plans, photos/attachments, time and parts tracking and on-hold from ASSIGNED. Out-of-order placement additionally checks that the room type still has a free room for every blocked night (`BLOCK_OVERSELLS`); room assignment locks the room row before its out-of-order check, so a block and an assignment of the same room cannot both succeed.
 
 - **Report**: request (room or location, category, priority, description, photos as attachments) → OPEN; permission `maintenance:create`.
 - **OOO/OOS link**: creating (or later adding) a room service block from the request (`rooms:out_of_order`, HIGH): validation that the room has no in-house guest or future assignment overlapping (must move/unassign first, listed to the user); inventory `out_of_order +1` for OOO nights (locked rows); room `service_status` updated when the block becomes ACTIVE on its from date.

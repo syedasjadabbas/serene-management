@@ -226,6 +226,7 @@ function changedFields(
 const SEQUENCES = {
   confirmation: { start: 100000, prefix: "" },
   cancellation: { start: 1000, prefix: "X" },
+  maintenance: { start: 1000, prefix: "M" },
 } as const;
 
 export async function allocateNumber(
@@ -245,7 +246,10 @@ export async function allocateNumber(
 export async function frontOfficeRules(
   tx: Tx,
   propertyId: string,
-): Promise<{ requireInspectedForCheckIn: boolean }> {
+): Promise<{ requireInspectedForCheckIn: boolean; usePickupStatus: boolean }> {
   const configuration = await findConfiguration(tx, propertyId);
-  return { requireInspectedForCheckIn: configuration?.requireInspectedForCheckIn ?? false };
+  return {
+    requireInspectedForCheckIn: configuration?.requireInspectedForCheckIn ?? false,
+    usePickupStatus: configuration?.usePickupStatus ?? false,
+  };
 }

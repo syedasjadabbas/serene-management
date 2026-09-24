@@ -25,6 +25,7 @@ describe("room readiness", () => {
     housekeepingStatus: "CLEAN" as const,
     frontOfficeStatus: "VACANT" as const,
     outOfOrder: false,
+    outOfService: false,
     ...overrides,
   });
 

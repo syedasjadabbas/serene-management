@@ -11,6 +11,8 @@ import type { Permission } from "@/lib/permissions/catalog";
 const ITEMS: { segment: string; label: string; permission: Permission | null }[] = [
   { segment: "", label: "Overview", permission: null },
   { segment: "front-desk", label: "Front desk", permission: "frontdesk:read" },
+  { segment: "housekeeping", label: "Housekeeping", permission: "housekeeping:read" },
+  { segment: "maintenance", label: "Maintenance", permission: "maintenance:read" },
   { segment: "availability", label: "Availability", permission: "availability:read" },
   { segment: "reservations", label: "Reservations", permission: "reservations:read" },
 ];
@@ -25,7 +27,7 @@ export function WorkspaceNav() {
   return (
     <nav
       aria-label="Workspace"
-      className="order-last -mx-1 w-full overflow-x-auto md:order-none md:mx-0 md:w-auto"
+      className="order-last -mx-1 w-full overflow-x-auto lg:order-none lg:mx-0 lg:w-auto"
     >
       <ul className="flex items-center gap-0.5">
         {ITEMS.filter((item) => !item.permission || can(item.permission)).map((item) => {

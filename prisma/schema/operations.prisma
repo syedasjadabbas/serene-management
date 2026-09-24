@@ -74,6 +74,8 @@ model HousekeepingAttendant {
 
   @@unique([propertyId, code])
   @@unique([propertyId, id])
+  /// A system user appears at most once on a property's attendant roster.
+  @@unique([propertyId, userId], map: "housekeeping_attendants_user_key", where: raw("user_id IS NOT NULL"))
   @@map("housekeeping_attendants")
 }
 
@@ -134,6 +136,8 @@ model HousekeepingTask {
   notes         String?                @db.VarChar(2000)
   startedAt     DateTime?              @map("started_at") @db.Timestamptz(3)
   completedAt   DateTime?              @map("completed_at") @db.Timestamptz(3)
+  /// User who completed the cleaning (the attendant, or a supervisor on their behalf).
+  completedById String?                @map("completed_by_id") @db.Uuid
   inspectedAt   DateTime?              @map("inspected_at") @db.Timestamptz(3)
   inspectedById String?                @map("inspected_by_id") @db.Uuid
   version       Int                    @default(1)

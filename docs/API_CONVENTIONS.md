@@ -101,6 +101,29 @@ POST  /api/v1/properties/{id}/stays/{stayId}/room-move           { version, room
 POST  /api/v1/properties/{id}/stays/{stayId}/check-out           { version, earlyDeparture?, reasonCodeId?, reason? }
 ```
 
+**Implemented in Phase 4 (rooms, housekeeping, maintenance)**:
+
+```text
+GET   /api/v1/properties/{id}/rooms/board?filter=&floorId=&roomTypeId=   shared room board + counts (front desk, housekeeping)
+GET   /api/v1/properties/{id}/rooms/board-options                        floors, room types, block reasons
+GET   /api/v1/properties/{id}/rooms/{roomId}                             room detail, live blocks, status history
+POST  /api/v1/properties/{id}/rooms/{roomId}/blocks                      { kind, from?, to, reasonCodeId, notes?, reason }  rooms:out_of_order (HIGH)
+POST  /api/v1/properties/{id}/room-blocks/{blockId}/release              { reason }  return to service (room DIRTY + cleaning task)
+POST  /api/v1/properties/{id}/rooms/{roomId}/inspect                     { version, outcome: PASS|FAIL, notes? }  housekeeping:inspect
+POST  /api/v1/properties/{id}/rooms/{roomId}/mark-dirty | mark-clean      { version, notes? }  housekeeping:update | housekeeping:assign
+GET   /api/v1/properties/{id}/housekeeping/summary | options
+GET   /api/v1/properties/{id}/housekeeping/tasks?view=open|mine|inspections|all&status=&roomId=&cursor=&limit=
+POST  /api/v1/properties/{id}/housekeeping/tasks                         { roomId, taskTypeId, priority, assigneeId?, notes? }  housekeeping:assign
+GET   /api/v1/properties/{id}/housekeeping/tasks/{taskId}
+POST  /api/v1/properties/{id}/housekeeping/tasks/{taskId}/assign | start | pause | complete | skip | cancel
+GET   /api/v1/properties/{id}/maintenance?view=open|mine|in_progress|resolved|closed|all&priority=&q=&cursor=&limit=
+POST  /api/v1/properties/{id}/maintenance                                { roomId|location, categoryId, title, priority, assigneeId?, blockRoom?, reason? }
+GET   /api/v1/properties/{id}/maintenance/summary | options | {requestId}
+POST  /api/v1/properties/{id}/maintenance/{requestId}/assign | start | hold | resume | resolve | close | reopen | cancel | block-room | notes
+```
+
+Commands carry the aggregate `version` (task, request, or the room's for room-level housekeeping commands); the server decides every target status from the action. Error reasons: `NOT_TASK_OWNER`, `NOT_ASSIGNEE` (403); `TASK_EXISTS`, `BLOCK_OVERLAPS`, `ROOM_ASSIGNED`, `ROOM_OCCUPIED`, `BLOCK_RELEASED` (409); `BLOCK_OVERSELLS`, `ROOM_STILL_BLOCKED`, `NO_ROOM` (422). Guest names on the board are returned only to users with `frontdesk:read`.
+
 Check-in is addressed by reservation room (the stay does not exist yet); later commands by stay. Stay commands carry the stay's `version`. Permissions: `frontdesk:read` (lists, stay), `rooms:read` (room board, room options), `frontdesk:checkin` (+ `reservations:create` for walk-ins, `rooms:assign` to choose a room), `rooms:assign` (moves), `frontdesk:checkout`; accepting a room that is not ready needs `rooms:update_status`. Error reasons in `error.details.reason`: `ROOM_REQUIRED`, `ROOM_OCCUPIED` (409), `ROOM_NOT_READY`, `ROOM_OUT_OF_ORDER`, `ROOM_TYPE_MISMATCH`, `NO_REMAINING_NIGHTS`, `EARLY_DEPARTURE_NOT_CONFIRMED`, `SAME_DAY_CHECK_OUT` (422).
 
 The reservation **room** is the unit of every command (a multi-room booking has one per room); the booking (`reservations/{id}`) is the read aggregate.

@@ -11,6 +11,7 @@ const READINESS_TONES: Record<RoomReadiness, BadgeTone> = {
   READY: "success",
   OCCUPIED: "danger",
   OUT_OF_ORDER: "danger",
+  OUT_OF_SERVICE: "warning",
   DIRTY: "warning",
   NOT_INSPECTED: "warning",
 };
@@ -22,6 +23,7 @@ export function RoomReadinessBadge({ readiness }: { readiness: RoomReadiness }) 
 
 const BOARD_TONES: Record<RoomBoardStatus, BadgeTone> = {
   OUT_OF_ORDER: "danger",
+  OUT_OF_SERVICE: "warning",
   OCCUPIED: "info",
   VACANT_READY: "success",
   VACANT_NOT_READY: "warning",

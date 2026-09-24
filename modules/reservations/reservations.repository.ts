@@ -68,6 +68,14 @@ export function findReasonCode(
   });
 }
 
+/** Row-locks a room of the property (FOR UPDATE); a missing room is reported by findRoom. */
+export async function lockRoomRow(tx: Tx, propertyId: string, id: string) {
+  await tx.$queryRaw`
+    SELECT "id" FROM "rooms"
+    WHERE "id" = ${id}::uuid AND "property_id" = ${propertyId}::uuid
+    FOR UPDATE`;
+}
+
 export function findRoom(tx: Tx, propertyId: string, id: string) {
   return tx.room.findFirst({
     where: { id, propertyId, status: "ACTIVE" },
@@ -430,12 +438,18 @@ export function findAvailableRooms(
       floor: string | null;
       housekeeping_status: string;
       front_office_status: string;
+      out_of_service: boolean;
       is_accessible: boolean;
       is_smoking: boolean;
     }[]
   >`
     SELECT r."id", r."number", f."name" AS "floor", r."housekeeping_status"::text AS "housekeeping_status",
-           r."front_office_status"::text AS "front_office_status", r."is_accessible", r."is_smoking"
+           r."front_office_status"::text AS "front_office_status",
+           EXISTS (
+             SELECT 1 FROM "room_service_blocks" s
+             WHERE s."room_id" = r."id" AND s."kind" = 'OUT_OF_SERVICE' AND s."status" IN ('SCHEDULED', 'ACTIVE')
+               AND s."from_date" < ${departure}::date AND s."to_date" > ${arrival}::date
+           ) AS "out_of_service", r."is_accessible", r."is_smoking"
     FROM "rooms" r
     LEFT JOIN "floors" f ON f."id" = r."floor_id"
     WHERE r."property_id" = ${propertyId}::uuid

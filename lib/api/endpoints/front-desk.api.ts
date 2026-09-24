@@ -7,13 +7,14 @@ import type {
 import type {
   ArrivalRow,
   FrontDeskSummary,
-  RoomBoardRow,
   RoomOption,
   StayDetail,
   StayRow,
 } from "@/modules/front-desk/front-desk.types";
+import type { RoomBoardRow } from "@/modules/rooms/rooms.types";
 import type { ApiSuccess, CursorPageMeta } from "@/types/api";
 import { baseApi } from "../baseApi";
+import { operationsTags } from "./operations-tags";
 
 /**
  * Front desk endpoints (Phase 3). Shared by the front desk workspace, the
@@ -39,9 +40,9 @@ function afterCommand(
   arg: { propertyId: string },
 ) {
   return [
-    listTag(arg.propertyId),
+    // Check-in / move / check-out change room status and queue cleaning tasks.
+    ...operationsTags(arg.propertyId),
     { type: "Reservation" as const, id: `LIST-${arg.propertyId}` },
-    { type: "Availability" as const, id: arg.propertyId },
     ...(result
       ? [
           { type: "Stay" as const, id: result.id },

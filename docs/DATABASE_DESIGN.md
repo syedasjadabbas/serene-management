@@ -6,6 +6,7 @@ PostgreSQL 18 (development: native Windows installation bootstrapped by `npm run
 - Migrations: [`prisma/migrations/`](../prisma/migrations)
   - `20260924000000_init` — generated baseline (123 tables) + extensions `pg_trgm`, `btree_gist`.
   - `20260924000100_constraints` — hand-written check constraints, exclusion constraints and triggers.
+  - `20260925090000_housekeeping_maintenance_operations` — `housekeeping_tasks.completed_by_id`, `room_status_history.reason`, partial unique `housekeeping_attendants_user_key` (one roster row per user and property), check constraints `housekeeping_tasks_lifecycle_chk` and `maintenance_requests_lifecycle_chk` (Phase 4).
   - `20260924160000_front_desk_occupancy_guards` — partial unique index `stays_one_in_house_per_room` and the stay check constraints `stays_checkout_chk`, `stays_business_dates_chk`, `stays_reinstated_chk` (Phase 3).
   - `20260924120327_reservation_search_created_index` — `reservation_rooms (property_id, created_at DESC)` for the reservation search's "created on" filter and newest-first sort (Phase 2).
 - Verified: migrations apply cleanly; `prisma migrate diff` from the migrated database to the schema is **empty** (Prisma does not try to drop the hand-written rules); `tests/db/constraints.test.ts` proves the key rules.
@@ -204,6 +205,13 @@ Custom SQLSTATEs: `SM001` (immutable/append-only violation), `SM002` (closed fol
 - **Stays** are created by check-in and are the operational record of an occupancy (1:1 with a reservation room). `stays_one_in_house_per_room` makes double occupancy impossible at the database level, including the case the assignment exclusion constraint cannot see: a departing guest who has not checked out yet while the next guest's assignment starts on the same day. It will be replaced by an occupancy-key-aware rule when share-with is built.
 - **Room assignments are history**: a room move or check-out releases the active assignment and truncates `to_date` to the business date, so released rows record the nights actually spent in each room; the exclusion constraint only considers active rows.
 - **Room status** changes made by the front desk (front office VACANT/OCCUPIED, housekeeping → DIRTY on departure or move) write `room_status_history` (append-only) with source `CHECK_IN`, `CHECK_OUT` or `ROOM_MOVE` in the same transaction.
+
+### Phase 4 notes
+
+- **Reused tables**: `housekeeping_tasks`, `housekeeping_task_types`, `housekeeping_attendants`, `maintenance_requests`, `maintenance_activities`, `maintenance_categories`, `room_service_blocks`, `room_status_history` were modelled in Phase 0; Phase 4 adds only the columns and guards above.
+- **Service blocks** are the source of truth for out of order / out of service; `room_service_blocks_no_overlap` allows one live block per room and night. Out-of-order placement and release lock the room type's inventory cells and rewrite their counters (`out_of_order`).
+- **Room row lock**: every command that puts a guest into a room, assigns a room, blocks it or changes its housekeeping status locks the `rooms` row FOR UPDATE, after inventory and sequence locks (ARCHITECTURE §5, D15).
+- **Room status history** now records the reason of the change (cleaning task, inspection result, block reason, correction comment).
 
 ## 6. Transaction boundaries
 

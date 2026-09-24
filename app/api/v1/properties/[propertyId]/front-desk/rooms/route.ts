@@ -1,12 +1,12 @@
 import { definePropertyRoute } from "@/lib/http/route";
-import { roomBoardQuerySchema } from "@/modules/front-desk/front-desk.schema";
-import { listRoomBoard } from "@/modules/front-desk/front-desk.service";
 import { propertyParamsSchema } from "@/modules/properties/properties.schema";
+import { roomBoardQuerySchema } from "@/modules/rooms/rooms.schema";
+import { listRoomBoard } from "@/modules/rooms/rooms.service";
 
-/** Room board: every active room with occupancy, readiness and today's arrival. */
+/** Room board rows for the front desk (the shared board of the rooms module, without counts). */
 export const GET = definePropertyRoute({
   permission: "rooms:read",
   params: propertyParamsSchema,
   query: roomBoardQuerySchema,
-  handler: ({ ctx, query }) => listRoomBoard(ctx, query),
+  handler: async ({ ctx, query }) => (await listRoomBoard(ctx, query)).items,
 });

@@ -48,6 +48,8 @@ export interface BuiltInventory {
   channels: Record<string, string>;
   reasonCodes: Record<string, string>;
   cancellationPolicies: Record<string, string>;
+  taskTypes: Record<string, string>;
+  maintenanceCategories: Record<string, string>;
 }
 
 const date = (value: string) => new Date(`${value}T00:00:00.000Z`);
@@ -121,6 +123,9 @@ export async function buildPropertyInventory(db: Db, spec: InventorySpec): Promi
     ["NO_SHOW", "NOSHOW", "Guest did not arrive"],
     ["NO_SHOW", "LATE", "Arrived after release time"],
     ["OUT_OF_ORDER", "MAINT", "Maintenance work"],
+    ["OUT_OF_ORDER", "RENO", "Renovation"],
+    ["OUT_OF_SERVICE", "TOUCH", "Touch-up / minor repair"],
+    ["OUT_OF_SERVICE", "AMEN", "Amenity or furniture missing"],
     ["ROOM_MOVE", "GUEST", "Guest request"],
     ["ROOM_MOVE", "NOISE", "Noise or comfort complaint"],
     ["ROOM_MOVE", "MAINT", "Maintenance issue in room"],
@@ -387,6 +392,51 @@ export async function buildPropertyInventory(db: Db, spec: InventorySpec): Promi
     }
   }
 
+  // Housekeeping task types and maintenance categories (Phase 4) ---------------------
+  const taskTypes: Record<string, string> = {};
+  for (const [code, name, minutes, changesRoomStatus, requiresInspection] of [
+    ["DEP", "Departure clean", 45, true, true],
+    ["STAY", "Stayover clean", 25, true, false],
+    ["DEEP", "Deep clean", 120, true, true],
+    ["TURN", "Turndown", 10, false, false],
+    ["SPEC", "Special cleaning", 60, true, true],
+  ] as const) {
+    const row = await upsertByCode(
+      await db.housekeepingTaskType.findFirst({
+        where: { propertyId, code },
+        select: { id: true },
+      }),
+      () =>
+        db.housekeepingTaskType.create({
+          data: {
+            propertyId,
+            code,
+            name,
+            estimatedMinutes: minutes,
+            changesRoomStatus,
+            requiresInspection,
+          },
+          select: { id: true },
+        }),
+    );
+    taskTypes[code] = row.id;
+  }
+  const maintenanceCategories: Record<string, string> = {};
+  for (const [code, name] of [
+    ["PLUMB", "Plumbing"],
+    ["ELEC", "Electrical"],
+    ["HVAC", "Heating and air conditioning"],
+    ["FURN", "Furniture and fixtures"],
+    ["GEN", "General"],
+  ] as const) {
+    const row = await upsertByCode(
+      await db.maintenanceCategory.findFirst({ where: { propertyId, code }, select: { id: true } }),
+      () =>
+        db.maintenanceCategory.create({ data: { propertyId, code, name }, select: { id: true } }),
+    );
+    maintenanceCategories[code] = row.id;
+  }
+
   return {
     roomTypes,
     ratePlans,
@@ -396,5 +446,7 @@ export async function buildPropertyInventory(db: Db, spec: InventorySpec): Promi
     channels,
     reasonCodes,
     cancellationPolicies,
+    taskTypes,
+    maintenanceCategories,
   };
 }

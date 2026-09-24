@@ -488,6 +488,10 @@ stateDiagram-v2
 
 COMPLETED is terminal when the task type does not require inspection. Tasks belong to one business date; night audit cancels leftovers and generates the next day's tasks.
 
+**As implemented (Phase 4).** Tasks are worked by system users: the attendant roster (`housekeeping_attendants`) holds one row per user and property, created on first assignment; assignees must hold `housekeeping:update` at the property (checked in the database, never by role name). The assigned attendant or a supervisor (`housekeeping:assign`) works a task; anyone with `housekeeping:update` may take an unassigned task by starting it. Deviations from the diagram: a task IN_PROGRESS cannot be cancelled (pause first); inspection outcomes are driven by the room inspection command, which also sets the awaiting task to INSPECTED / FAILED_INSPECTION. A cleaning task type that changes room status turns a DIRTY/PICKUP room CLEAN on completion; the room is **ready** only when the readiness rule says so (INSPECTED when `requireInspectedForCheckIn`). Check-out, room moves (vacated room) and returns to service queue the departure clean (`DEP`) in their own transaction; its priority is URGENT when a guest arrives in the room today, PRIORITY after maintenance / out of order, NORMAL otherwise. Open tasks of earlier business dates stay visible until night audit exists.
+
+**Room readiness (Phase 4).** `rooms.policy.roomReadiness` combines the three axes: out of order (block covering D) → OUT_OF_ORDER; occupied → OCCUPIED; out of service → OUT_OF_SERVICE (usable only with an audited override); then housekeeping: INSPECTED → READY, CLEAN → READY or NOT_INSPECTED, DIRTY/PICKUP → DIRTY. Check-in, room moves and the room board all use it. Service blocks are the source of truth for out-of-order / out-of-service; `rooms.service_status` mirrors a block that covers the business date (placed or released today) and is recorded in `room_status_history` (field SERVICE).
+
 ### 6.7 Maintenance request
 
 ```mermaid
@@ -506,6 +510,8 @@ stateDiagram-v2
 ```
 
 Resolving a request linked to an active room service block prompts release of the block (the room returns to service with its return status).
+
+**As implemented (Phase 4).** A request never changes room readiness by itself. A blocking issue places an out-of-order / out-of-service block linked to the request (`rooms:out_of_order`, HIGH audit), at creation or later. Resolving with "return to service" releases the linked blocks: the room comes back DIRTY with a priority cleaning task, so it is ready only after housekeeping and inspection. A request with a live block cannot be cancelled. Hold is allowed from IN_PROGRESS only. Priorities LOW / NORMAL / HIGH / URGENT ("critical" = URGENT) order every list. Request numbers come from the property sequence `maintenance` (`M1000`, `M1001`, …).
 
 ### 6.8 Group / block
 

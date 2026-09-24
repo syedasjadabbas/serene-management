@@ -31,12 +31,13 @@ import {
   type RoomStatusSnapshot,
   READINESS_LABELS,
   isOverridableReadiness,
-  roomBoardStatus,
   roomReadiness,
 } from "@/modules/rooms/rooms.policy";
+import { queueCleaningInTx } from "@/modules/housekeeping/housekeeping.service";
 import {
   type LockedRoom,
   changeRoomStatus,
+  listRoomBoard,
   lockRoomsForUpdate,
   roomStatusHistory,
 } from "@/modules/rooms/rooms.service";
@@ -53,7 +54,6 @@ import {
   findArrivals,
   findOperationalReasonCodes,
   findReservationRoomForOptions,
-  findRoomBoard,
   findStayDetail,
   findStayRef,
   findStayRows,
@@ -68,7 +68,6 @@ import type {
   CheckOutInput,
   DeparturesQuery,
   InHouseQuery,
-  RoomBoardQuery,
   RoomMoveInput,
   WalkInInput,
 } from "./front-desk.schema";
@@ -76,7 +75,6 @@ import type {
   ArrivalRow,
   FrontDeskGuest,
   FrontDeskSummary,
-  RoomBoardRow,
   RoomOption,
   StayDetail,
   StayRow,
@@ -153,6 +151,7 @@ function readinessOf(
     housekeepingStatus: string;
     frontOfficeStatus: string;
     outOfOrder: boolean;
+    outOfService: boolean;
   },
   requireInspected: boolean,
 ): RoomReadiness {
@@ -362,7 +361,7 @@ export async function moveRoom(
     if (count !== 1) throw staleVersion("Stay");
 
     const actor = { propertyId: ctx.propertyId, userId: ctx.userId };
-    // The vacated room was used by the guest: vacant and dirty until housekeeping (Phase 4).
+    // The vacated room was used by the guest: vacant and dirty, queued for cleaning.
     await changeRoomStatus(
       tx,
       actor,
@@ -371,6 +370,11 @@ export async function moveRoom(
       "ROOM_MOVE",
       businessDate,
     );
+    const cleaning = await queueCleaningInTx(tx, ctx, businessDate, {
+      roomId: from.id,
+      stayId: stay!.id,
+      note: `Guest moved to room ${to.number}`,
+    });
     await changeRoomStatus(
       tx,
       actor,
@@ -398,6 +402,7 @@ export async function moveRoom(
           effectiveFrom: businessDate,
           reasonCode: reasonCode.code,
           vacatedRoomHousekeepingStatus: "DIRTY",
+          vacatedRoomCleaningTaskId: cleaning?.taskId ?? null,
           ...(notReadyAccepted ? { acceptedReadiness: readiness } : {}),
         },
         reason: input.reason ?? null,
@@ -463,6 +468,13 @@ export async function checkOut(
       "CHECK_OUT",
       businessDate,
     );
+    // The room is not ready until housekeeping has cleaned (and, where
+    // required, inspected) it: queue the departure clean in this transaction.
+    const cleaning = await queueCleaningInTx(tx, ctx, businessDate, {
+      roomId: room.id,
+      stayId: stay!.id,
+      note: "Departure",
+    });
     const { count } = await updateStayVersioned(tx, stay!.id, stay!.version, {
       status: "CHECKED_OUT",
       checkedOutAt: new Date(),
@@ -496,6 +508,8 @@ export async function checkOut(
           timing,
           roomFrontOfficeStatus: "VACANT",
           roomHousekeepingStatus: "DIRTY",
+          cleaningTaskId: cleaning?.taskId ?? null,
+          cleaningPriority: cleaning?.priority ?? null,
           ...(early ? { releasedNights: result.releasedNights, reasonCode: reasonCode?.code } : {}),
         },
         reason: input.reason ?? null,
@@ -512,17 +526,14 @@ export async function checkOut(
 export async function getSummary(ctx: PropertyContext): Promise<FrontDeskSummary> {
   const businessDate = requireBusinessDate(ctx);
   const counts = await findSummaryCounts(prisma, ctx.propertyId, businessDate);
-  const rules = await frontOfficeRules(prisma, ctx.propertyId);
-  const board = await findRoomBoard(prisma, ctx.propertyId, businessDate, null);
+  const board = await listRoomBoard(ctx, { filter: "all" });
   const rooms: Record<RoomBoardStatus, number> = {
-    OUT_OF_ORDER: 0,
-    OCCUPIED: 0,
-    VACANT_READY: 0,
-    VACANT_NOT_READY: 0,
+    OUT_OF_ORDER: board.counts.OUT_OF_ORDER,
+    OUT_OF_SERVICE: board.counts.OUT_OF_SERVICE,
+    OCCUPIED: board.counts.OCCUPIED,
+    VACANT_READY: board.counts.VACANT_READY,
+    VACANT_NOT_READY: board.counts.VACANT_NOT_READY,
   };
-  for (const row of board) {
-    rooms[roomBoardStatus(boardSnapshot(row), rules.requireInspectedForCheckIn)] += 1;
-  }
   return {
     businessDate,
     arrivals: {
@@ -537,19 +548,7 @@ export async function getSummary(ctx: PropertyContext): Promise<FrontDeskSummary
       dueOut: counts.due_out,
     },
     departures: { dueOut: counts.due_out, departed: counts.departed },
-    rooms: { ...rooms, total: board.length },
-  };
-}
-
-function boardSnapshot(row: {
-  housekeeping_status: string;
-  front_office_status: string;
-  out_of_order: boolean;
-}): RoomStatusSnapshot {
-  return {
-    housekeepingStatus: row.housekeeping_status as RoomStatusSnapshot["housekeepingStatus"],
-    frontOfficeStatus: row.front_office_status as RoomStatusSnapshot["frontOfficeStatus"],
-    outOfOrder: row.out_of_order,
+    rooms: { ...rooms, total: board.counts.total },
   };
 }
 
@@ -591,6 +590,7 @@ export async function listArrivals(
                   housekeepingStatus: row.housekeeping_status,
                   frontOfficeStatus: row.front_office_status,
                   outOfOrder: row.room_out_of_order,
+                  outOfService: row.room_out_of_service,
                 },
                 rules.requireInspectedForCheckIn,
               ),
@@ -704,54 +704,6 @@ export async function listDepartures(
   );
 }
 
-export async function listRoomBoard(
-  ctx: PropertyContext,
-  query: RoomBoardQuery,
-): Promise<RoomBoardRow[]> {
-  const businessDate = requireBusinessDate(ctx);
-  const rules = await frontOfficeRules(prisma, ctx.propertyId);
-  const rows = await findRoomBoard(prisma, ctx.propertyId, businessDate, query.roomTypeId ?? null);
-  const items = rows.map((row): RoomBoardRow => {
-    const snapshot = boardSnapshot(row);
-    return {
-      id: row.id,
-      number: row.number,
-      floor: row.floor,
-      roomType: { id: row.room_type_id, code: row.room_type_code },
-      housekeepingStatus: row.housekeeping_status,
-      frontOfficeStatus: row.front_office_status,
-      outOfOrder: row.out_of_order,
-      status: roomBoardStatus(snapshot, rules.requireInspectedForCheckIn),
-      readiness: roomReadiness(snapshot, rules.requireInspectedForCheckIn),
-      inHouse:
-        row.stay_id && row.stay_guest && row.stay_departure
-          ? {
-              stayId: row.stay_id,
-              guestName: row.stay_guest,
-              departure: toDateOnly(row.stay_departure),
-            }
-          : null,
-      arriving:
-        row.arriving_reservation_room_id && row.arriving_reservation_id && row.arriving_guest
-          ? {
-              reservationId: row.arriving_reservation_id,
-              reservationRoomId: row.arriving_reservation_room_id,
-              guestName: row.arriving_guest,
-            }
-          : null,
-    };
-  });
-  const matches: Record<RoomBoardQuery["filter"], (r: RoomBoardRow) => boolean> = {
-    all: () => true,
-    vacant_ready: (r) => r.status === "VACANT_READY",
-    vacant_not_ready: (r) => r.status === "VACANT_NOT_READY",
-    occupied: (r) => r.status === "OCCUPIED",
-    out_of_order: (r) => r.status === "OUT_OF_ORDER",
-    arriving: (r) => r.arriving !== null,
-  };
-  return items.filter(matches[query.filter]);
-}
-
 /**
  * Rooms a reservation room can use now: the booked room type, free for the
  * nights still ahead ([max(arrival, business date), departure)), with
@@ -775,7 +727,8 @@ export async function listRoomOptions(
     departure,
     excludeReservationRoomId: target.id,
   });
-  // Rooms out of order for any remaining night are already excluded by the query.
+  // Rooms out of order for any remaining night are already excluded by the query;
+  // out-of-service rooms stay listed as not ready.
   const options = rooms
     .filter((room) => !(target.status === "IN_HOUSE" && room.id === target.roomId))
     .map((room) => ({
@@ -789,6 +742,7 @@ export async function listRoomOptions(
           housekeepingStatus: room.housekeepingStatus,
           frontOfficeStatus: room.frontOfficeStatus,
           outOfOrder: false,
+          outOfService: room.outOfService,
         },
         rules.requireInspectedForCheckIn,
       ),
@@ -799,8 +753,9 @@ export async function listRoomOptions(
     READY: 0,
     NOT_INSPECTED: 1,
     DIRTY: 2,
-    OCCUPIED: 3,
-    OUT_OF_ORDER: 4,
+    OUT_OF_SERVICE: 3,
+    OCCUPIED: 4,
+    OUT_OF_ORDER: 5,
   };
   return options.sort((a, b) => rank[a.readiness] - rank[b.readiness]);
 }

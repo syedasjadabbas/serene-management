@@ -77,20 +77,6 @@ export interface StayRow {
   latestNote: string | null;
 }
 
-export interface RoomBoardRow {
-  id: string;
-  number: string;
-  floor: string | null;
-  roomType: { id: string; code: string };
-  housekeepingStatus: string;
-  frontOfficeStatus: string;
-  outOfOrder: boolean;
-  status: RoomBoardStatus;
-  readiness: RoomReadiness;
-  inHouse: { stayId: string; guestName: string; departure: string } | null;
-  arriving: { reservationId: string; reservationRoomId: string; guestName: string } | null;
-}
-
 export interface RoomOption {
   id: string;
   number: string;

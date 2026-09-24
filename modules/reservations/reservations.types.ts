@@ -124,6 +124,8 @@ export interface AvailableRoomView {
   floor: string | null;
   housekeepingStatus: string;
   frontOfficeStatus: string;
+  /** An out-of-service block overlaps the requested nights (usable only with an override). */
+  outOfService: boolean;
   isAccessible: boolean;
   isSmoking: boolean;
 }

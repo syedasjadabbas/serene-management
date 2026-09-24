@@ -8,6 +8,7 @@ import {
   findGrantedPermissions,
   findSessionWithUser,
   findSystemRoleTemplates,
+  findUsersWithPermission,
   insertOrganization,
   insertOrganizationRole,
 } from "./access.repository";
@@ -152,4 +153,32 @@ export async function bootstrapOrganization(
 /** Health check: one trivial round trip to PostgreSQL. */
 export async function checkDatabase(): Promise<void> {
   await prisma.$queryRaw`SELECT 1`;
+}
+
+/**
+ * Users who hold `permission` at the property (assignment targets for
+ * housekeeping and maintenance work). Authorization stays permission-based:
+ * no role names are involved.
+ */
+export async function usersWithPermission(
+  tx: Tx,
+  organizationId: string,
+  propertyId: string,
+  permission: Permission,
+): Promise<{ id: string; displayName: string }[]> {
+  const rows = await findUsersWithPermission(tx, organizationId, propertyId, permission, null);
+  return rows.map((row) => ({ id: row.id, displayName: row.display_name }));
+}
+
+/** Whether a user of the organization holds `permission` at the property. */
+export async function userHasPermission(
+  tx: Tx,
+  organizationId: string,
+  propertyId: string,
+  userId: string,
+  permission: Permission,
+): Promise<{ id: string; displayName: string } | null> {
+  const rows = await findUsersWithPermission(tx, organizationId, propertyId, permission, userId);
+  const row = rows[0];
+  return row ? { id: row.id, displayName: row.display_name } : null;
 }
