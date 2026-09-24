@@ -1,8 +1,8 @@
 /**
  * Demo organization for development (SEED_DEMO=true). Created through the
  * domain services (organization bootstrap, property creation, business-date
- * initialization) so demo data obeys the same rules as real data.
- * Idempotent: skipped when the demo organization already exists.
+ * initialization, reservations) so demo data obeys the same rules as real
+ * data. Idempotent: each part is skipped when it already exists.
  */
 import { randomBytes } from "node:crypto";
 import { hashPassword } from "../../lib/auth/password";
@@ -10,9 +10,19 @@ import { prisma } from "../../lib/db/prisma";
 import type { PropertyContext, SessionContext } from "../../lib/http/context";
 import { ALL_PERMISSIONS } from "../../lib/permissions/catalog";
 import { bootstrapOrganization } from "../../modules/access/access.service";
-import { localDateInZone } from "../../modules/business-date/business-date.policy";
-import { initializeBusinessDate } from "../../modules/business-date/business-date.service";
+import { addDays, localDateInZone } from "../../modules/business-date/business-date.policy";
+import {
+  getCurrentBusinessDate,
+  initializeBusinessDate,
+} from "../../modules/business-date/business-date.service";
+import { guestSearchName } from "../../modules/guests/guests.policy";
 import { createProperty } from "../../modules/properties/properties.service";
+import type { CreateReservationInput } from "../../modules/reservations/reservations.schema";
+import {
+  cancelReservation,
+  createReservation,
+} from "../../modules/reservations/reservations.service";
+import { type InventorySpec, buildPropertyInventory } from "./inventory-builder";
 
 const ORG_CODE = "SERENE";
 
@@ -35,6 +45,90 @@ const PROPERTIES = [
   },
 ] as const;
 
+const ROOM_TYPES: Record<string, InventorySpec["roomTypes"]> = {
+  SMR: [
+    {
+      code: "STD",
+      name: "Standard Mountain View",
+      rooms: 18,
+      maxOccupancy: 3,
+      maxAdults: 3,
+      maxChildren: 2,
+      oneAdult: "16000",
+      twoAdults: "18500",
+      extraAdult: "4000",
+      extraChild: "2000",
+      weekendUplift: "3500",
+    },
+    {
+      code: "DLX",
+      name: "Deluxe Valley View",
+      rooms: 10,
+      maxOccupancy: 3,
+      maxAdults: 3,
+      maxChildren: 2,
+      oneAdult: "24000",
+      twoAdults: "27000",
+      extraAdult: "5000",
+      extraChild: "2500",
+      weekendUplift: "5000",
+    },
+    {
+      code: "STE",
+      name: "Pine Suite",
+      rooms: 4,
+      maxOccupancy: 4,
+      maxAdults: 4,
+      maxChildren: 2,
+      oneAdult: "42000",
+      twoAdults: "45000",
+      extraAdult: "6000",
+      extraChild: "3000",
+      weekendUplift: "8000",
+    },
+  ],
+  SDX: [
+    {
+      code: "KNG",
+      name: "King Room",
+      rooms: 14,
+      maxOccupancy: 2,
+      maxAdults: 2,
+      maxChildren: 1,
+      oneAdult: "620",
+      twoAdults: "680",
+      extraChild: "90",
+      weekendUplift: "120",
+    },
+    {
+      code: "TWN",
+      name: "Twin Room",
+      rooms: 12,
+      maxOccupancy: 3,
+      maxAdults: 3,
+      maxChildren: 1,
+      oneAdult: "600",
+      twoAdults: "660",
+      extraAdult: "150",
+      extraChild: "90",
+      weekendUplift: "110",
+    },
+    {
+      code: "EXS",
+      name: "Executive Suite",
+      rooms: 3,
+      maxOccupancy: 4,
+      maxAdults: 4,
+      maxChildren: 2,
+      oneAdult: "1350",
+      twoAdults: "1450",
+      extraAdult: "200",
+      extraChild: "120",
+      weekendUplift: "250",
+    },
+  ],
+};
+
 /** [email local part, display name, role code, scope: "ORG" or property codes] */
 const USERS: [string, string, string, "ORG" | readonly string[]][] = [
   ["admin", "Organization Admin", "ORGANIZATION_ADMIN", "ORG"],
@@ -46,16 +140,174 @@ const USERS: [string, string, string, "ORG" | readonly string[]][] = [
   ["auditor", "Nadia Rahman (Auditor, both hotels)", "AUDITOR", ["SMR", "SDX"]],
 ];
 
+const GUESTS: [string, string, string, string | null, string | null][] = [
+  ["Mr", "Hamza", "Qureshi", "PK", "hamza.qureshi@example.com"],
+  ["Ms", "Mahnoor", "Siddiqui", "PK", "mahnoor.s@example.com"],
+  ["Mr", "Daniyal", "Farooq", "PK", null],
+  ["Mrs", "Fatima", "Zaidi", "PK", "fzaidi@example.com"],
+  ["Mr", "Ahmed", "Al Mansoori", "AE", "ahmed.almansoori@example.com"],
+  ["Ms", "Layla", "Haddad", "JO", "layla.h@example.com"],
+  ["Mr", "James", "Whitfield", "GB", "j.whitfield@example.com"],
+  ["Dr", "Sofia", "Rossi", "IT", "sofia.rossi@example.com"],
+  ["Mr", "Kenji", "Tanaka", "JP", null],
+  ["Ms", "Aisha", "Rahman", "BD", "aisha.rahman@example.com"],
+];
+
 export async function seedDemo(): Promise<void> {
-  if (await prisma.organization.findUnique({ where: { code: ORG_CODE }, select: { id: true } })) {
-    console.warn("Demo organization already exists; skipping demo seed.");
-    return;
+  const organization = await ensureOrganization();
+
+  for (const spec of PROPERTIES) {
+    const property = await prisma.property.findFirst({
+      where: { organizationId: organization.id, code: spec.code },
+      select: { id: true, code: true, timezone: true, currencyCode: true },
+    });
+    if (!property) continue;
+    const businessDate = await getCurrentBusinessDate(property.id);
+    if (!businessDate) continue;
+
+    const inventory = await buildPropertyInventory(prisma, {
+      propertyId: property.id,
+      currencyCode: property.currencyCode,
+      seasonStart: addDays(businessDate, -30),
+      seasonEnd: addDays(businessDate, 730),
+      roomTypes: ROOM_TYPES[spec.code]!,
+    });
+    const ctx: PropertyContext = {
+      ...organization.adminCtx,
+      access: { ...organization.adminCtx.access, byProperty: { [property.id]: ALL_PERMISSIONS } },
+      propertyId: property.id,
+      propertyCode: property.code,
+      timezone: property.timezone,
+      currencyCode: property.currencyCode,
+      businessDate,
+    };
+    await seedPropertyReservations(ctx, organization.id, businessDate, inventory);
+    console.warn(`Seeded inventory and sample reservations for ${spec.code}.`);
+  }
+}
+
+async function seedPropertyReservations(
+  ctx: PropertyContext,
+  organizationId: string,
+  businessDate: string,
+  inventory: Awaited<ReturnType<typeof buildPropertyInventory>>,
+) {
+  const guestIds: string[] = [];
+  for (const [title, firstName, lastName, nationalityCode, email] of GUESTS) {
+    const existing = await prisma.guest.findFirst({
+      where: { organizationId, firstName, lastName },
+      select: { id: true },
+    });
+    const guest =
+      existing ??
+      (await prisma.guest.create({
+        data: {
+          organizationId,
+          profileNumber: `G${randomBytes(4).toString("hex").toUpperCase().slice(0, 7)}`,
+          title,
+          firstName,
+          lastName,
+          searchName: guestSearchName(firstName, lastName),
+          nationalityCode,
+          primaryEmail: email,
+        },
+        select: { id: true },
+      }));
+    guestIds.push(guest.id);
+  }
+
+  const [firstType, secondType, thirdType] = Object.values(inventory.roomTypes);
+  /** Each sample booking carries a DEMO-nn reference so reruns only add what is missing. */
+  const book = async (
+    reference: string,
+    offset: number,
+    nights: number,
+    guest: number,
+    roomTypeId: string,
+    extra: Partial<CreateReservationInput> = {},
+  ) => {
+    const exists = await prisma.reservation.findFirst({
+      where: { propertyId: ctx.propertyId, externalReference: reference },
+      select: { id: true },
+    });
+    if (exists) return null;
+    return createReservation(ctx, {
+      arrival: addDays(businessDate, offset),
+      departure: addDays(businessDate, offset + nights),
+      adults: 2,
+      children: 0,
+      rooms: 1,
+      roomTypeId,
+      ratePlanId: inventory.ratePlans.BAR!,
+      reservationTypeId: inventory.reservationTypes.GTD!,
+      guestId: guestIds[guest % guestIds.length]!,
+      channelId: inventory.channels.RES,
+      specialRequests: undefined,
+      externalReference: reference,
+      waitlist: false,
+      override: false,
+      ...extra,
+    });
+  };
+
+  await book("DEMO-01", 0, 2, 0, firstType!.id, {
+    roomId: firstType!.roomIds[1],
+    specialRequests: "Late arrival around 22:00.",
+  });
+  await book("DEMO-02", 0, 3, 1, secondType!.id);
+  await book("DEMO-03", 1, 4, 2, firstType!.id, { adults: 1, children: 1 });
+  await book("DEMO-04", 3, 2, 3, thirdType!.id, {
+    specialRequests: "Anniversary: flowers in room.",
+  });
+  await book("DEMO-05", 5, 5, 4, secondType!.id, { rooms: 2 });
+  await book("DEMO-06", 7, 3, 5, firstType!.id, {
+    reservationTypeId: inventory.reservationTypes.TENT!,
+  });
+  await book("DEMO-07", 10, 2, 6, thirdType!.id, { waitlist: true });
+  const toCancel = await book("DEMO-08", 12, 3, 7, firstType!.id);
+  if (toCancel) {
+    await cancelReservation(ctx, toCancel.rooms[0]!.id, {
+      version: toCancel.rooms[0]!.version,
+      reasonCodeId: inventory.reasonCodes["CANCELLATION:PLANS"]!,
+      reason: "Guest changed travel plans (demo data)",
+    });
+  }
+  await book("DEMO-09", 14, 1, 8, secondType!.id, { adults: 1 });
+  await book("DEMO-10", 20, 6, 9, firstType!.id, { ratePlanId: inventory.ratePlans.ADV! });
+
+  if ((await prisma.roomServiceBlock.count({ where: { propertyId: ctx.propertyId } })) > 0) return;
+  // One room out of order for a few nights, so availability reflects it.
+  await prisma.roomServiceBlock.create({
+    data: {
+      propertyId: ctx.propertyId,
+      roomId: secondType!.roomIds.at(-1)!,
+      kind: "OUT_OF_ORDER",
+      status: "SCHEDULED",
+      fromDate: new Date(`${addDays(businessDate, 2)}T00:00:00.000Z`),
+      toDate: new Date(`${addDays(businessDate, 6)}T00:00:00.000Z`),
+      reasonCodeId: inventory.reasonCodes["OUT_OF_ORDER:MAINT"]!,
+      notes: "Bathroom refit (demo data)",
+      createdById: ctx.userId,
+    },
+  });
+}
+
+async function ensureOrganization(): Promise<{ id: string; adminCtx: SessionContext }> {
+  const existing = await prisma.organization.findUnique({
+    where: { code: ORG_CODE },
+    select: { id: true },
+  });
+  if (existing) {
+    const admin = await prisma.user.findUniqueOrThrow({
+      where: { email: "admin@serene.test" },
+      select: { id: true },
+    });
+    return { id: existing.id, adminCtx: systemContext(existing.id, admin.id) };
   }
 
   const password =
     process.env.SEED_DEMO_PASSWORD ?? `Serene-${randomBytes(9).toString("base64url")}`;
   const passwordHash = await hashPassword(password);
-
   const organization = await prisma.$transaction((tx) =>
     bootstrapOrganization(tx, {
       code: ORG_CODE,
@@ -64,7 +316,6 @@ export async function seedDemo(): Promise<void> {
       baseCurrency: "PKR",
     }),
   );
-
   const admin = await prisma.user.create({
     data: {
       organizationId: organization.id,
@@ -84,23 +335,7 @@ export async function seedDemo(): Promise<void> {
       grantedById: admin.id,
     },
   });
-
-  // The seed acts as the organization admin; audit records attribute to it.
-  const adminCtx: SessionContext = {
-    requestId: "seed-demo",
-    ipAddress: null,
-    userAgent: "prisma-seed",
-    userId: admin.id,
-    organizationId: organization.id,
-    sessionId: "seed",
-    access: {
-      userId: admin.id,
-      organizationId: organization.id,
-      isSuperAdmin: false,
-      organizationPermissions: ALL_PERMISSIONS,
-      byProperty: {},
-    },
-  };
+  const adminCtx = systemContext(organization.id, admin.id);
 
   const propertyIds: Record<string, string> = {};
   for (const spec of PROPERTIES) {
@@ -111,17 +346,17 @@ export async function seedDemo(): Promise<void> {
       reason: "Demo data seed",
     });
     propertyIds[spec.code] = property.id;
-    const propertyCtx: PropertyContext = {
-      ...adminCtx,
-      propertyId: property.id,
-      propertyCode: property.code,
-      timezone: property.timezone,
-      businessDate: null,
-    };
-    await initializeBusinessDate(propertyCtx, {
-      date: localDateInZone(new Date(), property.timezone),
-      reason: "Demo data seed: go-live",
-    });
+    await initializeBusinessDate(
+      {
+        ...adminCtx,
+        propertyId: property.id,
+        propertyCode: property.code,
+        timezone: property.timezone,
+        currencyCode: property.currencyCode,
+        businessDate: null,
+      },
+      { date: localDateInZone(new Date(), property.timezone), reason: "Demo data seed: go-live" },
+    );
   }
 
   for (const [local, displayName, role, scope] of USERS.slice(1)) {
@@ -163,6 +398,26 @@ export async function seedDemo(): Promise<void> {
       "",
     ].join("\n"),
   );
+  return { id: organization.id, adminCtx };
+}
+
+/** The seed acts as the organization admin; audit records attribute to it. */
+function systemContext(organizationId: string, adminId: string): SessionContext {
+  return {
+    requestId: "seed-demo",
+    ipAddress: null,
+    userAgent: "prisma-seed",
+    userId: adminId,
+    organizationId,
+    sessionId: "seed",
+    access: {
+      userId: adminId,
+      organizationId,
+      isSuperAdmin: false,
+      organizationPermissions: ALL_PERMISSIONS,
+      byProperty: {},
+    },
+  };
 }
 
 function roleId(roleIdsByCode: Record<string, string>, code: string): string {

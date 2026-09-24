@@ -313,6 +313,17 @@ Derived at read time from the property business date `D`:
 
 Booking-level status is not stored; it is derived from its rooms (e.g. "partially checked in").
 
+**Booking state (implemented in Phase 2).** Tentative versus confirmed is not a separate status: it is whether the reservation (guarantee) type deducts inventory. `bookingState` in `modules/reservations/reservations.policy.ts` derives the state shown to staff:
+
+| Booking state                                | Stored as                                                          |
+| -------------------------------------------- | ------------------------------------------------------------------ |
+| Waitlisted                                   | `WAITLISTED` (never holds inventory)                               |
+| Tentative (hold)                             | `RESERVED` + non-deducting reservation type (e.g. `TENT`)          |
+| Confirmed                                    | `RESERVED` + deducting reservation type (`GTD`, `6PM`, `COMP` ...) |
+| In house / checked out / cancelled / no-show | `IN_HOUSE` / `CHECKED_OUT` / `CANCELLED` / `NO_SHOW`               |
+
+"Inquiry" is an availability search (optionally a turnaway), not a stored reservation. **Confirm** is the command that moves a tentative or waitlisted reservation to a deducting type, taking inventory under lock.
+
 ### 5.2 Room status (four independent axes)
 
 | Axis          | Column                 | Values                                               | Changed by                                                           |
@@ -336,6 +347,8 @@ Inventory effect: **OOO removes the room from sellable inventory** (`room_type_i
 ### 5.3 Inventory model
 
 `available(room type, night) = physical − out_of_order − sold − blocked + overbook_limit`, capped by `sell_limit` and the house-level controls. `sold` counts deducting reservation-room nights outside blocks; `blocked` counts un-picked-up allocation of deducting blocks; block pickup moves a unit from `blocked` to the block's `picked_up` without changing availability. Non-deducting reservation types (tentative, waitlist) never touch counters. Counters change only inside the transaction that changes their source rows and are reconciled nightly.
+
+**As implemented (Phase 2):** the source of truth for `sold` is the reservation nights themselves (`reservation_room_nights` of `RESERVED`/`IN_HOUSE` rooms with a deducting type), and `physical` / `out_of_order` are counted live from `rooms` and `room_service_blocks`. The `room_type_inventory` row for each (room type, night) is the **serialization point**: every inventory-changing command inserts missing rows, locks them `FOR UPDATE` in (room type, date) order, re-counts from the source rows, and after writing its nights rewrites the cached counters of those rows. Availability search reads the source rows directly (always exact); the cached counters serve reports and future channel pushes.
 
 ### 5.4 Billing model
 

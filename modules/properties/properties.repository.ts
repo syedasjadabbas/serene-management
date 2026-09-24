@@ -108,3 +108,28 @@ export function updatePropertyTimes(
 ) {
   return tx.property.update({ where: { id: propertyId }, data, select: propertySelect });
 }
+
+/**
+ * Next value of a per-property counter (gap-free). The row is created on first
+ * use; UPDATE ... RETURNING row-locks it until the caller's transaction ends,
+ * so concurrent callers queue and a rollback returns the number unused.
+ */
+export async function nextSequenceValue(
+  tx: Tx,
+  propertyId: string,
+  name: string,
+  initial: { start: number; prefix: string },
+): Promise<{ value: bigint; prefix: string }> {
+  await tx.$executeRaw`
+    INSERT INTO "property_sequences" ("property_id", "name", "prefix", "next_value", "updated_at")
+    VALUES (${propertyId}::uuid, ${name}, ${initial.prefix}, ${initial.start}, now())
+    ON CONFLICT ("property_id", "name") DO NOTHING`;
+  const rows = await tx.$queryRaw<{ value: bigint; prefix: string }[]>`
+    UPDATE "property_sequences"
+    SET "next_value" = "next_value" + 1, "updated_at" = now()
+    WHERE "property_id" = ${propertyId}::uuid AND "name" = ${name}
+    RETURNING "next_value" - 1 AS "value", "prefix"`;
+  const row = rows[0];
+  if (!row) throw new Error(`Sequence ${name} could not be allocated`);
+  return { value: BigInt(row.value), prefix: row.prefix };
+}

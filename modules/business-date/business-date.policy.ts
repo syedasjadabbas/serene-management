@@ -101,3 +101,30 @@ export function isAcceptableInitialBusinessDate(date: string, propertyLocalDate:
   const lag = daysBetween(date, propertyLocalDate);
   return lag === 0 || lag === 1;
 }
+
+/** Offset of a time zone from UTC at an instant, in minutes (e.g. +300 for Asia/Karachi). */
+export function timeZoneOffsetMinutes(instant: Date, timeZone: string): number {
+  const p = partsInZone(instant, timeZone);
+  const asUtc = Date.UTC(
+    Number(p.year),
+    Number(p.month) - 1,
+    Number(p.day),
+    Number(p.hour),
+    Number(p.minute),
+  );
+  const floored = Math.floor(instant.getTime() / 60_000) * 60_000;
+  return Math.round((asUtc - floored) / 60_000);
+}
+
+/**
+ * The UTC instant at which a property-local calendar day starts
+ * (e.g. "created on 2026-10-10" in Asia/Karachi → 2026-10-09T19:00:00Z).
+ * Re-checks the offset once to land correctly across DST transitions.
+ */
+export function localMidnightUtc(date: string, timeZone: string): Date {
+  const naive = fromDateOnly(date).getTime();
+  let instant = naive - timeZoneOffsetMinutes(new Date(naive), timeZone) * 60_000;
+  const corrected = naive - timeZoneOffsetMinutes(new Date(instant), timeZone) * 60_000;
+  if (corrected !== instant) instant = corrected;
+  return new Date(instant);
+}

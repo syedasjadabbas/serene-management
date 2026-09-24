@@ -2,8 +2,12 @@ import type { ReactNode } from "react";
 import { BusinessDateBadge } from "./BusinessDateBadge";
 import { PropertySwitcher } from "./PropertySwitcher";
 import { UserMenu } from "./UserMenu";
+import { WorkspaceNav } from "./WorkspaceNav";
 
-/** Minimal authenticated frame for Phase 1: identity, property context, business date. */
+/**
+ * Authenticated frame: identity, property context, business date and navigation.
+ * Below md the header wraps and the navigation takes its own scrollable row.
+ */
 export function WorkspaceShell({ children }: { children: ReactNode }) {
   return (
     <>
@@ -13,11 +17,12 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
       >
         Skip to content
       </a>
-      <header className="flex h-12 items-center gap-3 border-b border-border-subtle bg-surface px-4">
+      <header className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border-subtle bg-surface px-4 py-2 md:h-12 md:flex-nowrap md:py-0">
         <span className="text-xs font-semibold tracking-[0.2em] text-brand">SERENE</span>
         <span aria-hidden="true" className="h-5 w-px bg-border-subtle" />
         <PropertySwitcher />
-        <div className="ms-auto flex items-center gap-3">
+        <WorkspaceNav />
+        <div className="ms-auto flex min-w-0 items-center gap-3">
           <BusinessDateBadge />
           <UserMenu />
         </div>

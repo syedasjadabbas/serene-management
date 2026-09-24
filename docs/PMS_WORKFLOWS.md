@@ -38,6 +38,8 @@ Availability search ─► Rate quote ─► Create reservation ─► (Deposit)
 
 ---
 
+> **Implementation status.** Phase 2 implements workflows §1, §2, §3 (pre-arrival modifications), §4 (manual room assignment; auto-assign and holds later), §14 (without penalty posting), §15 (manual no-show), §16 (reinstatement of cancellations) and the _confirm_ command (§4.1). Code: `modules/availability`, `modules/rates`, `modules/reservations`, `modules/guests`.
+
 ## 1. Availability search (look-to-book)
 
 - **Entities**: RoomTypeInventory, HouseInventoryControl, Restriction, RatePlan, RateSeason(Amount), RatePlanRoomType, NegotiatedRate, BlockAllocation, Package.
@@ -216,6 +218,13 @@ Scheduled check-out executes §12 automatically at a time when the folio is sett
 - **Audit**: room status changes recorded in `room_status_history` (always) + audit STANDARD.
 - **Transaction**: one Tx per task transition (task + room status + history + outbox).
 - **Failure**: rollback; the task and room keep their previous status.
+
+### 4.1 Confirm (tentative / waitlisted → confirmed) — Phase 2
+
+- **Entities**: ReservationRoom, ReservationType, RoomTypeInventory.
+- **Database changes**: `reservation_type_id` → a deducting type, status `RESERVED` (from `WAITLISTED`), inventory locked and re-counted, counters rewritten.
+- **Validation**: current state tentative or waitlisted; arrival ≥ D; target type deducts inventory; availability for every night (override needs `reservations:override_availability` + reason).
+- **Permissions**: `reservations:update` (+ `reservations:waitlist` from the waitlist). **Audit**: `reservation.confirm` (HIGH when overridden). **Tx**: one transaction; failure leaves the reservation unchanged.
 
 ## 14. Cancellation
 

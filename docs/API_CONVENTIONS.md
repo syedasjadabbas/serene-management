@@ -69,6 +69,24 @@ GET  night-audits/{runId}                   # progress / result
 
 HTTP method semantics: `GET` safe and cacheable by RTK Query; `POST` create or command; `PATCH` partial update of editable fields (never status); `PUT` full replacement of a sub-collection (e.g. role permissions); `DELETE` only for truly removable things (notes, holds) — financial and operational records are never deleted.
 
+**Implemented in Phase 2**:
+
+```text
+GET   /api/v1/guests?q=&limit=                                  guest search (organization-wide, bounded)
+POST  /api/v1/guests                                            create guest profile
+GET   /api/v1/guests/{guestId}
+GET   /api/v1/properties/{id}/availability?arrival=&departure=&adults=&children=&rooms=&roomTypeId=&ratePlanId=
+GET   /api/v1/properties/{id}/booking-options                   room types, rate plans, reservation types, codes, reasons
+GET   /api/v1/properties/{id}/rooms/available?roomTypeId=&arrival=&departure=
+GET   /api/v1/properties/{id}/reservations?q=&state=&arrivalFrom=&...&sort=&cursor=&limit=
+POST  /api/v1/properties/{id}/reservations                      create (1..20 rooms, optional room, waitlist, override)
+GET   /api/v1/properties/{id}/reservations/{reservationId}      detail with nights, notes, history, allowed actions
+PATCH /api/v1/properties/{id}/reservation-rooms/{rrId}          modify (version required)
+POST  /api/v1/properties/{id}/reservation-rooms/{rrId}/confirm | cancel | no-show | reinstate | assign-room
+```
+
+The reservation **room** is the unit of every command (a multi-room booking has one per room); the booking (`reservations/{id}`) is the read aggregate.
+
 ## 3. Request validation
 
 - Every handler declares Zod schemas for `params`, `query` and `body`. Objects are `.strict()` (unknown fields → `VALIDATION_FAILED`).

@@ -4,7 +4,9 @@ import type { PropertyContext, SessionContext } from "@/lib/http/context";
 import { ALL_PERMISSIONS } from "@/lib/permissions/catalog";
 import type { RoleCode } from "@/lib/permissions/roles";
 import { bootstrapOrganization } from "@/modules/access/access.service";
-import { localDateInZone } from "@/modules/business-date/business-date.policy";
+import { addDays, localDateInZone } from "@/modules/business-date/business-date.policy";
+import { guestSearchName } from "@/modules/guests/guests.policy";
+import { buildPropertyInventory } from "@/prisma/seed/inventory-builder";
 import { initializeBusinessDate } from "@/modules/business-date/business-date.service";
 import { createProperty } from "@/modules/properties/properties.service";
 import { uniqueSuffix } from "./http";
@@ -95,6 +97,7 @@ export async function createFixtureOrg(options: {
         propertyId: property.id,
         propertyCode: property.code,
         timezone: property.timezone,
+        currencyCode: property.currencyCode,
         businessDate: null,
       };
       await initializeBusinessDate(ctx, {
@@ -151,4 +154,60 @@ export async function createUser(
 
 export function auditLogsFor(resourceId: string) {
   return prisma.auditLog.findMany({ where: { resourceId }, orderBy: { createdAt: "asc" } });
+}
+
+/**
+ * Reservation prerequisites (room types, rooms, codes, rate plans) for a
+ * fixture property, via the same builder the demo seed uses.
+ */
+export async function buildFixtureInventory(
+  org: FixtureOrg,
+  propertyKey: string,
+  roomTypes: {
+    code: string;
+    rooms: number;
+    maxOccupancy?: number;
+    oneAdult?: string;
+    twoAdults?: string;
+  }[],
+) {
+  const property = org.properties[propertyKey]!;
+  const current = await prisma.businessDate.findFirstOrThrow({
+    where: { propertyId: property.id, isCurrent: true },
+    select: { date: true },
+  });
+  const businessDate = current.date.toISOString().slice(0, 10);
+  const inventory = await buildPropertyInventory(prisma, {
+    propertyId: property.id,
+    currencyCode: "PKR",
+    seasonStart: addDays(businessDate, -10),
+    seasonEnd: addDays(businessDate, 400),
+    roomTypes: roomTypes.map((rt) => ({
+      code: rt.code,
+      name: `${rt.code} room`,
+      rooms: rt.rooms,
+      maxOccupancy: rt.maxOccupancy ?? 3,
+      maxAdults: rt.maxOccupancy ?? 3,
+      maxChildren: 1,
+      oneAdult: rt.oneAdult ?? "10000",
+      twoAdults: rt.twoAdults ?? "12000",
+      extraAdult: "2000",
+      extraChild: "1000",
+      weekendUplift: "3000",
+    })),
+  });
+  return { ...inventory, businessDate };
+}
+
+export async function createGuestRow(org: FixtureOrg, firstName: string, lastName: string) {
+  return prisma.guest.create({
+    data: {
+      organizationId: org.organizationId,
+      profileNumber: `T${org.suffix}${firstName.slice(0, 3).toUpperCase()}`.slice(0, 20),
+      firstName,
+      lastName,
+      searchName: guestSearchName(firstName, lastName),
+    },
+    select: { id: true },
+  });
 }

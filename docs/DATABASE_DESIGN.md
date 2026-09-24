@@ -6,6 +6,7 @@ PostgreSQL 18 (development: native Windows installation bootstrapped by `npm run
 - Migrations: [`prisma/migrations/`](../prisma/migrations)
   - `20260924000000_init` — generated baseline (123 tables) + extensions `pg_trgm`, `btree_gist`.
   - `20260924000100_constraints` — hand-written check constraints, exclusion constraints and triggers.
+  - `20260924120327_reservation_search_created_index` — `reservation_rooms (property_id, created_at DESC)` for the reservation search's "created on" filter and newest-first sort (Phase 2).
 - Verified: migrations apply cleanly; `prisma migrate diff` from the migrated database to the schema is **empty** (Prisma does not try to drop the hand-written rules); `tests/db/constraints.test.ts` proves the key rules.
 
 ---
@@ -189,6 +190,13 @@ Implemented in `20260924000100_constraints` unless noted as schema-level:
 | Role scope ⇔ property id                                                                                                                          | Check                                                                                            |
 
 Custom SQLSTATEs: `SM001` (immutable/append-only violation), `SM002` (closed folio). The HTTP layer maps them to `BUSINESS_RULE_VIOLATION` (mapping completed in Phase 1, see API_CONVENTIONS.md §5).
+
+### Phase 2 notes
+
+- **Inventory counters**: `room_type_inventory` rows are created on demand (`INSERT ... ON CONFLICT DO NOTHING`) and locked `FOR UPDATE` in `(room_type_id, stay_date)` order by every inventory-changing command; `sold`, `physical_rooms` and `out_of_order` are rewritten from the source rows in the same transaction (see DOMAIN_MODEL.md §5.3).
+- **Document numbers**: `property_sequences` rows `confirmation` (starts at 100000, no prefix) and `cancellation` (starts at 1000, prefix `X`) are allocated with `UPDATE ... RETURNING` inside the booking transaction: gap-free and safe under concurrency (verified by a concurrent-booking integration test).
+- **Known upstream warning**: under concurrent interactive transactions `pg` 8.x prints a DeprecationWarning (client.query() when the client is already executing a query). It originates in Prisma 7's driver-adapter query interpreter, not in application code; queries are still serialized correctly. Revisit on the next Prisma upgrade.
+- **Room-level double booking** is prevented by the `room_assignments_no_overlap` exclusion constraint; the API maps its `23P01` to `409 CONFLICT`.
 
 ## 6. Transaction boundaries
 

@@ -1,0 +1,425 @@
+import "server-only";
+import type { Prisma } from "@/generated/prisma/client";
+import type { Tx } from "@/lib/db/prisma";
+
+/**
+ * Reservation data access. Every query is scoped by property (and the
+ * composite foreign keys make cross-property rows impossible).
+ */
+
+const codeSelect = { id: true, code: true, name: true } as const;
+
+// --- Reference data -----------------------------------------------------------
+
+export function findRoomType(tx: Tx, propertyId: string, id: string) {
+  return tx.roomType.findFirst({
+    where: { id, propertyId, status: "ACTIVE", isSellable: true, isPseudo: false },
+    select: { ...codeSelect, maxOccupancy: true, maxAdults: true, maxChildren: true },
+  });
+}
+
+export function findReservationType(tx: Tx, propertyId: string, id: string) {
+  return tx.reservationType.findFirst({
+    where: { id, propertyId, status: "ACTIVE" },
+    select: { ...codeSelect, deductsInventory: true, isGuaranteed: true },
+  });
+}
+
+export function findRatePlanDefaults(tx: Tx, propertyId: string, id: string) {
+  return tx.ratePlan.findFirst({
+    where: { id, propertyId, status: "ACTIVE" },
+    select: {
+      ...codeSelect,
+      defaultMarketCodeId: true,
+      defaultSourceCodeId: true,
+      cancellationPolicyId: true,
+      depositPolicyId: true,
+    },
+  });
+}
+
+export function findMarketCode(tx: Tx, propertyId: string, id: string) {
+  return tx.marketCode.findFirst({
+    where: { id, propertyId, status: "ACTIVE" },
+    select: codeSelect,
+  });
+}
+
+export function findSourceCode(tx: Tx, propertyId: string, id: string) {
+  return tx.sourceCode.findFirst({
+    where: { id, propertyId, status: "ACTIVE" },
+    select: codeSelect,
+  });
+}
+
+export function findChannel(tx: Tx, propertyId: string, id: string) {
+  return tx.channel.findFirst({ where: { id, propertyId, status: "ACTIVE" }, select: codeSelect });
+}
+
+export function findReasonCode(
+  tx: Tx,
+  propertyId: string,
+  id: string,
+  category: "CANCELLATION" | "NO_SHOW",
+) {
+  return tx.reasonCode.findFirst({
+    where: { id, propertyId, category, status: "ACTIVE" },
+    select: { ...codeSelect, requiresComment: true },
+  });
+}
+
+export function findRoom(tx: Tx, propertyId: string, id: string) {
+  return tx.room.findFirst({
+    where: { id, propertyId, status: "ACTIVE" },
+    select: { id: true, number: true, roomTypeId: true },
+  });
+}
+
+/** Out-of-order periods of a room overlapping [arrival, departure). */
+export function countRoomOutOfOrder(tx: Tx, roomId: string, arrival: Date, departure: Date) {
+  return tx.roomServiceBlock.count({
+    where: {
+      roomId,
+      kind: "OUT_OF_ORDER",
+      status: { in: ["SCHEDULED", "ACTIVE"] },
+      fromDate: { lt: departure },
+      toDate: { gt: arrival },
+    },
+  });
+}
+
+// --- Writes ---------------------------------------------------------------------
+
+export function insertReservation(tx: Tx, data: Prisma.ReservationUncheckedCreateInput) {
+  return tx.reservation.create({ data, select: { id: true, confirmationNumber: true } });
+}
+
+export function insertReservationRoom(tx: Tx, data: Prisma.ReservationRoomUncheckedCreateInput) {
+  return tx.reservationRoom.create({ data, select: { id: true, lineNumber: true } });
+}
+
+export function insertNights(tx: Tx, rows: Prisma.ReservationRoomNightCreateManyInput[]) {
+  return tx.reservationRoomNight.createMany({ data: rows });
+}
+
+export function deleteNights(tx: Tx, reservationRoomId: string) {
+  return tx.reservationRoomNight.deleteMany({ where: { reservationRoomId } });
+}
+
+export function insertAssignment(tx: Tx, data: Prisma.RoomAssignmentUncheckedCreateInput) {
+  return tx.roomAssignment.create({ data, select: { id: true } });
+}
+
+export function releaseActiveAssignments(
+  tx: Tx,
+  reservationRoomId: string,
+  userId: string,
+  at: Date,
+) {
+  return tx.roomAssignment.updateMany({
+    where: { reservationRoomId, status: "ACTIVE" },
+    data: { status: "RELEASED", releasedAt: at, releasedById: userId },
+  });
+}
+
+export function insertNote(tx: Tx, data: Prisma.ReservationNoteUncheckedCreateInput) {
+  return tx.reservationNote.create({ data, select: { id: true } });
+}
+
+export async function replacePrimaryGuest(tx: Tx, reservationRoomId: string, guestId: string) {
+  await tx.reservationGuest.deleteMany({ where: { reservationRoomId, isPrimary: true } });
+  await tx.reservationGuest.deleteMany({ where: { reservationRoomId, guestId } });
+  await tx.reservationGuest.create({
+    data: { reservationRoomId, guestId, isPrimary: true, sequence: 1 },
+  });
+}
+
+/** Optimistic concurrency: succeeds only if the row still has the version the client saw. */
+export function updateReservationRoomVersioned(
+  tx: Tx,
+  id: string,
+  expectedVersion: number,
+  data: Prisma.ReservationRoomUncheckedUpdateManyInput,
+) {
+  return tx.reservationRoom.updateMany({
+    where: { id, version: expectedVersion },
+    data: { ...data, version: { increment: 1 } },
+  });
+}
+
+// --- Loading for commands ----------------------------------------------------------
+
+/**
+ * Row-locks a reservation room for the rest of the transaction, then loads
+ * what state transitions need. Scoped by property: another property's id
+ * finds nothing.
+ */
+export async function lockReservationRoom(tx: Tx, propertyId: string, id: string) {
+  const locked = await tx.$queryRaw<{ id: string }[]>`
+    SELECT "id" FROM "reservation_rooms"
+    WHERE "id" = ${id}::uuid AND "property_id" = ${propertyId}::uuid
+    FOR UPDATE`;
+  if (locked.length === 0) return null;
+  return tx.reservationRoom.findUnique({
+    where: { id },
+    select: {
+      id: true,
+      reservationId: true,
+      lineNumber: true,
+      version: true,
+      status: true,
+      primaryGuestId: true,
+      arrivalDate: true,
+      departureDate: true,
+      adults: true,
+      children: true,
+      eta: true,
+      roomTypeId: true,
+      roomId: true,
+      ratePlanId: true,
+      reservationTypeId: true,
+      marketCodeId: true,
+      sourceCodeId: true,
+      shareGroupId: true,
+      currencyCode: true,
+      cancellationNumber: true,
+      reservationType: { select: { code: true, deductsInventory: true } },
+      reservation: { select: { confirmationNumber: true } },
+    },
+  });
+}
+
+export type LockedReservationRoom = NonNullable<Awaited<ReturnType<typeof lockReservationRoom>>>;
+
+// --- Queries -------------------------------------------------------------------------
+
+const listSelect = {
+  id: true,
+  reservationId: true,
+  lineNumber: true,
+  status: true,
+  arrivalDate: true,
+  departureDate: true,
+  adults: true,
+  children: true,
+  currencyCode: true,
+  createdAt: true,
+  reservationType: { select: { deductsInventory: true } },
+  reservation: {
+    select: {
+      confirmationNumber: true,
+      bookedAt: true,
+      channel: { select: { code: true } },
+      _count: { select: { rooms: true } },
+    },
+  },
+  primaryGuest: {
+    select: { id: true, firstName: true, lastName: true, title: true, vipLevelId: true },
+  },
+  roomType: { select: { code: true, name: true } },
+  room: { select: { number: true } },
+  ratePlan: { select: { code: true } },
+  sourceCode: { select: { code: true } },
+} as const satisfies Prisma.ReservationRoomSelect;
+
+export type ReservationListRow = Prisma.ReservationRoomGetPayload<{ select: typeof listSelect }>;
+
+export function findReservationRoomsPage(
+  tx: Tx,
+  where: Prisma.ReservationRoomWhereInput,
+  orderBy: Prisma.ReservationRoomOrderByWithRelationInput[],
+  take: number,
+) {
+  return tx.reservationRoom.findMany({ where, orderBy, take, select: listSelect });
+}
+
+/** Stay totals for a page of reservation rooms, aggregated in PostgreSQL. */
+export async function sumNightAmounts(tx: Tx, reservationRoomIds: string[]) {
+  if (reservationRoomIds.length === 0) return new Map<string, string>();
+  const rows = await tx.reservationRoomNight.groupBy({
+    by: ["reservationRoomId"],
+    where: { reservationRoomId: { in: reservationRoomIds } },
+    _sum: { rateAmount: true },
+  });
+  return new Map(rows.map((r) => [r.reservationRoomId, r._sum.rateAmount?.toFixed(4) ?? "0.0000"]));
+}
+
+export function findReservationDetail(tx: Tx, propertyId: string, reservationId: string) {
+  return tx.reservation.findFirst({
+    where: { id: reservationId, propertyId },
+    select: {
+      id: true,
+      confirmationNumber: true,
+      bookedAt: true,
+      bookedById: true,
+      externalReference: true,
+      channel: { select: codeSelect },
+      notes: {
+        where: { deletedAt: null },
+        select: { id: true, body: true, createdAt: true },
+        orderBy: { createdAt: "asc" },
+        take: 50,
+      },
+      rooms: {
+        orderBy: { lineNumber: "asc" },
+        select: {
+          id: true,
+          lineNumber: true,
+          version: true,
+          status: true,
+          arrivalDate: true,
+          departureDate: true,
+          adults: true,
+          children: true,
+          eta: true,
+          currencyCode: true,
+          cancellationNumber: true,
+          cancelledAt: true,
+          noShowAt: true,
+          primaryGuest: {
+            select: {
+              id: true,
+              title: true,
+              firstName: true,
+              lastName: true,
+              profileNumber: true,
+              primaryEmail: true,
+              primaryPhone: true,
+            },
+          },
+          roomType: { select: codeSelect },
+          room: { select: { id: true, number: true } },
+          ratePlan: { select: codeSelect },
+          reservationType: {
+            select: { ...codeSelect, deductsInventory: true, isGuaranteed: true },
+          },
+          marketCode: { select: codeSelect },
+          sourceCode: { select: codeSelect },
+          cancellationPolicy: { select: { ...codeSelect, description: true } },
+          cancelReason: { select: codeSelect },
+          nights: {
+            orderBy: { stayDate: "asc" },
+            select: {
+              stayDate: true,
+              rateAmount: true,
+              roomType: { select: { code: true } },
+              ratePlan: { select: { code: true } },
+            },
+          },
+        },
+      },
+    },
+  });
+}
+
+export function findAuditHistory(tx: Tx, organizationId: string, resourceIds: string[]) {
+  return tx.auditLog.findMany({
+    where: { organizationId, resourceId: { in: resourceIds } },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    take: 100,
+    select: {
+      id: true,
+      createdAt: true,
+      action: true,
+      userId: true,
+      risk: true,
+      reason: true,
+      before: true,
+      after: true,
+    },
+  });
+}
+
+export function findUserNames(tx: Tx, organizationId: string, ids: string[]) {
+  if (ids.length === 0) return Promise.resolve([]);
+  return tx.user.findMany({
+    where: { organizationId, id: { in: ids } },
+    select: { id: true, displayName: true },
+  });
+}
+
+export async function findBookingOptions(tx: Tx, propertyId: string) {
+  const active = { propertyId, status: "ACTIVE" } as const;
+  const orderByCode = { code: "asc" } as const;
+  const roomTypes = await tx.roomType.findMany({
+    where: { ...active, isSellable: true, isPseudo: false },
+    select: { ...codeSelect, maxOccupancy: true, maxAdults: true, maxChildren: true },
+    orderBy: [{ sortOrder: "asc" }, orderByCode],
+  });
+  const ratePlans = await tx.ratePlan.findMany({
+    where: { ...active, requiresNegotiation: false, requiresMembership: false, isDayUse: false },
+    select: { ...codeSelect, defaultMarketCodeId: true, defaultSourceCodeId: true },
+    orderBy: [{ displayOrder: "asc" }, orderByCode],
+  });
+  const reservationTypes = await tx.reservationType.findMany({
+    where: active,
+    select: { ...codeSelect, deductsInventory: true, isGuaranteed: true },
+    orderBy: orderByCode,
+  });
+  const marketCodes = await tx.marketCode.findMany({
+    where: active,
+    select: codeSelect,
+    orderBy: orderByCode,
+  });
+  const sourceCodes = await tx.sourceCode.findMany({
+    where: active,
+    select: codeSelect,
+    orderBy: orderByCode,
+  });
+  const channels = await tx.channel.findMany({
+    where: active,
+    select: codeSelect,
+    orderBy: orderByCode,
+  });
+  const reasons = await tx.reasonCode.findMany({
+    where: { ...active, category: { in: ["CANCELLATION", "NO_SHOW"] } },
+    select: { ...codeSelect, category: true },
+    orderBy: orderByCode,
+  });
+  return { roomTypes, ratePlans, reservationTypes, marketCodes, sourceCodes, channels, reasons };
+}
+
+/**
+ * Rooms of a type free for [arrival, departure): active, no overlapping
+ * active assignment, no overlapping out-of-order block. Bounded by the
+ * property's room count.
+ */
+export function findAvailableRooms(
+  tx: Tx,
+  propertyId: string,
+  roomTypeId: string,
+  arrival: string,
+  departure: string,
+  excludeReservationRoomId: string | null,
+) {
+  return tx.$queryRaw<
+    {
+      id: string;
+      number: string;
+      floor: string | null;
+      housekeeping_status: string;
+      is_accessible: boolean;
+      is_smoking: boolean;
+    }[]
+  >`
+    SELECT r."id", r."number", f."name" AS "floor", r."housekeeping_status"::text AS "housekeeping_status",
+           r."is_accessible", r."is_smoking"
+    FROM "rooms" r
+    LEFT JOIN "floors" f ON f."id" = r."floor_id"
+    WHERE r."property_id" = ${propertyId}::uuid
+      AND r."room_type_id" = ${roomTypeId}::uuid
+      AND r."status" = 'ACTIVE'
+      AND NOT EXISTS (
+        SELECT 1 FROM "room_assignments" a
+        WHERE a."room_id" = r."id" AND a."status" = 'ACTIVE'
+          AND a."from_date" < ${departure}::date AND a."to_date" > ${arrival}::date
+          AND a."reservation_room_id" IS DISTINCT FROM ${excludeReservationRoomId}::uuid
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM "room_service_blocks" b
+        WHERE b."room_id" = r."id" AND b."kind" = 'OUT_OF_ORDER' AND b."status" IN ('SCHEDULED', 'ACTIVE')
+          AND b."from_date" < ${departure}::date AND b."to_date" > ${arrival}::date
+      )
+    ORDER BY r."sort_order", r."number"
+    LIMIT 500`;
+}

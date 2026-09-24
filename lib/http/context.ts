@@ -22,6 +22,7 @@ export interface PropertyContext extends SessionContext {
   propertyId: string;
   propertyCode: string;
   timezone: string;
+  currencyCode: string;
   /** Current business date, null until the property goes live. */
   businessDate: string | null;
 }

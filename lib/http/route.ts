@@ -137,6 +137,7 @@ export function definePropertyRoute<P extends { propertyId: string }, Q = undefi
         propertyId: property.id,
         propertyCode: property.code,
         timezone: property.timezone,
+        currencyCode: property.currencyCode,
         businessDate: await getCurrentBusinessDate(property.id),
       };
       return options.handler({ ...parsed, ctx });

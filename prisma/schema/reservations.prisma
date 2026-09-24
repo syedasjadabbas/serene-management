@@ -245,6 +245,8 @@ model ReservationRoom {
   @@index([propertyId, arrivalDate, status])
   @@index([propertyId, departureDate, status])
   @@index([propertyId, status])
+  /// Reservation search: "created on" filter and newest-first sort.
+  @@index([propertyId, createdAt(sort: Desc)])
   @@index([propertyId, roomId])
   @@index([primaryGuestId])
   @@index([propertyId, blockId])

@@ -1,5 +1,5 @@
 import "server-only";
-import { prisma } from "@/lib/db/prisma";
+import { prisma, type Tx } from "@/lib/db/prisma";
 import { runInTransaction } from "@/lib/db/transaction";
 import { auditActor, type PropertyContext, type SessionContext } from "@/lib/http/context";
 import { AppError, notFound } from "@/lib/http/errors";
@@ -14,6 +14,7 @@ import {
   findProperty,
   insertConfiguration,
   insertProperty,
+  nextSequenceValue,
   type PropertyRow,
   updatePropertyTimes,
   upsertConfiguration,
@@ -219,4 +220,19 @@ function changedFields(
     if (before[key] !== after[key]) result[key] = source[key];
   }
   return result;
+}
+
+/** Per-property document numbers. Confirmation numbers start at 100000 (6+ digits, human friendly). */
+const SEQUENCES = {
+  confirmation: { start: 100000, prefix: "" },
+  cancellation: { start: 1000, prefix: "X" },
+} as const;
+
+export async function allocateNumber(
+  tx: Tx,
+  propertyId: string,
+  name: keyof typeof SEQUENCES,
+): Promise<string> {
+  const { value, prefix } = await nextSequenceValue(tx, propertyId, name, SEQUENCES[name]);
+  return `${prefix}${value.toString()}`;
 }

@@ -72,6 +72,19 @@ Deferred, with reason:
 - **Design-system breadth**: only primitives used by Phase 1 screens were built (Button, TextField, Alert, Spinner, StatusPanel, header disclosure). React Aria Components remains the recommendation (open question 6) and is not yet adopted; current controls are native, accessible HTML.
 - **Open questions 3, 4, 7** remain open: rate limiting is in process memory (single instance), hosting undecided, Urdu typeface undecided.
 
+## Phase 2 (as executed) — Reservations + availability (pending commit)
+
+The product owner re-sequenced Phase 2 to **Reservations + Availability**. It delivers the reservation engine end to end and the minimum of the originally separate phases it depends on:
+
+- **Availability engine**: live per-night inventory from rooms, out-of-order blocks and reservation nights; restrictions (closed, CTA/CTD, min/max LOS, stay-through, advance); rate quotes (seasons by priority and weekday, occupancy, extra adult/child, derived plans with rounding).
+- **Reservation engine**: create (single/multi-room, specific room, waitlist, override), modify (dates, party, room type, rate plan, guest, codes, ETA) with optimistic concurrency, confirm, cancel (reason code, cancellation number), no-show, reinstate, room assignment; row-locked inventory with deterministic concurrency; gap-free confirmation numbers; HIGH audit for risky actions.
+- **Guests**: organization-wide search (word-order independent, trigram-indexed), create, read.
+- **UI**: availability, reservation search (URL filters, cursor pages), 4-step booking workflow, reservation detail with action dialogs and history; workspace navigation.
+- **Data**: interim configuration builder (`prisma/seed/inventory-builder.ts`) for room types, rooms, codes, policies and rate plans, used by the demo seed and tests; demo reservations created through the service.
+- **Schema**: one migration (created-date index).
+
+Moved to later phases: configuration screens for rooms, rate plans and restrictions; full guest profiles (documents, preferences, merge); room holds and auto-assign; deposits and cancellation penalties (billing); negotiated, member and day-use rates; block pickup (groups); turnaway capture.
+
 ## Phase 2 — Property configuration & rooms
 
 - Buildings, floors, room classes, room types, rooms, features, connections, component suites, conditions, housekeeping sections.
