@@ -155,57 +155,61 @@ model Reservation {
 }
 
 model ReservationRoom {
-  id                   String            @id @default(uuid(7)) @db.Uuid
-  propertyId           String            @map("property_id") @db.Uuid
-  reservationId        String            @map("reservation_id") @db.Uuid
+  id                       String            @id @default(uuid(7)) @db.Uuid
+  propertyId               String            @map("property_id") @db.Uuid
+  reservationId            String            @map("reservation_id") @db.Uuid
   /// 1..n within the booking; displayed as "<confirmation>-<line>".
-  lineNumber           Int               @map("line_number")
-  status               ReservationStatus @default(RESERVED)
-  primaryGuestId       String            @map("primary_guest_id") @db.Uuid
-  arrivalDate          DateTime          @map("arrival_date") @db.Date
+  lineNumber               Int               @map("line_number")
+  status                   ReservationStatus @default(RESERVED)
+  primaryGuestId           String            @map("primary_guest_id") @db.Uuid
+  arrivalDate              DateTime          @map("arrival_date") @db.Date
   /// Exclusive; equals arrivalDate for day use.
-  departureDate        DateTime          @map("departure_date") @db.Date
+  departureDate            DateTime          @map("departure_date") @db.Date
   /// Expected local arrival / departure time "HH:MM".
-  eta                  String?           @db.VarChar(5)
-  etd                  String?           @db.VarChar(5)
-  adults               Int               @default(1)
-  children             Int               @default(0)
+  eta                      String?           @db.VarChar(5)
+  etd                      String?           @db.VarChar(5)
+  adults                   Int               @default(1)
+  children                 Int               @default(0)
   /// Booked room type (inventory deducted). May differ from the assigned room's
   /// type after an upgrade; `rateRoomTypeId` is what the guest is charged for.
-  roomTypeId           String            @map("room_type_id") @db.Uuid
-  rateRoomTypeId       String            @map("rate_room_type_id") @db.Uuid
+  roomTypeId               String            @map("room_type_id") @db.Uuid
+  rateRoomTypeId           String            @map("rate_room_type_id") @db.Uuid
   /// Current room (denormalised from the active RoomAssignment).
-  roomId               String?           @map("room_id") @db.Uuid
-  ratePlanId           String            @map("rate_plan_id") @db.Uuid
-  currencyCode         String            @map("currency_code") @db.Char(3)
-  reservationTypeId    String            @map("reservation_type_id") @db.Uuid
-  marketCodeId         String            @map("market_code_id") @db.Uuid
-  sourceCodeId         String            @map("source_code_id") @db.Uuid
-  blockId              String?           @map("block_id") @db.Uuid
+  roomId                   String?           @map("room_id") @db.Uuid
+  ratePlanId               String            @map("rate_plan_id") @db.Uuid
+  currencyCode             String            @map("currency_code") @db.Char(3)
+  reservationTypeId        String            @map("reservation_type_id") @db.Uuid
+  marketCodeId             String            @map("market_code_id") @db.Uuid
+  sourceCodeId             String            @map("source_code_id") @db.Uuid
+  blockId                  String?           @map("block_id") @db.Uuid
   /// Share-with: reservation rooms sharing one physical room share this key.
-  shareGroupId         String?           @map("share_group_id") @db.Uuid
-  cancellationPolicyId String?           @map("cancellation_policy_id") @db.Uuid
-  depositPolicyId      String?           @map("deposit_policy_id") @db.Uuid
-  isFixedRate          Boolean           @default(false) @map("is_fixed_rate")
-  discountAmount       Decimal?          @map("discount_amount") @db.Decimal(19, 4)
-  discountPercent      Decimal?          @map("discount_percent") @db.Decimal(7, 4)
-  discountReasonId     String?           @map("discount_reason_id") @db.Uuid
-  isWalkIn             Boolean           @default(false) @map("is_walk_in")
-  isDayUse             Boolean           @default(false) @map("is_day_use")
-  doNotMove            Boolean           @default(false) @map("do_not_move")
-  isPreRegistered      Boolean           @default(false) @map("is_pre_registered")
+  shareGroupId             String?           @map("share_group_id") @db.Uuid
+  cancellationPolicyId     String?           @map("cancellation_policy_id") @db.Uuid
+  depositPolicyId          String?           @map("deposit_policy_id") @db.Uuid
+  isFixedRate              Boolean           @default(false) @map("is_fixed_rate")
+  discountAmount           Decimal?          @map("discount_amount") @db.Decimal(19, 4)
+  discountPercent          Decimal?          @map("discount_percent") @db.Decimal(7, 4)
+  discountReasonId         String?           @map("discount_reason_id") @db.Uuid
+  isWalkIn                 Boolean           @default(false) @map("is_walk_in")
+  isDayUse                 Boolean           @default(false) @map("is_day_use")
+  doNotMove                Boolean           @default(false) @map("do_not_move")
+  isPreRegistered          Boolean           @default(false) @map("is_pre_registered")
   /// Advance check-in: guest registered, waiting for room readiness.
-  advanceCheckInAt     DateTime?         @map("advance_check_in_at") @db.Timestamptz(3)
-  queuedAt             DateTime?         @map("queued_at") @db.Timestamptz(3)
-  queuePriority        Int?              @map("queue_priority")
-  cancellationNumber   String?           @map("cancellation_number") @db.VarChar(20)
-  cancelledAt          DateTime?         @map("cancelled_at") @db.Timestamptz(3)
-  cancelledById        String?           @map("cancelled_by_id") @db.Uuid
-  cancelReasonId       String?           @map("cancel_reason_id") @db.Uuid
-  noShowAt             DateTime?         @map("no_show_at") @db.Timestamptz(3)
-  version              Int               @default(1)
-  createdAt            DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt            DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
+  advanceCheckInAt         DateTime?         @map("advance_check_in_at") @db.Timestamptz(3)
+  queuedAt                 DateTime?         @map("queued_at") @db.Timestamptz(3)
+  queuePriority            Int?              @map("queue_priority")
+  cancellationNumber       String?           @map("cancellation_number") @db.VarChar(20)
+  cancelledAt              DateTime?         @map("cancelled_at") @db.Timestamptz(3)
+  cancelledById            String?           @map("cancelled_by_id") @db.Uuid
+  cancelReasonId           String?           @map("cancel_reason_id") @db.Uuid
+  noShowAt                 DateTime?         @map("no_show_at") @db.Timestamptz(3)
+  /// Business date of the cancellation / no-show (Phase 8 statistics and reports);
+  /// set exactly while the room is CANCELLED / NO_SHOW (checks in the migration).
+  cancellationBusinessDate DateTime?         @map("cancellation_business_date") @db.Date
+  noShowBusinessDate       DateTime?         @map("no_show_business_date") @db.Date
+  version                  Int               @default(1)
+  createdAt                DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   reservation        Reservation         @relation(fields: [propertyId, reservationId], references: [propertyId, id], onDelete: Restrict)
   primaryGuest       Guest               @relation(fields: [primaryGuestId], references: [id], onDelete: Restrict)
@@ -245,6 +249,8 @@ model ReservationRoom {
   @@index([propertyId, arrivalDate, status])
   @@index([propertyId, departureDate, status])
   @@index([propertyId, status])
+  @@index([propertyId, cancellationBusinessDate])
+  @@index([propertyId, noShowBusinessDate])
   /// Reservation search: "created on" filter and newest-first sort.
   @@index([propertyId, createdAt(sort: Desc)])
   @@index([propertyId, roomId])

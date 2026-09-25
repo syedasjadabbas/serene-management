@@ -7,6 +7,7 @@ import type { Permission } from "@/lib/permissions/catalog";
 import { hasPermission } from "@/lib/permissions/evaluate";
 import { decodeCursor, encodeCursor } from "@/lib/utils/cursor";
 import { recordAudit } from "@/modules/audit/audit.service";
+import type { AuditActor } from "@/modules/audit/audit.types";
 import { availableForNight } from "@/modules/availability/availability.policy";
 import {
   type InventoryDemand,
@@ -950,4 +951,78 @@ export async function requireBlockGroup(ctx: PropertyContext, blockId: string) {
   const block = await findBlock(prisma, ctx.propertyId, blockId);
   if (!block) throw notFound("Block");
   return block.groupId;
+}
+
+// --- Night audit (Phase 8) ------------------------------------------------------------------
+
+/**
+ * Night audit's automatic cutoff (PMS_WORKFLOWS §18, D21): every definite
+ * block whose cutoff date is on or before the closing date releases its
+ * unpicked rooms for the nights from `nextDate` on — the same effect as a
+ * manual release, recorded with a SYSTEM audit actor. Blocks without a
+ * cutoff date keep their rooms until released by hand.
+ */
+export async function applyCutoffsInTx(
+  tx: Tx,
+  ctx: PropertyContext,
+  businessDate: string,
+  nextDate: string,
+  actor: AuditActor,
+): Promise<{ blockId: string; code: string; released: number }[]> {
+  const due = await tx.$queryRaw<{ id: string }[]>`
+    SELECT b."id"
+    FROM "blocks" b
+    JOIN "block_statuses" s ON s."id" = b."status_id"
+    WHERE b."property_id" = ${ctx.propertyId}::uuid
+      AND s."type" = 'DEDUCT'
+      AND b."cutoff_date" IS NOT NULL AND b."cutoff_date" <= ${businessDate}::date
+      AND b."end_date" > ${nextDate}::date
+    ORDER BY b."id"`;
+  const results: { blockId: string; code: string; released: number }[] = [];
+  for (const { id } of due) {
+    const block = await lockBlock(tx, ctx.propertyId, id);
+    if (!block) continue;
+    const grid = await findBlockGrid(tx, [block.id]);
+    const roomTypeIds = [...new Set(grid.map((r) => r.room_type_id))];
+    const demands = demandsOf(block, roomTypeIds);
+    await lockInventoryForRelease(tx, ctx.propertyId, demands);
+    const locked = await findBlockGrid(tx, [block.id]);
+    let released = 0;
+    const nights: { roomTypeId: string; date: string; rooms: number }[] = [];
+    for (const row of locked) {
+      const date = toDateOnly(row.stay_date);
+      if (date < nextDate) continue;
+      const remaining = remainingRooms({
+        allocated: row.allocated,
+        released: row.released,
+        pickedUp: row.picked,
+      });
+      if (remaining <= 0) continue;
+      await setReleased(tx, {
+        blockId: block.id,
+        roomTypeId: row.room_type_id,
+        stayDate: row.stay_date,
+        released: row.released + remaining,
+      });
+      released += remaining;
+      nights.push({ roomTypeId: row.room_type_id, date, rooms: remaining });
+    }
+    if (released === 0) continue;
+    const { count } = await updateBlockVersioned(tx, block.id, block.version, {});
+    if (count !== 1) throw staleVersion("Block");
+    await syncInventoryCounters(tx, ctx.propertyId, demands);
+    await recordAudit(
+      tx,
+      { ...actor, businessDate },
+      {
+        action: "block.cutoff",
+        resourceType: "Block",
+        resourceId: block.id,
+        after: { released, nights, cutoffDate: toDateOnly(block.cutoffDate!), from: nextDate },
+        permission: "nightaudit:run",
+      },
+    );
+    results.push({ blockId: block.id, code: block.code, released });
+  }
+  return results;
 }

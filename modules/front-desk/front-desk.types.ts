@@ -157,7 +157,7 @@ export interface StayDetail {
   history: StayHistoryEntry[];
   /** Ledger balance of the stay's billing windows (null before a folio is opened). */
   folio: FolioSummary | null;
-  allowedActions: { checkOut: boolean; moveRoom: boolean; viewFolio: boolean };
+  allowedActions: { checkOut: boolean; moveRoom: boolean; viewFolio: boolean; extend: boolean };
   /** Operational reason codes for the dialogs. */
   reasonCodes: { roomMove: CodeRef[]; earlyDeparture: CodeRef[] };
 }

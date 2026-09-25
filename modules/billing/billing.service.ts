@@ -19,6 +19,7 @@ import {
   recordAudit,
   resourceHistory,
 } from "@/modules/audit/audit.service";
+import type { AuditActor } from "@/modules/audit/audit.types";
 import { addDays, fromDateOnly, toDateOnly } from "@/modules/business-date/business-date.policy";
 import { requireOpenBusinessDate } from "@/modules/business-date/business-date.service";
 import { normalizeName } from "@/modules/guests/guests.policy";
@@ -26,6 +27,7 @@ import { runIdempotent } from "@/modules/idempotency/idempotency.service";
 import { billingRules } from "@/modules/properties/properties.service";
 import { currencyMinorUnits } from "@/modules/rates/rates.service";
 import {
+  type LockedReservationRoom,
   lockReservationRoomById,
   markNightPosting,
   nightsForRoomCharges,
@@ -269,7 +271,7 @@ function assertCodeLimits(code: CodeRow, unitAmount: MoneyUnits) {
 interface ChargeLines {
   folio: LockedFolio;
   code: { id: string; name: string };
-  source: "MANUAL" | "SYSTEM" | "PACKAGE";
+  source: "MANUAL" | "SYSTEM" | "PACKAGE" | "NIGHT_AUDIT";
   businessDate: string;
   revenueDate: string | null;
   quantity: number;
@@ -865,117 +867,251 @@ export async function postRoomCharges(
       if (room.status !== "IN_HOUSE" && room.status !== "CHECKED_OUT") {
         throw rule("Room charges post for checked-in stays", "NOT_CHECKED_IN");
       }
-      const folioId = await ensureGuestFolioInTx(tx, ctx, businessDate, room, 1);
-      const folio = await folioState(tx, ctx.propertyId, folioId);
-      assertOpenForPosting(folio);
-      const before = await verifiedBalance(tx, folio);
-
-      const nights = (await nightsForRoomCharges(tx, ctx.propertyId, reservationRoomId)).filter(
-        (night) => night.stayDate <= through,
-      );
-      const arrival = toDateOnly(room.arrivalDate);
-      const departure = toDateOnly(room.departureDate);
-      const minorUnits = await currencyMinorUnits(tx, folio.currency_code);
-
-      // Existing keys: generation count and whether a live (unreversed) posting exists.
-      const keys = await findPostingKeys(tx, ctx.propertyId, reservationRoomId);
-      const byBase = new Map<string, { generations: number; live: boolean }>();
-      for (const key of keys) {
-        const base = key.posting_key.slice(0, key.posting_key.lastIndexOf(":"));
-        const entry = byBase.get(base) ?? { generations: 0, live: false };
-        entry.generations += 1;
-        entry.live ||= !key.reversed;
-        byBase.set(base, entry);
-      }
-
-      const header = await findAccountHeader(tx, ctx.propertyId, reservationRoomId);
-      const planned = await planNightLines(tx, ctx.propertyId, reservationRoomId, nights, {
-        arrival,
-        departure,
-        minorUnits,
-        currencyCode: folio.currency_code,
-        businessDate,
+      const posted = await postNightsInTx(tx, ctx, businessDate, room, through, {
+        source: "SYSTEM",
+        actor: auditActor(ctx),
+        permission: "billing:post",
       });
-      const { codes, rules } = planned;
-
-      const postedNights: string[] = [];
-      const itemIds: string[] = [];
-      let total = 0n;
-      for (const night of nights) {
-        const lines = planned.byNight.get(night.stayDate)!;
-
-        let postedAny = false;
-        for (const line of lines) {
-          const existing = byBase.get(line.base);
-          if (existing?.live) continue;
-          if (line.amount === 0n) continue;
-          const code = codes.get(line.codeId);
-          if (!code || code.status !== "ACTIVE") {
-            throw rule(`Transaction code for ${line.description} is not active`, "CODE_INACTIVE");
-          }
-          const breakdown = calculateCharge({
-            amount: roundToMinorUnits(line.amount, minorUnits),
-            quantity: line.quantity,
-            inclusive: line.inclusive,
-            rules: rules.get(line.codeId) ?? [],
-            minorUnits,
-          });
-          const ids = await insertChargeLines(tx, ctx, {
-            folio,
-            code,
-            source: line.source,
-            businessDate,
-            revenueDate: night.stayDate,
-            quantity: line.quantity,
-            unitAmount: line.unit,
-            breakdown,
-            description: line.description,
-            postingKey: line.key((existing?.generations ?? 0) + 1),
-            reservationRoomId,
-            roomId: header?.room?.id ?? null,
-            packageComponentId: line.componentId,
-          });
-          itemIds.push(...ids);
-          total += breakdown.total;
-          postedAny = true;
-        }
-        if (!night.posted) await markNightPosting(tx, reservationRoomId, night.stayDate, true);
-        if (postedAny || !night.posted) postedNights.push(night.stayDate);
-      }
-
-      if (postedNights.length === 0) {
+      if (posted.postedNights.length === 0) {
         throw rule("There are no unposted room nights up to this date", "NOTHING_TO_POST", {
           through,
         });
       }
-      const after = await totalsAfter(tx, ctx.propertyId, folio.id);
-      await recordAudit(
-        tx,
-        { ...auditActor(ctx), businessDate },
-        {
-          action: "folio.post_room_charges",
-          resourceType: "Folio",
-          resourceId: folio.id,
-          before: { balance: money(before) },
-          after: folioAudit(folio, {
-            reservationRoomId,
-            nights: postedNights,
-            itemIds,
-            total: money(total),
-            balance: money(after.balance),
-          }),
-          permission: "billing:post",
-        },
-      );
       return {
         reservationRoomId,
-        postedNights,
-        itemIds,
-        total: money(total),
+        postedNights: posted.postedNights,
+        itemIds: posted.itemIds,
+        total: money(posted.total),
       } satisfies RoomChargesResult;
     });
     return result;
   });
+}
+
+/** What one reservation room's posting run produced. */
+export interface NightPostingResult {
+  folioId: string | null;
+  postedNights: string[];
+  itemIds: string[];
+  /** Charges and taxes posted (gross). */
+  total: MoneyUnits;
+  taxes: MoneyUnits;
+}
+
+/**
+ * Posts the room charge and package lines of every stay night up to
+ * `through` that has no live posting yet, inside the caller's transaction
+ * (which holds the business date and the reservation room lock). The one
+ * posting engine for the manual "Post room charges" command and for night
+ * audit's POST_ROOM_AND_TAX step (D23, D30).
+ *
+ * Deterministic: each line carries a posting key (room night / component,
+ * generation), and the unique index on it makes a repeated run a no-op; a
+ * reversed night gets the next generation. Nothing is audited when nothing
+ * was posted.
+ */
+export async function postNightsInTx(
+  tx: Tx,
+  ctx: PropertyContext,
+  businessDate: string,
+  room: LockedReservationRoom,
+  through: string,
+  options: {
+    /** Source of the room line (package lines are PACKAGE). */
+    source: "SYSTEM" | "NIGHT_AUDIT";
+    actor: AuditActor;
+    permission: Permission;
+  },
+): Promise<NightPostingResult> {
+  const reservationRoomId = room.id;
+  const nights = (await nightsForRoomCharges(tx, ctx.propertyId, reservationRoomId)).filter(
+    (night) => night.stayDate <= through,
+  );
+  if (nights.length === 0 || nights.every((night) => night.posted)) {
+    // A reversed night clears its `posted` flag, so a stay whose nights are
+    // all flagged has no line left to post.
+    return { folioId: null, postedNights: [], itemIds: [], total: 0n, taxes: 0n };
+  }
+  const folioId = await ensureGuestFolioInTx(tx, ctx, businessDate, room, 1);
+  const folio = await folioState(tx, ctx.propertyId, folioId);
+  assertOpenForPosting(folio);
+  const before = await verifiedBalance(tx, folio);
+
+  const arrival = toDateOnly(room.arrivalDate);
+  const departure = toDateOnly(room.departureDate);
+  const minorUnits = await currencyMinorUnits(tx, folio.currency_code);
+
+  // Existing keys: generation count and whether a live (unreversed) posting exists.
+  const keys = await findPostingKeys(tx, ctx.propertyId, reservationRoomId);
+  const byBase = new Map<string, { generations: number; live: boolean }>();
+  for (const key of keys) {
+    const base = key.posting_key.slice(0, key.posting_key.lastIndexOf(":"));
+    const entry = byBase.get(base) ?? { generations: 0, live: false };
+    entry.generations += 1;
+    entry.live ||= !key.reversed;
+    byBase.set(base, entry);
+  }
+
+  const planned = await planNightLines(tx, ctx.propertyId, reservationRoomId, nights, {
+    arrival,
+    departure,
+    minorUnits,
+    currencyCode: folio.currency_code,
+    businessDate,
+  });
+  const { codes, rules } = planned;
+
+  const postedNights: string[] = [];
+  const itemIds: string[] = [];
+  let total = 0n;
+  let taxes = 0n;
+  for (const night of nights) {
+    const lines = planned.byNight.get(night.stayDate)!;
+
+    let postedAny = false;
+    for (const line of lines) {
+      const existing = byBase.get(line.base);
+      if (existing?.live) continue;
+      if (line.amount === 0n) continue;
+      const code = codes.get(line.codeId);
+      if (!code || code.status !== "ACTIVE") {
+        throw rule(`Transaction code for ${line.description} is not active`, "CODE_INACTIVE");
+      }
+      const breakdown = calculateCharge({
+        amount: roundToMinorUnits(line.amount, minorUnits),
+        quantity: line.quantity,
+        inclusive: line.inclusive,
+        rules: rules.get(line.codeId) ?? [],
+        minorUnits,
+      });
+      const ids = await insertChargeLines(tx, ctx, {
+        folio,
+        code,
+        source: line.source === "SYSTEM" ? options.source : line.source,
+        businessDate,
+        revenueDate: night.stayDate,
+        quantity: line.quantity,
+        unitAmount: line.unit,
+        breakdown,
+        description: line.description,
+        postingKey: line.key((existing?.generations ?? 0) + 1),
+        reservationRoomId,
+        roomId: room.roomId,
+        packageComponentId: line.componentId,
+      });
+      itemIds.push(...ids);
+      total += breakdown.total;
+      taxes += breakdown.taxes.reduce((sum, tax) => sum + tax.amount, 0n);
+      postedAny = true;
+    }
+    if (!night.posted) await markNightPosting(tx, reservationRoomId, night.stayDate, true);
+    if (postedAny || !night.posted) postedNights.push(night.stayDate);
+  }
+
+  if (postedNights.length > 0) {
+    const after = await totalsAfter(tx, ctx.propertyId, folio.id);
+    await recordAudit(
+      tx,
+      { ...options.actor, businessDate },
+      {
+        action: "folio.post_room_charges",
+        resourceType: "Folio",
+        resourceId: folio.id,
+        before: { balance: money(before) },
+        after: folioAudit(folio, {
+          reservationRoomId,
+          nights: postedNights,
+          itemIds,
+          total: money(total),
+          balance: money(after.balance),
+          source: options.source,
+        }),
+        permission: options.permission,
+      },
+    );
+  }
+  return { folioId: folio.id, postedNights, itemIds, total, taxes };
+}
+
+/**
+ * Night audit: the no-show fee of a guaranteed reservation (PMS_WORKFLOWS
+ * §15) — the arrival night's rate with the fee code's taxes, on the
+ * reservation room's window 1 (folios attach to reservation rooms, D6).
+ * Keyed `NOSHOW:<reservation room>:1`, so it can never post twice.
+ */
+export async function postNoShowFeeInTx(
+  tx: Tx,
+  ctx: PropertyContext,
+  businessDate: string,
+  room: LockedReservationRoom,
+  transactionCodeId: string,
+  actor: AuditActor,
+): Promise<{ itemIds: string[]; total: MoneyUnits; taxes: MoneyUnits } | null> {
+  const postingKey = `NOSHOW:${room.id}:1`;
+  const existing = await tx.folioItem.findFirst({
+    where: { propertyId: ctx.propertyId, postingKey },
+    select: { id: true },
+  });
+  if (existing) return null;
+  const nights = await nightsForRoomCharges(tx, ctx.propertyId, room.id);
+  const first = nights[0];
+  if (!first) return null;
+  const [code] = await findTransactionCodes(tx, ctx.propertyId, [transactionCodeId]);
+  if (!code || code.status !== "ACTIVE") {
+    throw rule("The no-show fee transaction code is not active", "CODE_INACTIVE");
+  }
+  const plan = await tx.ratePlan.findFirst({
+    where: { propertyId: ctx.propertyId, id: first.ratePlanId },
+    select: { taxInclusive: true },
+  });
+  const folioId = await ensureGuestFolioInTx(tx, ctx, businessDate, room, 1);
+  const folio = await folioState(tx, ctx.propertyId, folioId);
+  assertOpenForPosting(folio);
+  const minorUnits = await currencyMinorUnits(tx, folio.currency_code);
+  const rules = await taxRulesByCode(tx, ctx.propertyId, [code.id], businessDate);
+  const amount = roundToMinorUnits(parseMoney(first.rateAmount), minorUnits);
+  if (amount === 0n) return null;
+  const breakdown = calculateCharge({
+    amount,
+    quantity: 1,
+    inclusive: (plan?.taxInclusive ?? false) || code.isTaxInclusive,
+    rules: rules.get(code.id) ?? [],
+    minorUnits,
+  });
+  const itemIds = await insertChargeLines(tx, ctx, {
+    folio,
+    code,
+    source: "NIGHT_AUDIT",
+    businessDate,
+    revenueDate: businessDate,
+    quantity: 1,
+    unitAmount: amount,
+    breakdown,
+    description: `${code.name} · ${first.stayDate}`,
+    postingKey,
+    reservationRoomId: room.id,
+    roomId: null,
+  });
+  const taxes = breakdown.taxes.reduce((sum, tax) => sum + tax.amount, 0n);
+  const after = await totalsAfter(tx, ctx.propertyId, folio.id);
+  await recordAudit(
+    tx,
+    { ...actor, businessDate },
+    {
+      action: "folio.post_no_show_fee",
+      resourceType: "Folio",
+      resourceId: folio.id,
+      risk: "HIGH",
+      after: folioAudit(folio, {
+        reservationRoomId: room.id,
+        itemIds,
+        total: money(breakdown.total),
+        balance: money(after.balance),
+      }),
+      permission: "nightaudit:run",
+    },
+  );
+  return { itemIds, total: breakdown.total, taxes };
 }
 
 // --- Corrections ------------------------------------------------------------------------

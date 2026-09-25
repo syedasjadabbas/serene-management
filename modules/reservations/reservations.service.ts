@@ -3,6 +3,7 @@ import type { Prisma } from "@/generated/prisma/client";
 import { prisma, type Tx } from "@/lib/db/prisma";
 import { runInTransaction } from "@/lib/db/transaction";
 import { auditActor, type PropertyContext } from "@/lib/http/context";
+import type { AuditActor } from "@/modules/audit/audit.types";
 import { AppError, forbidden, notFound, staleVersion } from "@/lib/http/errors";
 import type { Permission } from "@/lib/permissions/catalog";
 import { hasPermission } from "@/lib/permissions/evaluate";
@@ -63,6 +64,9 @@ import {
   countRoomOutOfOrder,
   deleteNights,
   deleteNightsFrom,
+  deleteNightsBefore,
+  countUnpostedNightsBefore,
+  extendActiveAssignments,
   findAuditHistory,
   findAvailableRooms,
   findBookingOptions,
@@ -816,8 +820,9 @@ export async function markNoShow(
 
 /**
  * Cancel / no-show: status change, inventory released, room assignment
- * released, cancellation number for cancellations. Penalty postings arrive
- * with folios (Phase 6).
+ * released, cancellation number for cancellations. A no-show fee is posted
+ * by night audit (billing `postNoShowFeeInTx`); cancellation penalties are
+ * not posted yet.
  */
 async function releaseReservation(
   ctx: PropertyContext,
@@ -828,9 +833,6 @@ async function releaseReservation(
   const reservationId = await runInTransaction(async (tx) => {
     const businessDate = await requireOpenBusinessDate(tx, ctx.propertyId);
     const current = await lockRoomOrThrow(tx, ctx, reservationRoomId, input.version);
-    assertTransition(action, current, businessDate);
-    const before = stateOf(current);
-
     const reasonCode = await findReasonCode(
       tx,
       ctx.propertyId,
@@ -842,58 +844,91 @@ async function releaseReservation(
         fields: { reasonCodeId: ["Invalid reason"] },
       });
     }
-
-    const consumes = consumesInventory(before.status, before.deductsInventory);
-    const demand = demandOf(current.roomTypeId, before.arrival, before.departure);
-    if (consumes) await lockInventoryForRelease(tx, ctx.propertyId, [demand]);
-
-    const now = new Date();
-    const cancellationNumber =
-      action === "cancel" ? await allocateNumber(tx, ctx.propertyId, "cancellation") : null;
-    await releaseActiveAssignments(tx, current.id, ctx.userId, now);
-    await saveVersioned(
-      tx,
-      current,
-      action === "cancel"
-        ? {
-            status: "CANCELLED",
-            cancellationNumber,
-            cancelledAt: now,
-            cancelledById: ctx.userId,
-            cancelReasonId: reasonCode.id,
-            roomId: null,
-          }
-        : { status: "NO_SHOW", noShowAt: now, roomId: null },
-    );
-    if (consumes) await syncInventoryCounters(tx, ctx.propertyId, [demand]);
-
-    await recordAudit(
-      tx,
-      { ...auditActor(ctx), businessDate },
-      {
-        action: action === "cancel" ? "reservation.cancel" : "reservation.no_show",
-        resourceType: "ReservationRoom",
-        resourceId: current.id,
-        risk: "HIGH",
-        before: {
-          status: current.status,
-          bookingState: bookingState(before.status, before.deductsInventory),
-          roomId: current.roomId,
-        },
-        after: {
-          status: action === "cancel" ? "CANCELLED" : "NO_SHOW",
-          cancellationNumber,
-          reasonCode: reasonCode.code,
-          inventoryReleased: consumes,
-        },
-        reason: input.reason,
-        reasonCodeId: reasonCode.id,
-        permission: action === "cancel" ? "reservations:cancel" : "reservations:no_show",
-      },
-    );
+    await releaseReservationInTx(tx, ctx, businessDate, current, action, {
+      reason: input.reason,
+      reasonCode,
+      permission: action === "cancel" ? "reservations:cancel" : "reservations:no_show",
+    });
     return current.reservationId;
   });
   return getReservation(ctx, reservationId);
+}
+
+/**
+ * The cancel / no-show transition inside the caller's transaction, which
+ * holds the business date and the reservation room lock. Night audit calls
+ * it for automatic no-shows with a SYSTEM audit actor.
+ */
+export async function releaseReservationInTx(
+  tx: Tx,
+  ctx: PropertyContext,
+  businessDate: string,
+  current: LockedReservationRoom,
+  action: "cancel" | "no_show",
+  command: {
+    reason: string;
+    reasonCode: { id: string; code: string };
+    permission: Permission;
+  },
+  actor: AuditActor = auditActor(ctx),
+): Promise<{ inventoryReleased: boolean; cancellationNumber: string | null }> {
+  assertTransition(action, current, businessDate);
+  const before = stateOf(current);
+  const consumes = consumesInventory(before.status, before.deductsInventory);
+  const demand = demandOf(current.roomTypeId, before.arrival, before.departure);
+  if (consumes) await lockInventoryForRelease(tx, ctx.propertyId, [demand]);
+
+  const now = new Date();
+  const cancellationNumber =
+    action === "cancel" ? await allocateNumber(tx, ctx.propertyId, "cancellation") : null;
+  await releaseActiveAssignments(tx, current.id, ctx.userId, now);
+  await saveVersioned(
+    tx,
+    current,
+    action === "cancel"
+      ? {
+          status: "CANCELLED",
+          cancellationNumber,
+          cancelledAt: now,
+          cancelledById: ctx.userId,
+          cancelReasonId: command.reasonCode.id,
+          cancellationBusinessDate: fromDateOnly(businessDate),
+          roomId: null,
+        }
+      : {
+          status: "NO_SHOW",
+          noShowAt: now,
+          noShowBusinessDate: fromDateOnly(businessDate),
+          roomId: null,
+        },
+  );
+  if (consumes) await syncInventoryCounters(tx, ctx.propertyId, [demand]);
+
+  await recordAudit(
+    tx,
+    { ...actor, businessDate },
+    {
+      action: action === "cancel" ? "reservation.cancel" : "reservation.no_show",
+      resourceType: "ReservationRoom",
+      resourceId: current.id,
+      risk: "HIGH",
+      before: {
+        status: current.status,
+        bookingState: bookingState(before.status, before.deductsInventory),
+        roomId: current.roomId,
+      },
+      after: {
+        status: action === "cancel" ? "CANCELLED" : "NO_SHOW",
+        cancellationNumber,
+        reasonCode: command.reasonCode.code,
+        inventoryReleased: consumes,
+      },
+      reason: command.reason,
+      reasonCodeId: command.reasonCode.id,
+      permission: command.permission,
+    },
+  );
+  return { inventoryReleased: consumes, cancellationNumber };
 }
 
 export async function reinstateReservation(
@@ -923,6 +958,7 @@ export async function reinstateReservation(
       cancelledAt: null,
       cancelledById: null,
       cancelReasonId: null,
+      cancellationBusinessDate: null,
     });
     if (before.deductsInventory) await syncInventoryCounters(tx, ctx.propertyId, [demand]);
 
@@ -938,6 +974,68 @@ export async function reinstateReservation(
         after: {
           status: "RESERVED",
           bookingState: bookingState("RESERVED", before.deductsInventory),
+          override: input.override,
+        },
+        reason: input.reason,
+        permission: "reservations:reinstate",
+      },
+    );
+    return current.reservationId;
+  });
+  return getReservation(ctx, reservationId);
+}
+
+/**
+ * NO_SHOW → RESERVED for a guest who does arrive after all (DOMAIN_MODEL
+ * §6.1): the stay now starts on the business date, earlier nights are
+ * dropped, and the remaining nights take inventory again (from the block
+ * for a pickup). A no-show fee already posted stays on the folio; the clerk
+ * corrects it with an adjustment when the hotel waives it.
+ */
+export async function reinstateNoShow(
+  ctx: PropertyContext,
+  reservationRoomId: string,
+  input: ReinstateReservationInput,
+): Promise<ReservationDetail> {
+  if (input.override) requirePermission(ctx, "reservations:override_availability");
+
+  const reservationId = await runInTransaction(async (tx) => {
+    const businessDate = await requireOpenBusinessDate(tx, ctx.propertyId);
+    const current = await lockRoomOrThrow(tx, ctx, reservationRoomId, input.version);
+    assertTransition("reinstate_no_show", current, businessDate);
+    const before = stateOf(current);
+    const arrival = before.arrival > businessDate ? before.arrival : businessDate;
+    const demand = demandOf(current.roomTypeId, arrival, before.departure);
+    if (before.deductsInventory && current.blockId) {
+      await reserveBlockInventory(tx, ctx.propertyId, current.blockId, demand, {
+        allowOverbooking: input.override,
+      });
+    } else if (before.deductsInventory) {
+      await reserveInventory(tx, ctx.propertyId, [demand], { allowOverbooking: input.override });
+    }
+    const dropped = (await deleteNightsBefore(tx, current.id, fromDateOnly(arrival))).count;
+    await saveVersioned(tx, current, {
+      status: "RESERVED",
+      arrivalDate: fromDateOnly(arrival),
+      noShowAt: null,
+      noShowBusinessDate: null,
+    });
+    if (before.deductsInventory) await syncInventoryCounters(tx, ctx.propertyId, [demand]);
+
+    await recordAudit(
+      tx,
+      { ...auditActor(ctx), businessDate },
+      {
+        action: "reservation.reinstate_no_show",
+        resourceType: "ReservationRoom",
+        resourceId: current.id,
+        risk: "HIGH",
+        before: { status: "NO_SHOW", arrival: before.arrival, departure: before.departure },
+        after: {
+          status: "RESERVED",
+          arrival,
+          departure: before.departure,
+          droppedNights: dropped,
           override: input.override,
         },
         reason: input.reason,
@@ -1172,6 +1270,103 @@ export async function markCheckedOut(
   });
   if (early) await syncInventoryCounters(tx, ctx.propertyId, [unused]);
   return { departure: finalDeparture, releasedNights };
+}
+
+/**
+ * In-house extension to a later departure (the stay command lives in the
+ * front desk). The added nights are priced by the one pricing engine (D19)
+ * and take inventory; the room must stay free for them (the assignment is
+ * extended under the room-assignment exclusion constraint, the room row is
+ * locked and checked for out-of-order periods). Sales restrictions are not
+ * applied: they govern new bookings, not a guest already in house.
+ */
+export async function extendInHouseStay(
+  tx: Tx,
+  ctx: PropertyContext,
+  current: LockedReservationRoom,
+  businessDate: string,
+  newDeparture: string,
+  override: boolean,
+): Promise<{ departure: string; addedNights: number; total: string }> {
+  assertTransition("extend", current, businessDate);
+  const { departure } = stateOf(current);
+  if (newDeparture <= departure) {
+    throw new AppError("VALIDATION_FAILED", `Choose a departure after ${departure}`, {
+      fields: { departure: [`After ${departure}`] },
+    });
+  }
+  if (!current.roomId) {
+    throw new AppError("BUSINESS_RULE_VIOLATION", "The stay has no room assigned", {
+      reason: "NO_ROOM",
+    });
+  }
+  const added = demandOf(current.roomTypeId, departure, newDeparture);
+  const priced = await priceStay(
+    tx,
+    ctx,
+    businessDate,
+    {
+      arrival: departure,
+      departure: newDeparture,
+      adults: current.adults,
+      children: current.children,
+      roomTypeId: current.rateRoomTypeId,
+      ratePlanId: current.ratePlanId,
+    },
+    { allowGroupRates: current.blockId !== null, accountId: current.reservation.companyId },
+  );
+  await reserveInventory(tx, ctx.propertyId, [added], { allowOverbooking: override });
+  await requireAssignableRoom(
+    tx,
+    ctx.propertyId,
+    current.roomId,
+    current.roomTypeId,
+    departure,
+    newDeparture,
+  );
+  await extendActiveAssignments(tx, current.id, newDeparture);
+  await insertNights(
+    tx,
+    nightRows(
+      ctx.propertyId,
+      current.id,
+      {
+        roomTypeId: current.rateRoomTypeId,
+        ratePlanId: current.ratePlanId,
+        adults: current.adults,
+        children: current.children,
+      },
+      ctx.currencyCode,
+      priced.nightly,
+    ),
+  );
+  await saveVersioned(tx, current, { departureDate: fromDateOnly(newDeparture) });
+  await syncInventoryCounters(tx, ctx.propertyId, [added]);
+  return {
+    departure: newDeparture,
+    addedNights: priced.nightly.length,
+    total: formatMoney(sum(priced.nightly.map((night) => night.amount))),
+  };
+}
+
+/**
+ * Check-out and night audit: every night before `before` must carry its
+ * room charge. After go-live night audit posts each night; a stay that
+ * predates it is posted from the folio ("Post room charges").
+ */
+export async function assertNightsPostedBefore(
+  tx: Tx,
+  reservationRoomId: string,
+  before: string,
+): Promise<void> {
+  const unposted = await countUnpostedNightsBefore(tx, reservationRoomId, fromDateOnly(before));
+  if (unposted > 0) {
+    throw new AppError(
+      "BUSINESS_RULE_VIOLATION",
+      `${unposted} earlier night${unposted === 1 ? " has" : "s have"} no room charge yet. Post the room charges from the folio first.`,
+      { reason: "NIGHTS_NOT_POSTED", unposted },
+    );
+  }
 }
 
 // --- Packages (Phase 6) ------------------------------------------------------------------
@@ -1720,6 +1915,7 @@ export async function getReservation(
         cancel: allowed("cancel", "reservations:cancel"),
         noShow: allowed("no_show", "reservations:no_show"),
         reinstate: allowed("reinstate", "reservations:reinstate"),
+        reinstateNoShow: allowed("reinstate_no_show", "reservations:reinstate"),
         assignRoom: allowed("assign_room", "rooms:assign"),
         checkIn: allowed("check_in", "frontdesk:checkin"),
         checkOut: allowed("check_out", "frontdesk:checkout"),

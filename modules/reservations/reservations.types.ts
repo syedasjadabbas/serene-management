@@ -37,6 +37,8 @@ export interface ReservationAllowedActions {
   cancel: boolean;
   noShow: boolean;
   reinstate: boolean;
+  /** Phase 8: a no-show reserved again from the business date. */
+  reinstateNoShow: boolean;
   assignRoom: boolean;
   /** Front desk (Phase 3). */
   checkIn: boolean;

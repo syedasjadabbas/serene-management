@@ -44,5 +44,7 @@ export interface PropertyConfigurationView {
   allowCancelWithDeposit: boolean;
   autoCloseCashiersOnAudit: boolean;
   roomHoldDefaultMinutes: number;
+  noShowTransactionCodeId: string | null;
+  noShowReasonCodeId: string | null;
   updatedAt: string | null;
 }

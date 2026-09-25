@@ -27,13 +27,14 @@ export function checkoutTiming(
 }
 
 export type StayStatus = "IN_HOUSE" | "CHECKED_OUT";
-export type StayAction = "check_out" | "room_move";
+export type StayAction = "check_out" | "room_move" | "extend";
 
 /** Stay state machine guard (docs/DOMAIN_MODEL.md §6.3). */
 export function stayTransitionProblem(action: StayAction, status: StayStatus): string | null {
   if (status === "IN_HOUSE") return null;
-  return action === "check_out"
-    ? "The guest has already checked out"
+  if (action === "check_out") return "The guest has already checked out";
+  return action === "extend"
+    ? "Only in-house stays can be extended"
     : "Only in-house guests can change rooms";
 }
 

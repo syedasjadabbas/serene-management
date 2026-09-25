@@ -6,21 +6,34 @@ const RETRYABLE_PRISMA_CODES = new Set(["P2034"]); // write conflict / deadlock
 const RETRYABLE_SQLSTATES = new Set(["40001", "40P01"]); // serialization failure, deadlock
 const MAX_ATTEMPTS = 3;
 
+export interface TransactionOptions {
+  /** Longest the transaction may run (default 15 s; night audit's commit uses more). */
+  timeoutMs?: number;
+  /** Longest to wait for a pooled connection (default 5 s). */
+  maxWaitMs?: number;
+  /** Retry serialization failures and deadlocks (default true). */
+  retry?: boolean;
+}
+
 /**
  * Runs one unit of work (one service command) in an interactive transaction
  * (docs/ARCHITECTURE.md §5). Serialization failures and deadlocks are retried
  * with jitter; business errors are never retried.
  */
-export async function runInTransaction<T>(work: (tx: Tx) => Promise<T>): Promise<T> {
+export async function runInTransaction<T>(
+  work: (tx: Tx) => Promise<T>,
+  options: TransactionOptions = {},
+): Promise<T> {
+  const attempts = options.retry === false ? 1 : MAX_ATTEMPTS;
   for (let attempt = 1; ; attempt++) {
     try {
       return await prisma.$transaction(work, {
         isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
-        maxWait: 5_000,
-        timeout: 15_000,
+        maxWait: options.maxWaitMs ?? 5_000,
+        timeout: options.timeoutMs ?? 15_000,
       });
     } catch (error) {
-      if (attempt >= MAX_ATTEMPTS || !isRetryable(error)) throw error;
+      if (attempt >= attempts || !isRetryable(error)) throw error;
       await new Promise((resolve) => setTimeout(resolve, 20 * attempt + Math.random() * 30));
     }
   }

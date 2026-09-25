@@ -147,7 +147,8 @@ async function inHouse(type: "KNG" | "TWN" | "SGL" = "KNG", nights = 2) {
 
 /**
  * Moves a checked-in stay back in time to [D - nightsBefore, D + nightsAfter)
- * (the fixture has no night-audit history), mirroring the demo seed.
+ * (the fixture has no night-audit history), mirroring the demo seed; the
+ * nights before D count as posted by those earlier audits.
  */
 async function backdate(reservationRoomId: string, nightsBefore: number, nightsAfter: number) {
   const arrival = addDays(D, -nightsBefore);
@@ -166,6 +167,8 @@ async function backdate(reservationRoomId: string, nightsBefore: number, nightsA
         ...night,
         adults: 1,
         children: 0,
+        // Nights before today were posted by earlier night audits (Phase 8).
+        postedAt: date < D ? new Date() : null,
       })),
     }),
     prisma.reservationRoom.update({

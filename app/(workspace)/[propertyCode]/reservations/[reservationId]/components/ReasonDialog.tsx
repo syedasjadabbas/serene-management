@@ -11,6 +11,7 @@ import {
   useBookingOptionsQuery,
   useCancelReservationMutation,
   useMarkNoShowMutation,
+  useReinstateNoShowMutation,
   useReinstateReservationMutation,
 } from "@/lib/api/endpoints/reservations.api";
 import { toClientApiError } from "@/lib/api/errors";
@@ -30,6 +31,12 @@ const COPY = {
   reinstate: {
     title: "Reinstate reservation",
     description: "Restores the cancelled reservation if rooms are still available.",
+    confirm: "Reinstate",
+  },
+  reinstateNoShow: {
+    title: "Reinstate no-show",
+    description:
+      "The guest arrived after all: the stay starts on today's business date if rooms are available. A no-show fee already posted stays on the folio until adjusted.",
     confirm: "Reinstate",
   },
 } as const;
@@ -53,12 +60,19 @@ export function ReasonDialog({
   const [cancel, cancelState] = useCancelReservationMutation();
   const [noShow, noShowState] = useMarkNoShowMutation();
   const [reinstate, reinstateState] = useReinstateReservationMutation();
+  const [reinstateNoShow, reinstateNoShowState] = useReinstateNoShowMutation();
   const state =
-    action === "cancel" ? cancelState : action === "noShow" ? noShowState : reinstateState;
+    action === "cancel"
+      ? cancelState
+      : action === "noShow"
+        ? noShowState
+        : action === "reinstateNoShow"
+          ? reinstateNoShowState
+          : reinstateState;
   const error = toClientApiError(state.error);
   const codes =
     action === "cancel" ? options.data?.reasonCodes.cancellation : options.data?.reasonCodes.noShow;
-  const needsCode = action !== "reinstate";
+  const needsCode = action === "cancel" || action === "noShow";
   const copy = COPY[action];
 
   async function submit() {
@@ -68,7 +82,9 @@ export function ReasonDialog({
         ? await cancel({ ...base, body: { version: room.version, reasonCodeId, reason } })
         : action === "noShow"
           ? await noShow({ ...base, body: { version: room.version, reasonCodeId, reason } })
-          : await reinstate({ ...base, body: { version: room.version, reason } });
+          : action === "reinstateNoShow"
+            ? await reinstateNoShow({ ...base, body: { version: room.version, reason } })
+            : await reinstate({ ...base, body: { version: room.version, reason } });
     if ("data" in result) {
       setReason("");
       setReasonCodeId("");
@@ -89,7 +105,7 @@ export function ReasonDialog({
             Close
           </Button>
           <Button
-            variant={action === "reinstate" ? "primary" : "danger"}
+            variant={needsCode ? "danger" : "primary"}
             pending={state.isLoading}
             disabled={!valid}
             onClick={() => void submit()}

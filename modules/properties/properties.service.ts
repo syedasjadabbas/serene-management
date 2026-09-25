@@ -35,6 +35,8 @@ const DEFAULT_CONFIGURATION = {
   allowCancelWithDeposit: false,
   autoCloseCashiersOnAudit: false,
   roomHoldDefaultMinutes: 30,
+  noShowTransactionCodeId: null,
+  noShowReasonCodeId: null,
 };
 
 export async function getOrganization(ctx: SessionContext): Promise<OrganizationView> {
@@ -150,6 +152,7 @@ export async function updatePropertyConfiguration(
             ...(checkOutTime !== undefined ? { checkOutTime } : {}),
           })
         : property;
+    await assertNightAuditCodes(tx, ctx.propertyId, settings);
     const configuration = await upsertConfiguration(tx, ctx.propertyId, settings);
     const after = toConfigurationView(updatedProperty, configuration);
 
@@ -166,6 +169,42 @@ export async function updatePropertyConfiguration(
     });
     return after;
   });
+}
+
+/** The no-show fee must post with a revenue code; the automatic reason must be a NO_SHOW reason. */
+async function assertNightAuditCodes(
+  tx: Tx,
+  propertyId: string,
+  settings: { noShowTransactionCodeId?: string | null; noShowReasonCodeId?: string | null },
+) {
+  if (settings.noShowTransactionCodeId) {
+    const code = await tx.transactionCode.findFirst({
+      where: {
+        id: settings.noShowTransactionCodeId,
+        propertyId,
+        status: "ACTIVE",
+        bucket: { notIn: ["PAYMENT", "TAX", "NON_REVENUE"] },
+        group: { type: "REVENUE" },
+      },
+      select: { id: true },
+    });
+    if (!code) {
+      throw new AppError("VALIDATION_FAILED", "Choose an active revenue transaction code", {
+        fields: { noShowTransactionCodeId: ["Not a revenue code of this property"] },
+      });
+    }
+  }
+  if (settings.noShowReasonCodeId) {
+    const reason = await tx.reasonCode.findFirst({
+      where: { id: settings.noShowReasonCodeId, propertyId, category: "NO_SHOW", status: "ACTIVE" },
+      select: { id: true },
+    });
+    if (!reason) {
+      throw new AppError("VALIDATION_FAILED", "Choose an active no-show reason code", {
+        fields: { noShowReasonCodeId: ["Not a no-show reason of this property"] },
+      });
+    }
+  }
 }
 
 function toPropertyView(row: PropertyRow): PropertyView {

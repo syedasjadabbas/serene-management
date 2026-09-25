@@ -152,7 +152,8 @@ const ROOM_TYPES: Record<string, InventorySpec["roomTypes"]> = {
  * charge and 7% municipality fee, 5% VAT compounded on top of both, and a
  * flat tourism fee per room night (after VAT, so not taxed itself).
  */
-const ROOM_AND_OUTLETS = ["1000", "2000", "2010", "2020", "2030", "3030"];
+// Room revenue codes (room charge, no-show fee) and outlets carry the percentage taxes.
+const ROOM_AND_OUTLETS = ["1000", "1090", "2000", "2010", "2020", "2030", "3030"];
 const TAXES: Record<string, InventorySpec["taxes"]> = {
   SMR: [
     {

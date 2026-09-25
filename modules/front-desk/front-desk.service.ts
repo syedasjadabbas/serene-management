@@ -13,8 +13,10 @@ import { normalizeName } from "@/modules/guests/guests.policy";
 import { frontOfficeRules } from "@/modules/properties/properties.service";
 import { displayConfirmation, nightCount } from "@/modules/reservations/reservations.policy";
 import {
+  assertNightsPostedBefore,
   assertReservationTransition,
   createReservationInTx,
+  extendInHouseStay,
   listAvailableRooms,
   lockReservationRoomById,
   lockReservationRoomForCommand,
@@ -72,6 +74,7 @@ import type {
   CheckInInput,
   CheckOutInput,
   DeparturesQuery,
+  ExtendStayInput,
   InHouseQuery,
   RoomMoveInput,
   WalkInInput,
@@ -195,7 +198,7 @@ function assertRoomUsable(room: LockedRoom, requireInspected: boolean, acceptNot
 function assertStay(
   stay: { status: StayStatus; version: number } | null,
   version: number,
-  action: "check_out" | "room_move",
+  action: "check_out" | "room_move" | "extend",
 ) {
   if (!stay) throw notFound("Stay");
   if (stay.version !== version) throw staleVersion("Stay");
@@ -466,6 +469,9 @@ export async function checkOut(
         ? await requireReasonCode(tx, ctx.propertyId, input.reasonCodeId, "EARLY_DEPARTURE")
         : null;
 
+    // Every night already used must carry its room charge (posted by night
+    // audit; a stay from before go-live is posted from the folio).
+    await assertNightsPostedBefore(tx, current.id, businessDate);
     const result = await markCheckedOut(tx, ctx, current, businessDate, early);
     const rooms = await lockRoomsForUpdate(tx, ctx.propertyId, businessDate, [stay!.room_id]);
     const room = rooms.get(stay!.room_id)!;
@@ -529,6 +535,65 @@ export async function checkOut(
         reason: input.reason ?? null,
         reasonCodeId: reasonCode?.id ?? null,
         permission: "frontdesk:checkout",
+      },
+    );
+  });
+  return getStay(ctx, stayId);
+}
+
+/**
+ * In-house extension: the stay continues to a later departure. The added
+ * nights are priced by the pricing engine and take inventory; the room must
+ * stay free for them. Night audit refuses to close a date while a guest due
+ * out has neither left nor been extended.
+ */
+export async function extendStay(
+  ctx: PropertyContext,
+  stayId: string,
+  input: ExtendStayInput,
+): Promise<StayDetail> {
+  if (input.override) requirePermission(ctx, "reservations:override_availability");
+  await runInTransaction(async (tx) => {
+    const businessDate = await requireOpenBusinessDate(tx, ctx.propertyId);
+    const ref = await findStayRef(tx, ctx.propertyId, stayId);
+    if (!ref) throw notFound("Stay");
+    const current = await lockReservationRoomById(tx, ctx, ref.reservationRoomId);
+    const stay = await lockStay(tx, ctx.propertyId, stayId);
+    assertStay(stay, input.version, "extend");
+    const before = reservationStayDates(current);
+    if (input.departure <= businessDate) {
+      throw new AppError("VALIDATION_FAILED", `Choose a departure after ${businessDate}`, {
+        fields: { departure: [`After ${businessDate}`] },
+      });
+    }
+    const result = await extendInHouseStay(
+      tx,
+      ctx,
+      current,
+      businessDate,
+      input.departure,
+      input.override,
+    );
+    const { count } = await updateStayVersioned(tx, stay!.id, stay!.version, {});
+    if (count !== 1) throw staleVersion("Stay");
+    await recordAudit(
+      tx,
+      { ...auditActor(ctx), businessDate },
+      {
+        action: "stay.extend",
+        resourceType: "Stay",
+        resourceId: stay!.id,
+        risk: input.override ? "HIGH" : "STANDARD",
+        before: { departure: before.departure },
+        after: {
+          departure: result.departure,
+          addedNights: result.addedNights,
+          addedRoomRevenue: result.total,
+          reservationRoomId: current.id,
+          override: input.override,
+        },
+        reason: input.reason ?? null,
+        permission: input.override ? "reservations:override_availability" : "reservations:update",
       },
     );
   });
@@ -893,6 +958,7 @@ export async function getStay(ctx: PropertyContext, stayId: string): Promise<Sta
         businessDate !== null &&
         can("rooms:assign") &&
         departure > (businessDate ?? departure),
+      extend: inHouse && businessDate !== null && can("reservations:update"),
     },
     reasonCodes: {
       roomMove: reasons.filter((r) => r.category === "ROOM_MOVE").map(ref),

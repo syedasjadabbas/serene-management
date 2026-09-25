@@ -85,7 +85,19 @@ The product owner re-sequenced Phase 2 to **Reservations + Availability**. It de
 
 Moved to later phases: configuration screens for rooms, rate plans and restrictions; full guest profiles (documents, preferences, merge); room holds and auto-assign; deposits and cancellation penalties (billing); negotiated, member and day-use rates; block pickup (groups); turnaway capture.
 
-## Phase 7 (as executed) — Guests, companies and loyalty (pending commit)
+## Phase 8 (as executed) — Night audit, finance and reports (pending commit)
+
+Delivers roadmap Phase 9 (night audit and business date roll) and the core of roadmap Phase 11 (reports and dashboard) on the existing schema (`business_dates`, `night_audit_runs` / `night_audit_steps`, `daily_statistics` / `daily_room_type_statistics` were modelled in Phase 0; the `nightaudit:*`, `reports:*`, `dashboard:read` and `audit:read` permissions already existed; one migration `20261001090000_night_audit_finance`):
+
+- **Night audit** (`modules/night-audit`, ARCHITECTURE D30 to D34): readiness checks (departures, arrivals, folio balances, payments against the ledger, room status, unposted nights; cashiers skipped), Phase A lock (date IN_AUDIT, postings answer 423), Phase C single transaction (room, package and tax posting through the billing engine with posting keys, automatic no-shows with the guaranteed no-show fee, service-block start and end, automatic group cutoff, occupied rooms to dirty, task roll and stayover tasks, inventory reconciliation, statistics snapshot with the ledger roll-forward, close D and open D+1). A failure at any step posts nothing and leaves the date open; retries are new attempts; the Idempotency-Key replays; stale runs are recovered.
+- **Historical locking**: the posting-date trigger (D32); a command that waited through the roll answers `423 BUSINESS_DATE_CHANGED` (D33).
+- **Prerequisites**: in-house stay extension, reinstating a no-show, cancellation and no-show business dates, check-out refuses unposted earlier nights, configurable no-show fee code and reason.
+- **Reports** (`modules/reports`): 23 SQL reports in four groups (operations, rooms, finance, audit) with role-based access, closed dates from snapshots and the immutable ledger, the open date live, totals, CSV export (`reports:export`) and print; property dashboard (today live, last closed date, 30-day trend).
+- **UI**: Night audit page (checklist, run dialog, history, run detail with steps and report pack, recovery), Reports catalog and report pages, dashboard on the Overview, Extend stay and Reinstate no-show dialogs, business-date badge link.
+
+Deferred: cashier shifts and drawer reconciliation (D34), deposits, invoices / credit notes / folio CLOSED, routing and transfers, city ledger, fixed charges, allowance packages and `postNextDay`, cancellation penalties, card re-authorization, scheduled or background audit and reports, XLSX / PDF export, organization-level multi-currency rollups, automatic loyalty earning and `guest_stay_statistics`, preventive maintenance generation, room holds, waitlist purge, discrepancies, outbox / SSE (clients poll the business date).
+
+## Phase 7 (as executed) — Guests, companies and loyalty (tag `phase-7-complete`)
 
 Delivered on the existing schema (guest profiles and children, preference catalog, VIP levels, account profiles and contacts, negotiated rates, loyalty programs / tiers / memberships / transactions were modelled in Phase 0; the `guests:*`, `accounts:*` and `loyalty:*` permissions already existed; one migration `20260928090000_guests_companies_loyalty`):
 

@@ -64,6 +64,9 @@ export const updatePropertyConfigurationSchema = highRiskReasonSchema
     allowCancelWithDeposit: z.boolean().optional(),
     autoCloseCashiersOnAudit: z.boolean().optional(),
     roomHoldDefaultMinutes: z.number().int().min(1).max(1440).optional(),
+    /** Night audit (Phase 8): no-show fee code (null: no fee) and automatic no-show reason. */
+    noShowTransactionCodeId: idSchema.nullable().optional(),
+    noShowReasonCodeId: idSchema.nullable().optional(),
   })
   .strict()
   .refine(

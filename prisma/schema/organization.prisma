@@ -160,9 +160,15 @@ model PropertyConfiguration {
   allowCancelWithDeposit     Boolean  @default(false) @map("allow_cancel_with_deposit")
   autoCloseCashiersOnAudit   Boolean  @default(false) @map("auto_close_cashiers_on_audit")
   roomHoldDefaultMinutes     Int      @default(30) @map("room_hold_default_minutes")
+  /// Night audit (Phase 8): the code a no-show fee posts with (fee skipped when null).
+  noShowTransactionCodeId    String?  @map("no_show_transaction_code_id") @db.Uuid
+  /// Night audit (Phase 8): the reason recorded on automatic no-shows.
+  noShowReasonCodeId         String?  @map("no_show_reason_code_id") @db.Uuid
   updatedAt                  DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  property Property @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  property              Property         @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  noShowTransactionCode TransactionCode? @relation("NoShowTransactionCode", fields: [propertyId, noShowTransactionCodeId], references: [propertyId, id], onDelete: Restrict)
+  noShowReasonCode      ReasonCode?      @relation("NoShowReasonCode", fields: [propertyId, noShowReasonCodeId], references: [propertyId, id], onDelete: Restrict)
 
   @@map("property_configurations")
 }
@@ -353,14 +359,15 @@ model ReasonCode {
 
   property Property @relation(fields: [propertyId], references: [id], onDelete: Restrict)
 
-  discountedReservationRooms ReservationRoom[]      @relation("DiscountReason")
-  cancelledReservationRooms  ReservationRoom[]      @relation("CancelReason")
+  discountedReservationRooms ReservationRoom[]       @relation("DiscountReason")
+  cancelledReservationRooms  ReservationRoom[]       @relation("CancelReason")
   folioItems                 FolioItem[]
   payments                   Payment[]
   refunds                    Refund[]
   reservationRoomNights      ReservationRoomNight[]
   roomAssignments            RoomAssignment[]
   roomServiceBlocks          RoomServiceBlock[]
+  noShowConfigurations       PropertyConfiguration[] @relation("NoShowReasonCode")
 
   @@unique([propertyId, category, code])
   @@unique([propertyId, id])

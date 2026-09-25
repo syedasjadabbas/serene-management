@@ -188,6 +188,8 @@ async function dueOutGuest(roomId: string) {
         ...night,
         adults: 1,
         children: 0,
+        // Nights before today were posted by earlier night audits.
+        postedAt: new Date(),
       })),
     }),
     prisma.reservationRoom.update({

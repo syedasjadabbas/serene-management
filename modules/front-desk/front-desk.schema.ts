@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { cursorPageQuerySchema, idSchema } from "@/lib/validation/common";
+import { cursorPageQuerySchema, idSchema, isoDateSchema } from "@/lib/validation/common";
 import { createReservationSchema } from "@/modules/reservations/reservations.schema";
 import { ARRIVAL_FILTERS, DEPARTURE_FILTERS, IN_HOUSE_FILTERS } from "./front-desk.policy";
 
@@ -76,6 +76,30 @@ export const checkOutSchema = z
     }
   });
 export type CheckOutInput = z.infer<typeof checkOutSchema>;
+
+/**
+ * In-house extension to a later departure. `version` is the stay's version;
+ * `override` sells beyond availability (reservations:override_availability,
+ * reason required).
+ */
+export const extendStaySchema = z
+  .object({
+    version: z.number().int().positive(),
+    departure: isoDateSchema,
+    override: z.boolean().default(false),
+    reason: reasonText.optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.override && !value.reason) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["reason"],
+        message: "A reason is required to extend beyond availability",
+      });
+    }
+  });
+export type ExtendStayInput = z.infer<typeof extendStaySchema>;
 
 /**
  * Walk-in: the regular booking contract, restricted to one room with a

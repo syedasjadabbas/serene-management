@@ -740,3 +740,81 @@ export async function listTaskTypes(ctx: PropertyContext): Promise<TaskTypeView[
 export async function listAssignees(ctx: PropertyContext): Promise<AssigneeView[]> {
   return usersWithPermission(prisma, ctx.organizationId, ctx.propertyId, "housekeeping:update");
 }
+
+// --- Night audit (Phase 8) ------------------------------------------------------------------
+
+export const STAYOVER_CLEAN_TYPE = "STAY";
+
+/**
+ * Night audit's task roll into `nextDate` (D+1) inside the audit
+ * transaction (DOMAIN_MODEL §6.6: tasks belong to one business date).
+ * Open tasks of the closing date and earlier are cancelled; the work that
+ * remains is re-created for the new date: a cleaning task for every vacant
+ * dirty room (unfinished cleans, rooms back from service), and a stayover
+ * clean for every room whose guest stays past the new date. Tasks already
+ * awaiting inspection are left alone.
+ */
+export async function rollTasksInTx(
+  tx: Tx,
+  ctx: PropertyContext,
+  businessDate: string,
+  nextDate: string,
+): Promise<{ cancelled: number; cleaning: number; stayovers: number }> {
+  const open = [...OPEN_TASK_STATUSES];
+  const cancelled = await tx.$executeRaw`
+    UPDATE "housekeeping_tasks"
+    SET "status" = 'CANCELLED',
+        "notes" = left(concat_ws(' · ', "notes", 'Closed by night audit'), 2000),
+        "version" = "version" + 1, "updated_at" = now()
+    WHERE "property_id" = ${ctx.propertyId}::uuid
+      AND "business_date" <= ${businessDate}::date
+      AND "status"::text = ANY(${open}::text[])`;
+
+  let cleaning = 0;
+  const dirtyVacant = await tx.room.findMany({
+    where: {
+      propertyId: ctx.propertyId,
+      status: "ACTIVE",
+      frontOfficeStatus: "VACANT",
+      housekeepingStatus: "DIRTY",
+      serviceStatus: "IN_SERVICE",
+    },
+    orderBy: { id: "asc" },
+    select: { id: true },
+  });
+  for (const room of dirtyVacant) {
+    const queued = await queueCleaningInTx(tx, ctx, nextDate, {
+      roomId: room.id,
+      note: `Carried over by night audit ${businessDate}`,
+    });
+    if (queued) cleaning += 1;
+  }
+
+  let stayovers = 0;
+  const type = await findTaskType(tx, ctx.propertyId, { code: STAYOVER_CLEAN_TYPE });
+  if (type) {
+    const staying = await tx.$queryRaw<{ room_id: string; stay_id: string }[]>`
+      SELECT s."room_id", s."id" AS "stay_id"
+      FROM "stays" s
+      JOIN "reservation_rooms" rr ON rr."id" = s."reservation_room_id"
+      WHERE s."property_id" = ${ctx.propertyId}::uuid AND s."status" = 'IN_HOUSE'
+        AND rr."departure_date" > ${nextDate}::date
+      ORDER BY s."room_id"`;
+    const date = fromDateOnly(nextDate);
+    for (const row of staying) {
+      if (await findLiveTask(tx, ctx.propertyId, row.room_id, date, type.id)) continue;
+      await insertTask(tx, {
+        propertyId: ctx.propertyId,
+        roomId: row.room_id,
+        taskTypeId: type.id,
+        businessDate: date,
+        priority: PRIORITY_VALUES.NORMAL,
+        credits: type.credits,
+        stayId: row.stay_id,
+        notes: "Stayover",
+      });
+      stayovers += 1;
+    }
+  }
+  return { cancelled, cleaning, stayovers };
+}

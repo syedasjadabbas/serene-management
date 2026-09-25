@@ -597,3 +597,126 @@ export async function getRoom(ctx: PropertyContext, roomId: string): Promise<Roo
     history,
   };
 }
+
+// --- Night audit (Phase 8) ------------------------------------------------------------------
+
+/**
+ * Night audit's service-block roll into `nextDate` (D+1), inside the audit
+ * transaction. Blocks whose period ends by `nextDate` are released (a room
+ * that was out returns to service with its return status); scheduled
+ * blocks that start by `nextDate` become ACTIVE and take the room out.
+ * Inventory is unchanged: out-of-order nights are counted from the block
+ * dates (scheduled or active), not from the status.
+ */
+export async function rollServiceBlocksInTx(
+  tx: Tx,
+  actor: { propertyId: string; userId: string },
+  businessDate: string,
+  nextDate: string,
+): Promise<{
+  released: { roomNumber: string; kind: string }[];
+  activated: { roomNumber: string; kind: string }[];
+}> {
+  const due = await tx.$queryRaw<
+    {
+      id: string;
+      room_id: string;
+      kind: string;
+      status: string;
+      from_date: Date;
+      to_date: Date;
+      return_status: string;
+    }[]
+  >`
+    SELECT "id", "room_id", "kind"::text AS "kind", "status"::text AS "status", "from_date",
+           "to_date", "return_status"::text AS "return_status"
+    FROM "room_service_blocks"
+    WHERE "property_id" = ${actor.propertyId}::uuid
+      AND "status" IN ('SCHEDULED', 'ACTIVE')
+      AND ("to_date" <= ${nextDate}::date OR ("status" = 'SCHEDULED' AND "from_date" <= ${nextDate}::date))
+    ORDER BY "id"
+    FOR UPDATE`;
+  const released: { roomNumber: string; kind: string }[] = [];
+  const activated: { roomNumber: string; kind: string }[] = [];
+  if (due.length === 0) return { released, activated };
+  const rooms = await lockRoomsForUpdate(
+    tx,
+    actor.propertyId,
+    businessDate,
+    due.map((block) => block.room_id),
+  );
+  for (const block of due) {
+    let room = rooms.get(block.room_id)!;
+    if (toDateOnly(block.to_date) <= nextDate) {
+      await releaseBlockRow(tx, block.id, actor.userId);
+      if (block.status === "ACTIVE") {
+        room = await changeRoomStatus(
+          tx,
+          actor,
+          room,
+          {
+            serviceStatus: "IN_SERVICE",
+            housekeepingStatus: block.return_status as HousekeepingStatus,
+          },
+          "NIGHT_AUDIT",
+          businessDate,
+          "Block period ended",
+        );
+      }
+      released.push({ roomNumber: room.number, kind: block.kind });
+    } else {
+      await tx.roomServiceBlock.update({ where: { id: block.id }, data: { status: "ACTIVE" } });
+      room = await changeRoomStatus(
+        tx,
+        actor,
+        room,
+        { serviceStatus: block.kind as "OUT_OF_ORDER" | "OUT_OF_SERVICE" },
+        "NIGHT_AUDIT",
+        businessDate,
+        "Block period started",
+      );
+      activated.push({ roomNumber: room.number, kind: block.kind });
+    }
+    rooms.set(room.id, room);
+  }
+  return { released, activated };
+}
+
+/**
+ * Night audit's room-status roll (DOMAIN_MODEL §6.2, D8): every occupied
+ * room was slept in, so its housekeeping status becomes DIRTY. Only the
+ * housekeeping axis changes; history source NIGHT_AUDIT.
+ */
+export async function rollOccupiedRoomsInTx(
+  tx: Tx,
+  actor: { propertyId: string; userId: string },
+  businessDate: string,
+): Promise<string[]> {
+  const ids = (
+    await tx.room.findMany({
+      where: {
+        propertyId: actor.propertyId,
+        frontOfficeStatus: "OCCUPIED",
+        housekeepingStatus: { not: "DIRTY" },
+      },
+      select: { id: true },
+    })
+  ).map((room) => room.id);
+  if (ids.length === 0) return [];
+  const rooms = await lockRoomsForUpdate(tx, actor.propertyId, businessDate, ids);
+  const rolled: string[] = [];
+  for (const room of rooms.values()) {
+    if (room.frontOfficeStatus !== "OCCUPIED" || room.housekeepingStatus === "DIRTY") continue;
+    await changeRoomStatus(
+      tx,
+      actor,
+      room,
+      { housekeepingStatus: "DIRTY" },
+      "NIGHT_AUDIT",
+      businessDate,
+      "Occupied overnight",
+    );
+    rolled.push(room.number);
+  }
+  return rolled;
+}

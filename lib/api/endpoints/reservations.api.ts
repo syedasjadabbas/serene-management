@@ -161,6 +161,19 @@ export const reservationsApi = baseApi.injectEndpoints({
       transformResponse: (response: ApiSuccess<ReservationDetail>) => response.data,
       invalidatesTags: invalidateAfterCommand,
     }),
+    /** A no-show who arrives after all: reserved again from the business date (Phase 8). */
+    reinstateNoShow: build.mutation<
+      ReservationDetail,
+      RoomCommand<Partial<ReinstateReservationInput>>
+    >({
+      query: ({ propertyId, reservationRoomId, body }) => ({
+        url: `/properties/${propertyId}/reservation-rooms/${reservationRoomId}/reinstate-no-show`,
+        method: "POST",
+        body,
+      }),
+      transformResponse: (response: ApiSuccess<ReservationDetail>) => response.data,
+      invalidatesTags: invalidateAfterCommand,
+    }),
     /** Company and booking contact of a reservation (Phase 7). */
     setReservationCompany: build.mutation<
       ReservationDetail,
@@ -255,6 +268,7 @@ export const {
   useCancelReservationMutation,
   useMarkNoShowMutation,
   useReinstateReservationMutation,
+  useReinstateNoShowMutation,
   useAssignRoomMutation,
   useSetReservationCompanyMutation,
 } = reservationsApi;

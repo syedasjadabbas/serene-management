@@ -143,6 +143,27 @@ No permission was added; the Phase 0 catalog covers billing:
 
 The UI hides actions the user lacks (`actions` flags computed by the server); the routes enforce them regardless.
 
+## Night audit, finance and reports (Phase 8, as implemented)
+
+No permission was added; the Phase 0 catalog covers Phase 8:
+
+| Action                                                    | Permission                                                                          | Risk            |
+| --------------------------------------------------------- | ----------------------------------------------------------------------------------- | --------------- |
+| Readiness checklist, run history, run detail              | `nightaudit:read`                                                                   | —               |
+| Run night audit, recover a stale run                      | `nightaudit:run` ★ (reason required)                                                | HIGH            |
+| Automatic no-shows and fees inside the audit              | covered by `nightaudit:run` (SYSTEM actor in the audit rows)                        | HIGH            |
+| Operations and rooms reports                              | `reports:read` (revenue columns hidden without `reports:financial`)                 | —               |
+| Revenue, tax, payments, ledger and production reports     | `reports:financial`                                                                 | —               |
+| CSV export                                                | `reports:export` + the report's own permission                                      | —               |
+| Night-audit history report                                | `nightaudit:read`                                                                   | —               |
+| Audit trail report                                        | `audit:read`                                                                        | —               |
+| Dashboard                                                 | `dashboard:read` (revenue tiles with `reports:financial`)                           | —               |
+| Extend an in-house stay                                   | `reservations:update` (beyond availability: `reservations:override_availability` ★) | STANDARD / HIGH |
+| Reinstate a no-show                                       | `reservations:reinstate` ★                                                          | HIGH            |
+| No-show fee code and reason in the property configuration | `settings:manage` ★                                                                 | HIGH            |
+
+Role templates are unchanged: Front Office Manager, General Manager and Organization Admin run the audit; Accountant and Auditor read it with the financial reports and exports; front desk agents, housekeeping and maintenance managers see operational reports; cashiers see none.
+
 ## Rates, packages and groups (Phase 6, as implemented)
 
 No permission was added; the Phase 0 catalog covers Phase 6:

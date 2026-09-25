@@ -15,6 +15,7 @@ import { useStayQuery } from "@/lib/api/endpoints/front-desk.api";
 import { toClientApiError } from "@/lib/api/errors";
 import { formatCurrency, formatDate, formatDateTime, pluralize } from "@/lib/utils/format";
 import { CheckOutDialog } from "../../../components/CheckOutDialog";
+import { ExtendStayDialog } from "./ExtendStayDialog";
 import { RoomMoveDialog } from "./RoomMoveDialog";
 
 const KIND_LABELS: Record<string, string> = {
@@ -46,7 +47,7 @@ export function StayDetailView({
   const allowed = can("frontdesk:read");
   const query = useStayQuery({ propertyId: property.id, stayId }, { skip: !allowed });
   const error = toClientApiError(query.error);
-  const [dialog, setDialog] = useState<"move" | "checkOut" | null>(null);
+  const [dialog, setDialog] = useState<"move" | "checkOut" | "extend" | null>(null);
 
   if (permissionsLoading) return <StatusPanel kind="loading" title="Loading stay" />;
   if (!allowed) {
@@ -171,6 +172,11 @@ export function StayDetailView({
                 Folio
               </Link>
             ) : null}
+            {stay.allowedActions.extend ? (
+              <Button size="sm" variant="secondary" onClick={() => setDialog("extend")}>
+                Extend stay
+              </Button>
+            ) : null}
             {stay.allowedActions.moveRoom ? (
               <Button size="sm" variant="secondary" onClick={() => setDialog("move")}>
                 Change room
@@ -286,6 +292,9 @@ export function StayDetailView({
       ) : null}
       {dialog === "checkOut" ? (
         <CheckOutDialog open stayId={stay.id} onClose={() => setDialog(null)} />
+      ) : null}
+      {dialog === "extend" ? (
+        <ExtendStayDialog key={`e${stay.version}`} stay={stay} onClose={() => setDialog(null)} />
       ) : null}
     </div>
   );

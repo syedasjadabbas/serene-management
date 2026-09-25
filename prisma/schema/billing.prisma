@@ -169,6 +169,7 @@ model TransactionCode {
   ratePlans               RatePlan[]
   packageComponents       PackageComponent[]
   fixedCharges            FixedCharge[]
+  noShowConfigurations    PropertyConfiguration[]  @relation("NoShowTransactionCode")
 
   @@unique([propertyId, code])
   @@unique([propertyId, id])

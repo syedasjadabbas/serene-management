@@ -36,6 +36,8 @@ export const configurationSelect = {
   allowCancelWithDeposit: true,
   autoCloseCashiersOnAudit: true,
   roomHoldDefaultMinutes: true,
+  noShowTransactionCodeId: true,
+  noShowReasonCodeId: true,
   updatedAt: true,
 } as const satisfies Prisma.PropertyConfigurationSelect;
 

@@ -86,10 +86,12 @@ export type ReservationAction =
   | "cancel"
   | "no_show"
   | "reinstate"
+  | "reinstate_no_show"
   | "assign_room"
   | "check_in"
   | "check_out"
-  | "room_move";
+  | "room_move"
+  | "extend";
 
 /**
  * State machine guard. Returns null when allowed, otherwise the reason.
@@ -133,6 +135,12 @@ export function transitionProblem(
       return current.arrival >= businessDate
         ? null
         : "Only cancellations with an arrival on or after the business date can be reinstated";
+    case "reinstate_no_show":
+      if (status !== "NO_SHOW")
+        return `A ${label(status)} reservation cannot be reinstated as a no-show`;
+      return current.departure > businessDate
+        ? null
+        : "The stay has ended; a no-show can be reinstated only while nights remain";
     case "check_in":
       if (status !== "RESERVED") return `A ${label(status)} reservation cannot be checked in`;
       if (!current.deductsInventory) return "Confirm the reservation before checking the guest in";
@@ -147,6 +155,10 @@ export function transitionProblem(
       return status === "IN_HOUSE"
         ? null
         : `Only in-house guests can be moved; use room assignment for a ${label(status)} reservation`;
+    case "extend":
+      return status === "IN_HOUSE"
+        ? null
+        : `Only in-house stays can be extended; modify a ${label(status)} reservation instead`;
   }
 }
 

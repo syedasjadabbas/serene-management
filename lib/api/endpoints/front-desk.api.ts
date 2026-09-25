@@ -3,6 +3,7 @@ import type {
   CheckOutInput,
   RoomMoveInput,
   WalkInInput,
+  ExtendStayInput,
 } from "@/modules/front-desk/front-desk.schema";
 import type {
   ArrivalRow,
@@ -148,6 +149,19 @@ export const frontDeskApi = baseApi.injectEndpoints({
       transformResponse: (response: ApiSuccess<StayDetail>) => response.data,
       invalidatesTags: afterCommand,
     }),
+    /** In-house extension to a later departure (Phase 8). */
+    extendStay: build.mutation<
+      StayDetail,
+      { propertyId: string; stayId: string; body: Partial<ExtendStayInput> }
+    >({
+      query: ({ propertyId, stayId, body }) => ({
+        url: `/properties/${propertyId}/stays/${stayId}/extend`,
+        method: "POST",
+        body,
+      }),
+      transformResponse: (response: ApiSuccess<StayDetail>) => response.data,
+      invalidatesTags: afterCommand,
+    }),
   }),
 });
 
@@ -163,4 +177,5 @@ export const {
   useWalkInMutation,
   useMoveRoomMutation,
   useCheckOutMutation,
+  useExtendStayMutation,
 } = frontDeskApi;

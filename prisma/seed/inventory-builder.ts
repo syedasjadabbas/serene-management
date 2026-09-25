@@ -177,6 +177,7 @@ export async function buildPropertyInventory(db: Db, spec: InventorySpec): Promi
     ["CANCELLATION", "DUPL", "Duplicate booking"],
     ["NO_SHOW", "NOSHOW", "Guest did not arrive"],
     ["NO_SHOW", "LATE", "Arrived after release time"],
+    ["NO_SHOW", "AUTO", "Automatic no-show (night audit)"],
     ["OUT_OF_ORDER", "MAINT", "Maintenance work"],
     ["OUT_OF_ORDER", "RENO", "Renovation"],
     ["OUT_OF_SERVICE", "TOUCH", "Touch-up / minor repair"],
@@ -228,6 +229,11 @@ export async function buildPropertyInventory(db: Db, spec: InventorySpec): Promi
         }),
     );
     reservationTypes[code] = row.id;
+    // Phase 8: guaranteed reservations are charged a no-show fee by night audit.
+    await db.reservationType.update({
+      where: { id: row.id },
+      data: { postNoShowCharge: isGuaranteed },
+    });
   }
   const cancellationPolicies: Record<string, string> = {};
   for (const [code, name, deadlineHours, penaltyType, penaltyValue, description] of [
@@ -298,8 +304,28 @@ export async function buildPropertyInventory(db: Db, spec: InventorySpec): Promi
       }),
   );
 
+  // Night audit (Phase 8): the no-show fee code (room revenue, kept out of ADR).
+  const noShowCharge = await upsertByCode(
+    await db.transactionCode.findFirst({
+      where: { propertyId, code: "1090" },
+      select: { id: true },
+    }),
+    () =>
+      db.transactionCode.create({
+        data: {
+          propertyId,
+          groupId: group.id,
+          code: "1090",
+          name: "No-show charge",
+          bucket: "ROOM",
+          isManualPostAllowed: false,
+        },
+        select: { id: true },
+      }),
+  );
+
   // Billing configuration (Phase 5): codes, taxes, payment methods ------------------
-  const chargeCodes: Record<string, string> = { "1000": roomCharge.id };
+  const chargeCodes: Record<string, string> = { "1000": roomCharge.id, "1090": noShowCharge.id };
   const groups: Record<string, string> = {};
   for (const [code, name, type, sortOrder] of CHARGE_GROUPS) {
     const row = await upsertByCode(
@@ -389,6 +415,17 @@ export async function buildPropertyInventory(db: Db, spec: InventorySpec): Promi
       });
     }
   }
+
+  // Night audit configuration (Phase 8): fee code and automatic no-show reason,
+  // unless the property already chose its own.
+  await db.propertyConfiguration.updateMany({
+    where: { propertyId, noShowTransactionCodeId: null },
+    data: { noShowTransactionCodeId: noShowCharge.id },
+  });
+  await db.propertyConfiguration.updateMany({
+    where: { propertyId, noShowReasonCodeId: null },
+    data: { noShowReasonCodeId: reasonCodes["NO_SHOW:AUTO"]! },
+  });
 
   // Floors, room types, rooms ------------------------------------------------------
   const roomsPerFloor = spec.roomsPerFloor ?? 12;

@@ -147,6 +147,7 @@ describe("reservation rooms", () => {
           reservationRoom("00000000-0000-7000-8000-00000000d003", {
             status: "'CANCELLED'",
             cancelled_at: "now()",
+            cancellation_business_date: "'2026-09-24'",
           }),
         ),
       ),
@@ -156,6 +157,29 @@ describe("reservation rooms", () => {
         withoutReferentialChecks(
           db,
           reservationRoom("00000000-0000-7000-8000-00000000d004", { status: "'NO_SHOW'" }),
+        ),
+      ),
+    ).toBe("23514");
+    // Phase 8: the business date of the cancellation is required exactly while cancelled.
+    expect(
+      await sqlStateOf(() =>
+        withoutReferentialChecks(
+          db,
+          reservationRoom("00000000-0000-7000-8000-00000000d005", {
+            status: "'CANCELLED'",
+            cancelled_at: "now()",
+          }),
+        ),
+      ),
+    ).toBe("23514");
+    expect(
+      await sqlStateOf(() =>
+        withoutReferentialChecks(
+          db,
+          reservationRoom("00000000-0000-7000-8000-00000000d006", {
+            status: "'RESERVED'",
+            cancellation_business_date: "'2026-09-24'",
+          }),
         ),
       ),
     ).toBe("23514");

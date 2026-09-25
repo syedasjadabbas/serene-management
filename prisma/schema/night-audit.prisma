@@ -89,6 +89,15 @@ model DailyStatistic {
   otherRevenue       Decimal  @map("other_revenue") @db.Decimal(19, 4)
   taxTotal           Decimal  @map("tax_total") @db.Decimal(19, 4)
   paymentsTotal      Decimal  @map("payments_total") @db.Decimal(19, 4)
+  /// Phase 8: no-show fees (kept out of room revenue), refunds, voided payments,
+  /// net adjustments, and the guest-ledger roll-forward (Σ ledger before / through D).
+  currencyCode       String   @map("currency_code") @db.Char(3)
+  noShowRevenue      Decimal  @map("no_show_revenue") @db.Decimal(19, 4)
+  refundsTotal       Decimal  @map("refunds_total") @db.Decimal(19, 4)
+  voidsTotal         Decimal  @map("voids_total") @db.Decimal(19, 4)
+  adjustmentsTotal   Decimal  @map("adjustments_total") @db.Decimal(19, 4)
+  ledgerOpening      Decimal  @map("ledger_opening_balance") @db.Decimal(19, 4)
+  ledgerClosing      Decimal  @map("ledger_closing_balance") @db.Decimal(19, 4)
   createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
   property Property @relation(fields: [propertyId], references: [id], onDelete: Restrict)

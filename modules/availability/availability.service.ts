@@ -2,7 +2,7 @@ import "server-only";
 import { prisma, type Tx } from "@/lib/db/prisma";
 import type { PropertyContext } from "@/lib/http/context";
 import { AppError } from "@/lib/http/errors";
-import { toDateOnly } from "@/modules/business-date/business-date.policy";
+import { addDays, toDateOnly } from "@/modules/business-date/business-date.policy";
 import { findBookableAccount } from "@/modules/accounts/accounts.repository";
 import { loadRates, quoteRoomType, type StayRequest } from "@/modules/rates/rates.service";
 import { occupancyProblems, stayNights } from "@/modules/reservations/reservations.policy";
@@ -435,4 +435,94 @@ function demandCells(demands: readonly InventoryDemand[]) {
     }
   }
   return cells;
+}
+
+/** A counter cell whose cached figures differed from the source rows. */
+export interface InventoryRepair {
+  roomTypeId: string;
+  stayDate: string;
+  before: { physical: number; outOfOrder: number; sold: number; blocked: number };
+  after: { physical: number; outOfOrder: number; sold: number; blocked: number };
+}
+
+/**
+ * Night audit's inventory reconciliation (D12, PMS_WORKFLOWS §26): every
+ * cached counter row from `from` on is locked, recounted from the source
+ * rows (reservation nights, blocks, out-of-order periods, physical rooms)
+ * and rewritten where it differs; block pickup caches of the same cells are
+ * recounted as well. Returns the repaired cells (the discrepancy log).
+ */
+export async function reconcileInventoryInTx(
+  tx: Tx,
+  propertyId: string,
+  from: string,
+): Promise<InventoryRepair[]> {
+  const cells = await tx.$queryRaw<
+    {
+      room_type_id: string;
+      stay_date: Date;
+      physical_rooms: number;
+      out_of_order: number;
+      sold: number;
+      blocked: number;
+    }[]
+  >`
+    SELECT "room_type_id", "stay_date", "physical_rooms", "out_of_order", "sold", "blocked"
+    FROM "room_type_inventory"
+    WHERE "property_id" = ${propertyId}::uuid AND "stay_date" >= ${from}::date
+    ORDER BY "room_type_id", "stay_date"
+    FOR UPDATE`;
+  if (cells.length === 0) return [];
+  const ranges = new Map<string, { from: string; to: string }>();
+  for (const cell of cells) {
+    const date = toDateOnly(cell.stay_date);
+    const range = ranges.get(cell.room_type_id);
+    ranges.set(cell.room_type_id, {
+      from: range && range.from < date ? range.from : date,
+      to: range && range.to > addDays(date, 1) ? range.to : addDays(date, 1),
+    });
+  }
+  const truth = new Map<string, NightInventory>();
+  for (const [roomTypeId, range] of ranges) {
+    const nights = await loadNightInventory(tx, propertyId, [roomTypeId], range.from, range.to);
+    for (const night of nights.get(roomTypeId) ?? [])
+      truth.set(`${roomTypeId}|${night.date}`, night);
+  }
+  const repairs: InventoryRepair[] = [];
+  for (const cell of cells) {
+    const date = toDateOnly(cell.stay_date);
+    const night = truth.get(`${cell.room_type_id}|${date}`);
+    if (!night) continue;
+    const before = {
+      physical: cell.physical_rooms,
+      outOfOrder: cell.out_of_order,
+      sold: cell.sold,
+      blocked: cell.blocked,
+    };
+    const after = {
+      physical: night.physical,
+      outOfOrder: night.outOfOrder,
+      sold: night.sold,
+      blocked: night.blocked,
+    };
+    if (
+      before.physical !== after.physical ||
+      before.outOfOrder !== after.outOfOrder ||
+      before.sold !== after.sold ||
+      before.blocked !== after.blocked
+    ) {
+      repairs.push({ roomTypeId: cell.room_type_id, stayDate: date, before, after });
+    }
+  }
+  await writeInventoryCounters(
+    tx,
+    propertyId,
+    repairs.map((r) => ({ roomTypeId: r.roomTypeId, stayDate: r.stayDate, ...r.after })),
+  );
+  await syncAllocationPickup(
+    tx,
+    propertyId,
+    cells.map((cell) => ({ roomTypeId: cell.room_type_id, stayDate: toDateOnly(cell.stay_date) })),
+  );
+  return repairs;
 }

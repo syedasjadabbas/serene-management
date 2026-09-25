@@ -7,6 +7,7 @@ import { usePermissions } from "@/hooks/usePermissions";
 import { useProperty } from "@/hooks/useProperty";
 import { toClientApiError } from "@/lib/api/errors";
 import { useMeQuery } from "@/lib/api/endpoints/session.api";
+import { DashboardPanel } from "./DashboardPanel";
 
 const SYNC_TEXT = {
   IN_SYNC: "Business date matches the property calendar.",
@@ -42,13 +43,13 @@ export function PropertyOverview() {
   const view = businessDate.data;
 
   return (
-    <div className="mx-auto flex max-w-3xl flex-col gap-4">
+    <div className="mx-auto flex max-w-6xl flex-col gap-4">
       <div>
         <p className="font-mono text-xs text-fg-muted">{property.code}</p>
         <h1 className="text-xl font-semibold">{property.name}</h1>
       </div>
 
-      <dl className="grid grid-cols-1 gap-px overflow-hidden rounded-lg border border-border-subtle bg-border-subtle sm:grid-cols-2">
+      <dl className="grid grid-cols-1 gap-px overflow-hidden rounded-lg border border-border-subtle bg-border-subtle sm:grid-cols-3">
         <Fact label="Business date" value={view?.businessDate ?? "Not initialized"} mono />
         <Fact label="Business date status" value={view?.status ?? "—"} />
         <Fact
@@ -64,6 +65,7 @@ export function PropertyOverview() {
       {view?.sync ? (
         <p className="text-sm text-fg-secondary">{SYNC_TEXT[view.sync.state]}</p>
       ) : null}
+      {view?.businessDate && can("dashboard:read") ? <DashboardPanel /> : null}
       {view?.status === "NOT_INITIALIZED" ? (
         <p className="text-sm text-fg-secondary">
           This property is not live yet.{" "}

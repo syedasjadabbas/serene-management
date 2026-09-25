@@ -209,6 +209,31 @@ export function deleteNightsFrom(tx: Tx, reservationRoomId: string, from: Date) 
   });
 }
 
+/** Nights before `before` (a reinstated no-show starts on the business date). */
+export function deleteNightsBefore(tx: Tx, reservationRoomId: string, before: Date) {
+  return tx.reservationRoomNight.deleteMany({
+    where: { reservationRoomId, stayDate: { lt: before } },
+  });
+}
+
+/** Unposted nights before `before` (check-out and night-audit posting checks). */
+export function countUnpostedNightsBefore(tx: Tx, reservationRoomId: string, before: Date) {
+  return tx.reservationRoomNight.count({
+    where: { reservationRoomId, stayDate: { lt: before }, postedAt: null },
+  });
+}
+
+/**
+ * Extends the active assignment(s) of an in-house room to a later departure.
+ * The exclusion constraint on room assignments rejects the extension when
+ * the room is taken for any of the added nights.
+ */
+export function extendActiveAssignments(tx: Tx, reservationRoomId: string, toDate: string) {
+  return tx.$executeRaw`
+    UPDATE "room_assignments" SET "to_date" = ${toDate}::date
+    WHERE "reservation_room_id" = ${reservationRoomId}::uuid AND "status" = 'ACTIVE'`;
+}
+
 export function insertNote(tx: Tx, data: Prisma.ReservationNoteUncheckedCreateInput) {
   return tx.reservationNote.create({ data, select: { id: true } });
 }
@@ -262,6 +287,7 @@ export async function lockReservationRoom(tx: Tx, propertyId: string, id: string
       children: true,
       eta: true,
       roomTypeId: true,
+      rateRoomTypeId: true,
       roomId: true,
       ratePlanId: true,
       reservationTypeId: true,
@@ -271,7 +297,9 @@ export async function lockReservationRoom(tx: Tx, propertyId: string, id: string
       blockId: true,
       currencyCode: true,
       cancellationNumber: true,
-      reservationType: { select: { code: true, deductsInventory: true } },
+      reservationType: {
+        select: { code: true, deductsInventory: true, isGuaranteed: true, postNoShowCharge: true },
+      },
       reservation: { select: { confirmationNumber: true, companyId: true } },
     },
   });

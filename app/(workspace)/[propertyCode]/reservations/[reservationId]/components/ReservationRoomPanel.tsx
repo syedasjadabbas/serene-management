@@ -22,7 +22,15 @@ import { ReasonDialog } from "./ReasonDialog";
 import { RoomPackagesPanel } from "./RoomPackagesPanel";
 
 type DialogName =
-  "modify" | "confirm" | "cancel" | "noShow" | "reinstate" | "assign" | "checkIn" | null;
+  | "modify"
+  | "confirm"
+  | "cancel"
+  | "noShow"
+  | "reinstate"
+  | "reinstateNoShow"
+  | "assign"
+  | "checkIn"
+  | null;
 
 /** One reservation room: facts, nightly rates and the actions the server allows. */
 export function ReservationRoomPanel({
@@ -105,6 +113,11 @@ export function ReservationRoomPanel({
           {actions.reinstate ? (
             <Button size="sm" variant="secondary" onClick={() => setDialog("reinstate")}>
               Reinstate
+            </Button>
+          ) : null}
+          {actions.reinstateNoShow ? (
+            <Button size="sm" variant="secondary" onClick={() => setDialog("reinstateNoShow")}>
+              Reinstate no-show
             </Button>
           ) : null}
           {actions.noShow ? (
@@ -236,6 +249,13 @@ export function ReservationRoomPanel({
         onClose={close}
         room={room}
         action="reinstate"
+      />
+      <ReasonDialog
+        key={`s${room.version}`}
+        open={dialog === "reinstateNoShow"}
+        onClose={close}
+        room={room}
+        action="reinstateNoShow"
       />
       {actions.checkIn ? (
         <CheckInDialog

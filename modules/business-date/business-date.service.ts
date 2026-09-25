@@ -94,6 +94,16 @@ export async function hasBusinessDateHistory(tx: Tx, propertyId: string): Promis
 export async function requireOpenBusinessDate(tx: Tx, propertyId: string): Promise<string> {
   const row = await lockCurrentBusinessDateForShare(tx, propertyId);
   if (!row) {
+    // A command that waited on the lock while night audit closed the date
+    // finds the old row no longer current (the new one is outside its
+    // snapshot): the date just rolled, the client retries on the new date.
+    if ((await countBusinessDates(tx, propertyId)) > 0) {
+      throw new AppError(
+        "BUSINESS_DATE_LOCKED",
+        "The business date has just changed. Refresh and try again",
+        { reason: "BUSINESS_DATE_CHANGED" },
+      );
+    }
     throw new AppError(
       "BUSINESS_RULE_VIOLATION",
       "The property business date has not been initialized",

@@ -69,6 +69,24 @@ GET  night-audits/{runId}                   # progress / result
 
 HTTP method semantics: `GET` safe and cacheable by RTK Query; `POST` create or command; `PATCH` partial update of editable fields (never status); `PUT` full replacement of a sub-collection (e.g. role permissions); `DELETE` only for truly removable things (notes, holds) — financial and operational records are never deleted.
 
+**Implemented in Phase 8** (property-scoped, under `/api/v1/properties/{propertyId}`):
+
+```
+GET  night-audits/readiness                 # pre-audit checklist (nightaudit:read)
+GET  night-audits                           # run history, keyset pages (nightaudit:read)
+POST night-audits                           # run the audit: { reason } + Idempotency-Key (nightaudit:run, HIGH); 201 with the run
+GET  night-audits/{runId}                   # run, steps, summary (nightaudit:read)
+POST night-audits/{runId}/recover           # stale run: { reason } (nightaudit:run, HIGH)
+GET  reports                                # catalog filtered by permission
+GET  reports/{reportKey}?from&to&roomTypeId&risk   # JSON { columns, rows, totals, notes }
+GET  reports/{reportKey}/export?…           # CSV (reports:export + the report's permission)
+GET  dashboard                              # KPIs (dashboard:read; revenue with reports:financial)
+POST stays/{stayId}/extend                  # { version, departure, override?, reason? } (reservations:update)
+POST reservation-rooms/{id}/reinstate-no-show   # { version, reason, override } (reservations:reinstate, HIGH)
+```
+
+New error detail reasons: `BUSINESS_DATE_CHANGED` (423 for commands, 409 for a night-audit start: the date rolled while the request waited), `NIGHT_AUDIT_RUNNING` (409), `DATE_AHEAD` (422), `RUN_NOT_STALE` / `NIGHT_AUDIT_COMMITTING` (409), `NIGHTS_NOT_POSTED` (422 at check-out). A database-level posting to a closed date (SQLSTATE `SM004`) answers 423.
+
 **Implemented in Phase 2**:
 
 ```text

@@ -85,6 +85,9 @@ export function normalizeError(err: unknown): AppError {
     case "SM002":
     case "SM003":
       return new AppError("BUSINESS_RULE_VIOLATION", "The change violates a data integrity rule");
+    case "SM004":
+      // Posting-date lock (D32): a financial row for a date other than the current one.
+      return new AppError("BUSINESS_DATE_LOCKED", "That business date is closed for postings");
     case "40001":
     case "40P01":
       return new AppError(

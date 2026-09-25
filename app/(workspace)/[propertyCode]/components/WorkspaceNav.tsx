@@ -19,6 +19,8 @@ const ITEMS: { segment: string; label: string; permission: Permission | null }[]
   { segment: "guests", label: "Guests", permission: "guests:read" },
   { segment: "groups", label: "Groups", permission: "groups:read" },
   { segment: "rates", label: "Rates", permission: "rates:read" },
+  { segment: "night-audit", label: "Night audit", permission: "nightaudit:read" },
+  { segment: "reports", label: "Reports", permission: "reports:read" },
 ];
 
 /** Primary workspace navigation; items the user cannot use are not shown (the server still enforces). */
