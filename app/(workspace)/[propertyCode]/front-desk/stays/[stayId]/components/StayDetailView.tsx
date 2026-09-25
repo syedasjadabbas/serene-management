@@ -4,6 +4,7 @@ import Link from "next/link";
 import type { Route } from "next";
 import { useState } from "react";
 import { AuditHistory } from "@/components/audit/AuditHistory";
+import { GuestRecognition } from "@/components/guests/GuestRecognition";
 import { Alert } from "@/components/ui/Alert";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -182,6 +183,11 @@ export function StayDetailView({
             ) : null}
           </div>
         </div>
+        {can("guests:read") ? (
+          <div className="px-4 pt-3">
+            <GuestRecognition guestId={stay.guest.id} propertyCode={property.code} />
+          </div>
+        ) : null}
         <dl className="grid grid-cols-1 gap-x-6 gap-y-1.5 p-4 sm:grid-cols-[10rem_1fr]">
           {facts.map(([term, value]) => (
             <div key={term} className="contents">

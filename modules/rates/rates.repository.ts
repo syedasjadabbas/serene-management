@@ -40,6 +40,8 @@ export function findRatePlansForStay(
       displayOrder: true,
       cancellationPolicy: { select: { id: true, code: true, name: true, description: true } },
       roomTypes: { select: { roomTypeId: true } },
+      // Companies this plan is negotiated for (requiresNegotiation, Phase 7).
+      negotiated: { select: { accountProfileId: true, validFrom: true, validTo: true } },
       seasons: {
         where: { startDate: { lte: last }, endDate: { gte: first } },
         select: {
@@ -140,6 +142,7 @@ export function findRatePlanList(tx: Tx, propertyId: string) {
       displayOrder: true,
       derivationType: true,
       derivationValue: true,
+      requiresNegotiation: true,
       parent: { select: { id: true, code: true } },
       roomTypes: { select: { roomType: { select: { code: true } } } },
       packages: { select: { package: { select: { code: true } } } },
@@ -180,6 +183,15 @@ export function findRatePlanDetail(tx: Tx, propertyId: string, id: string) {
       roomTypes: { select: { roomTypeId: true } },
       packages: { select: { package: { select: { id: true, code: true, name: true } } } },
       derived: { select: { id: true, code: true, name: true } },
+      requiresNegotiation: true,
+      negotiated: {
+        orderBy: { createdAt: "asc" },
+        select: {
+          validFrom: true,
+          validTo: true,
+          account: { select: { id: true, code: true, name: true } },
+        },
+      },
       seasons: {
         orderBy: [{ startDate: "asc" }, { priority: "desc" }],
         select: {
@@ -441,5 +453,29 @@ export function findActivePackages(tx: Tx, propertyId: string, ids: string[]) {
   return tx.package.findMany({
     where: { propertyId, id: { in: ids }, status: "ACTIVE" },
     select: { id: true, code: true, sellSeparately: true },
+  });
+}
+
+/** Replaces the companies a plan is negotiated for (Phase 7). */
+export async function replacePlanAccounts(
+  tx: Tx,
+  propertyId: string,
+  ratePlanId: string,
+  rows: { accountProfileId: string; validFrom: Date | null; validTo: Date | null }[],
+) {
+  await tx.negotiatedRate.deleteMany({ where: { propertyId, ratePlanId } });
+  if (rows.length > 0) {
+    await tx.negotiatedRate.createMany({
+      data: rows.map((r) => ({ ...r, propertyId, ratePlanId })),
+    });
+  }
+}
+
+/** Active companies of the organization among `ids` (negotiated-rate links). */
+export function findCompanies(tx: Tx, organizationId: string, ids: string[]) {
+  if (ids.length === 0) return Promise.resolve([]);
+  return tx.accountProfile.findMany({
+    where: { organizationId, id: { in: ids }, type: "COMPANY", status: "ACTIVE", deletedAt: null },
+    select: { id: true, code: true, name: true },
   });
 }

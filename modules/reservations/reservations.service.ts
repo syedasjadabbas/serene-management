@@ -8,6 +8,7 @@ import type { Permission } from "@/lib/permissions/catalog";
 import { hasPermission } from "@/lib/permissions/evaluate";
 import { decodeCursor, encodeCursor } from "@/lib/utils/cursor";
 import { formatMoney, parseMoney, sum } from "@/lib/utils/money";
+import { requireReservationCompany } from "@/modules/accounts/accounts.service";
 import { recordAudit } from "@/modules/audit/audit.service";
 import type { RestrictionViolation } from "@/modules/availability/availability.policy";
 import {
@@ -25,7 +26,7 @@ import {
   toDateOnly,
 } from "@/modules/business-date/business-date.policy";
 import { requireOpenBusinessDate } from "@/modules/business-date/business-date.service";
-import { normalizeName } from "@/modules/guests/guests.policy";
+import { guestFullName, normalizeName } from "@/modules/guests/guests.policy";
 import { requireGuest } from "@/modules/guests/guests.service";
 import { allocateNumber } from "@/modules/properties/properties.service";
 import {
@@ -36,6 +37,7 @@ import {
   priceForBooking,
 } from "@/modules/rates/rates.service";
 import { requireSellablePackage } from "@/modules/rates/packages.service";
+import { negotiatedFor } from "@/modules/rates/rates.policy";
 import type { ReservationPackageInput } from "@/modules/rates/rates.schema";
 import type { CursorPageMeta } from "@/types/api";
 import {
@@ -51,6 +53,10 @@ import {
 } from "./reservations.policy";
 import {
   type LockedReservationRoom,
+  findActiveRoomsForCompany,
+  findGroupCompanyId,
+  lockReservation,
+  updateReservationHeaderVersioned,
   closeActiveAssignments,
   lockRoomRow,
   countActiveAssignments,
@@ -93,6 +99,7 @@ import type {
   CancelReservationInput,
   ConfirmReservationInput,
   CreateReservationInput,
+  ReservationCompanyInput,
   ListReservationsQuery,
   NoShowReservationInput,
   ReinstateReservationInput,
@@ -254,7 +261,7 @@ async function priceStay(
     roomTypeId: string;
     ratePlanId: string;
   },
-  options: { allowGroupRates?: boolean } = {},
+  options: { allowGroupRates?: boolean; accountId?: string | null } = {},
 ) {
   const request: StayRequest = {
     propertyId: ctx.propertyId,
@@ -264,6 +271,7 @@ async function priceStay(
     nights: stayNights(stay.arrival, stay.departure),
     adults: stay.adults,
     children: stay.children,
+    accountId: options.accountId ?? null,
   };
   // The plan and its parents are read under FOR SHARE, so a concurrent rate
   // change either commits before this price is taken or waits for it.
@@ -384,6 +392,12 @@ export async function createReservationInTx(
       reason: "GUEST_RESTRICTED",
     });
   }
+  // Company (Phase 7): validated server-side; a pickup defaults to its group's company.
+  const companyId =
+    input.companyId ?? (options.block ? await findGroupCompanyId(tx, options.block.groupId) : null);
+  if (companyId) {
+    await requireReservationCompany(tx, ctx.organizationId, companyId, input.bookerGuestId ?? null);
+  }
 
   const stay = {
     arrival: input.arrival,
@@ -395,6 +409,7 @@ export async function createReservationInTx(
   };
   const priced = await priceStay(tx, ctx, businessDate, stay, {
     allowGroupRates: options.block !== undefined,
+    accountId: companyId,
   });
   assertNoRestrictions(priced.violations, input.override);
 
@@ -428,7 +443,8 @@ export async function createReservationInTx(
   const reservation = await insertReservation(tx, {
     propertyId: ctx.propertyId,
     confirmationNumber,
-    bookerGuestId: guest.id,
+    bookerGuestId: input.bookerGuestId ?? guest.id,
+    companyId,
     channelId: input.channelId ?? null,
     sourceCodeId,
     marketCodeId,
@@ -515,6 +531,7 @@ export async function createReservationInTx(
         adults: input.adults,
         children: input.children,
         guestId: guest.id,
+        ...(companyId ? { companyId, bookerGuestId: input.bookerGuestId ?? guest.id } : {}),
         roomType: roomType.code,
         ratePlan: ratePlan.code,
         reservationType: reservationType.code,
@@ -608,6 +625,7 @@ export async function updateReservationRoom(
     if (stayChanged) {
       const priced = await priceStay(tx, ctx, businessDate, next, {
         allowGroupRates: current.blockId !== null,
+        accountId: current.reservation.companyId,
       });
       assertNoRestrictions(priced.violations, input.override);
       total = priced.total;
@@ -1519,6 +1537,65 @@ export async function listReservations(
   };
 }
 
+/**
+ * Sets or clears the company (and its booking contact) of a reservation
+ * (Phase 7). Refused while an active room is on a negotiated rate the new
+ * company is not entitled to: change that room's rate first.
+ */
+export async function setReservationCompany(
+  ctx: PropertyContext,
+  reservationId: string,
+  input: ReservationCompanyInput,
+): Promise<ReservationDetail> {
+  requirePermission(ctx, "reservations:update");
+  await runInTransaction(async (tx) => {
+    const businessDate = await requireOpenBusinessDate(tx, ctx.propertyId);
+    const locked = await lockReservation(tx, ctx.propertyId, reservationId);
+    if (!locked) throw notFound("Reservation");
+    if (locked.version !== input.version) throw staleVersion("Reservation");
+    if (input.companyId) {
+      await requireReservationCompany(tx, ctx.organizationId, input.companyId, input.bookerGuestId);
+    }
+    const rooms = await findActiveRoomsForCompany(tx, ctx.propertyId, reservationId);
+    for (const room of rooms) {
+      if (!room.ratePlan.requiresNegotiation) continue;
+      const arrival = toDateOnly(room.arrivalDate);
+      const lastNight = addDays(toDateOnly(room.departureDate), -1);
+      if (!negotiatedFor(room.ratePlan, input.companyId, arrival, lastNight)) {
+        throw new AppError(
+          "BUSINESS_RULE_VIOLATION",
+          `Rate ${room.ratePlan.code} is negotiated for another company: change the room's rate first`,
+          { reason: "RATE_REQUIRES_COMPANY" },
+        );
+      }
+    }
+    const bookerGuestId = input.companyId ? input.bookerGuestId : null;
+    const { count } = await updateReservationHeaderVersioned(tx, reservationId, input.version, {
+      companyId: input.companyId,
+      // Without a company contact the booker stays the guest who booked.
+      bookerGuestId: bookerGuestId ?? locked.booker_guest_id,
+    });
+    if (count !== 1) throw staleVersion("Reservation");
+    await recordAudit(
+      tx,
+      { ...auditActor(ctx), businessDate },
+      {
+        action: "reservation.company",
+        resourceType: "Reservation",
+        resourceId: reservationId,
+        before: { companyId: locked.company_id, bookerGuestId: locked.booker_guest_id },
+        after: {
+          companyId: input.companyId,
+          bookerGuestId: bookerGuestId ?? locked.booker_guest_id,
+        },
+        reason: input.reason ?? null,
+        permission: "reservations:update",
+      },
+    );
+  });
+  return getReservation(ctx, reservationId);
+}
+
 export async function getReservation(
   ctx: PropertyContext,
   reservationId: string,
@@ -1661,6 +1738,22 @@ export async function getReservation(
     confirmationNumber: reservation.confirmationNumber,
     bookedAt: reservation.bookedAt.toISOString(),
     bookedBy: names.get(reservation.bookedById) ?? null,
+    version: reservation.version,
+    company: can("accounts:read") ? reservation.company : null,
+    booker: reservation.bookerGuest
+      ? {
+          id: reservation.bookerGuest.id,
+          profileNumber: reservation.bookerGuest.profileNumber,
+          fullName: guestFullName(reservation.bookerGuest),
+        }
+      : null,
+    actions: {
+      changeCompany:
+        businessDate !== null &&
+        can("reservations:update") &&
+        can("accounts:read") &&
+        reservation.rooms.some((r) => ["RESERVED", "WAITLISTED", "IN_HOUSE"].includes(r.status)),
+    },
     channel: reservation.channel,
     externalReference: reservation.externalReference,
     businessDate,

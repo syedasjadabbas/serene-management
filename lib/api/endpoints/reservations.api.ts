@@ -6,6 +6,7 @@ import type {
   ConfirmReservationInput,
   CreateReservationInput,
   ReinstateReservationInput,
+  ReservationCompanyInput,
   UpdateReservationRoomInput,
 } from "@/modules/reservations/reservations.schema";
 import type {
@@ -160,6 +161,19 @@ export const reservationsApi = baseApi.injectEndpoints({
       transformResponse: (response: ApiSuccess<ReservationDetail>) => response.data,
       invalidatesTags: invalidateAfterCommand,
     }),
+    /** Company and booking contact of a reservation (Phase 7). */
+    setReservationCompany: build.mutation<
+      ReservationDetail,
+      { propertyId: string; reservationId: string; body: ReservationCompanyInput }
+    >({
+      query: ({ propertyId, reservationId, body }) => ({
+        url: `/properties/${propertyId}/reservations/${reservationId}/company`,
+        method: "PUT",
+        body,
+      }),
+      transformResponse: (response: ApiSuccess<ReservationDetail>) => response.data,
+      invalidatesTags: ["Reservation", "Account"],
+    }),
     assignRoom: build.mutation<ReservationDetail, RoomCommand<AssignRoomInput>>({
       query: ({ propertyId, reservationRoomId, body }) => ({
         url: `/properties/${propertyId}/reservation-rooms/${reservationRoomId}/assign-room`,
@@ -242,4 +256,5 @@ export const {
   useMarkNoShowMutation,
   useReinstateReservationMutation,
   useAssignRoomMutation,
+  useSetReservationCompanyMutation,
 } = reservationsApi;

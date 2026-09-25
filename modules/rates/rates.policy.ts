@@ -222,3 +222,30 @@ export function derivationProblem(
   }
   return null;
 }
+
+/**
+ * A negotiated plan (requiresNegotiation) is sellable to a company it is
+ * linked to, for stays inside the link's validity window — never to a stay
+ * without a company, so negotiated rates cannot leak into public quotes.
+ */
+export function negotiatedFor(
+  plan: {
+    negotiated: readonly {
+      accountProfileId: string;
+      validFrom: Date | null;
+      validTo: Date | null;
+    }[];
+  },
+  accountId: string | null,
+  arrival: string,
+  lastNight: string,
+): boolean {
+  if (!accountId) return false;
+  const day = (d: Date) => d.toISOString().slice(0, 10);
+  return plan.negotiated.some(
+    (link) =>
+      link.accountProfileId === accountId &&
+      (!link.validFrom || day(link.validFrom) <= arrival) &&
+      (!link.validTo || day(link.validTo) >= lastNight),
+  );
+}

@@ -272,7 +272,7 @@ export async function lockReservationRoom(tx: Tx, propertyId: string, id: string
       currencyCode: true,
       cancellationNumber: true,
       reservationType: { select: { code: true, deductsInventory: true } },
-      reservation: { select: { confirmationNumber: true } },
+      reservation: { select: { confirmationNumber: true, companyId: true } },
     },
   });
 }
@@ -341,6 +341,11 @@ export function findReservationDetail(tx: Tx, propertyId: string, reservationId:
       bookedAt: true,
       bookedById: true,
       externalReference: true,
+      version: true,
+      company: { select: { id: true, code: true, name: true } },
+      bookerGuest: {
+        select: { id: true, profileNumber: true, title: true, firstName: true, lastName: true },
+      },
       channel: { select: codeSelect },
       notes: {
         where: { deletedAt: null },
@@ -453,8 +458,10 @@ export async function findBookingOptions(tx: Tx, propertyId: string) {
     select: { ...codeSelect, maxOccupancy: true, maxAdults: true, maxChildren: true },
     orderBy: [{ sortOrder: "asc" }, orderByCode],
   });
+  // Negotiated plans are listed for labels and defaults (a company booking
+  // selects them); whether they may be sold is decided by the pricing engine.
   const ratePlans = await tx.ratePlan.findMany({
-    where: { ...active, requiresNegotiation: false, requiresMembership: false, isDayUse: false },
+    where: { ...active, requiresMembership: false, isDayUse: false },
     select: { ...codeSelect, defaultMarketCodeId: true, defaultSourceCodeId: true },
     orderBy: [{ displayOrder: "asc" }, orderByCode],
   });
@@ -536,4 +543,67 @@ export function findAvailableRooms(
       )
     ORDER BY r."sort_order", r."number"
     LIMIT 500`;
+}
+
+/** Locks the reservation header (company / booker commands, Phase 7). */
+export async function lockReservation(tx: Tx, propertyId: string, id: string) {
+  const rows = await tx.$queryRaw<
+    { id: string; version: number; company_id: string | null; booker_guest_id: string | null }[]
+  >`
+    SELECT "id", "version", "company_id", "booker_guest_id" FROM "reservations"
+    WHERE "id" = ${id}::uuid AND "property_id" = ${propertyId}::uuid
+    FOR UPDATE`;
+  return rows[0] ?? null;
+}
+
+/** Active rooms of a reservation with their stay window and rate plan's negotiation flag. */
+export function findActiveRoomsForCompany(tx: Tx, propertyId: string, reservationId: string) {
+  return tx.reservationRoom.findMany({
+    where: {
+      propertyId,
+      reservationId,
+      status: { in: ["RESERVED", "WAITLISTED", "IN_HOUSE"] },
+    },
+    select: {
+      id: true,
+      arrivalDate: true,
+      departureDate: true,
+      ratePlan: {
+        select: {
+          code: true,
+          requiresNegotiation: true,
+          negotiated: { select: { accountProfileId: true, validFrom: true, validTo: true } },
+        },
+      },
+    },
+  });
+}
+
+export function updateReservationHeaderVersioned(
+  tx: Tx,
+  id: string,
+  version: number,
+  data: { companyId: string | null; bookerGuestId: string | null },
+) {
+  return tx.reservation.updateMany({
+    where: { id, version },
+    data: { ...data, version: { increment: 1 } },
+  });
+}
+
+/** The group's account when it is an active, unrestricted company (pickup default). */
+export async function findGroupCompanyId(tx: Tx, groupId: string): Promise<string | null> {
+  const group = await tx.group.findUnique({
+    where: { id: groupId },
+    select: {
+      account: { select: { id: true, type: true, status: true, isRestricted: true } },
+    },
+  });
+  const account = group?.account;
+  return account &&
+    account.type === "COMPANY" &&
+    account.status === "ACTIVE" &&
+    !account.isRestricted
+    ? account.id
+    : null;
 }

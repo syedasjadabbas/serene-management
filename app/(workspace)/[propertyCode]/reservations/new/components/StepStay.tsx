@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/Button";
 import { StatusPanel } from "@/components/ui/StatusPanel";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useProperty } from "@/hooks/useProperty";
+import { CompanyPicker } from "@/components/accounts/CompanyPicker";
 import { useAvailabilityQuery } from "@/lib/api/endpoints/reservations.api";
 import { toClientApiError } from "@/lib/api/errors";
 import type {
@@ -27,10 +28,10 @@ export function StepStay({
 }) {
   const property = useProperty();
   const { can } = usePermissions(property.id);
-  const { stay, setStay, select, mode } = useBookingDraft();
+  const { stay, setStay, select, mode, company, setCompany } = useBookingDraft();
   const walkIn = mode === "walk-in";
   const availability = useAvailabilityQuery(
-    { propertyId: property.id, ...(stay ?? {}) },
+    { propertyId: property.id, ...(stay ?? {}), ...(company ? { companyId: company.id } : {}) },
     { skip: !stay },
   );
   const error = toClientApiError(availability.error);
@@ -87,6 +88,15 @@ export function StepStay({
           onSearch={setStay}
           pending={availability.isFetching}
         />
+        {can("accounts:read") ? (
+          <div className="mt-3 max-w-md border-t border-border-subtle pt-3">
+            <CompanyPicker
+              value={company}
+              onChange={setCompany}
+              label="Booking for a company (shows its negotiated rates)"
+            />
+          </div>
+        ) : null}
       </div>
       {error ? <Alert tone="danger">{error.message}</Alert> : null}
       {!stay ? (

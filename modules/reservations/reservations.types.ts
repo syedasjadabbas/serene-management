@@ -111,6 +111,12 @@ export interface ReservationDetail {
   confirmationNumber: string;
   bookedAt: string;
   bookedBy: string | null;
+  version: number;
+  /** Company the booking is for; null without accounts:read (Phase 7). */
+  company: { id: string; code: string | null; name: string } | null;
+  /** Booker (company contact or the guest who booked). */
+  booker: { id: string; profileNumber: string; fullName: string } | null;
+  actions: { changeCompany: boolean };
   channel: CodeRef | null;
   externalReference: string | null;
   businessDate: string | null;

@@ -72,7 +72,7 @@ Deferred, with reason:
 - **Design-system breadth**: only primitives used by Phase 1 screens were built (Button, TextField, Alert, Spinner, StatusPanel, header disclosure). React Aria Components remains the recommendation (open question 6) and is not yet adopted; current controls are native, accessible HTML.
 - **Open questions 3, 4, 7** remain open: rate limiting is in process memory (single instance), hosting undecided, Urdu typeface undecided.
 
-## Phase 2 (as executed) — Reservations + availability (pending commit)
+## Phase 2 (as executed) — Reservations + availability (tag `phase-2-complete`)
 
 The product owner re-sequenced Phase 2 to **Reservations + Availability**. It delivers the reservation engine end to end and the minimum of the originally separate phases it depends on:
 
@@ -85,7 +85,21 @@ The product owner re-sequenced Phase 2 to **Reservations + Availability**. It de
 
 Moved to later phases: configuration screens for rooms, rate plans and restrictions; full guest profiles (documents, preferences, merge); room holds and auto-assign; deposits and cancellation penalties (billing); negotiated, member and day-use rates; block pickup (groups); turnaway capture.
 
-## Phase 6 (as executed) — Rates, packages and groups (pending commit)
+## Phase 7 (as executed) — Guests, companies and loyalty (pending commit)
+
+Delivered on the existing schema (guest profiles and children, preference catalog, VIP levels, account profiles and contacts, negotiated rates, loyalty programs / tiers / memberships / transactions were modelled in Phase 0; the `guests:*`, `accounts:*` and `loyalty:*` permissions already existed; one migration `20260928090000_guests_companies_loyalty`):
+
+- **Guest profiles**: full profile with contacts, addresses, preferred name and contact channel, VIP, restriction and status; version-checked updates; duplicate detection on creation; sensitive fields (date of birth, restricted notes) behind `guests:read_sensitive`.
+- **Search**: order-free name words (trigram), e-mail (primary or listed), phone digits (trigram), profile number, and confirmation numbers of readable properties; keyset pages.
+- **Preferences** from the catalog per scope, **notes** with visibility and alerts, **history** derived from reservations / stays / folios with property and financial scoping.
+- **Companies**: company profiles, guest relationships with one primary contact, reservations and negotiated rates per company; company and booking contact on reservations (create, walk-in, pickup default, change command).
+- **Negotiated rates**: plans that require negotiation are quoted and sold only for their linked companies, inside the link's window.
+- **Loyalty foundation**: programs, tiers with qualification thresholds, one enrollment per guest and program, tier / status history, manual whole-point adjustments; recognition on reservations and stays. Automatic earning is deferred to night audit.
+- **UI**: Guests workspace (guests, companies, loyalty), guest and company pages, company picker in the booking flow and on reservations, recognition strip on reservation and stay pages, negotiated companies on rate plans.
+
+Deferred: profile merge and privacy (anonymize / export), identity documents (need field encryption), automatic points earning and tier qualification (night audit), member-only rates, preference-based room assignment, company credit / AR (accounting), preference catalog administration screen, rooming-list import.
+
+## Phase 6 (as executed) — Rates, packages and groups (tag `phase-6-complete`)
 
 Delivered on the existing schema (rate plans, seasons, packages, restrictions, groups, blocks and allocations were modelled in Phase 0; no permission was added; one migration `20260927090000_rates_packages_groups`):
 
@@ -99,7 +113,7 @@ How the pieces connect: **Reservation → Rate plan** (chosen by the guest, or t
 
 Deferred: rooming-list import, group master folio and routing, automatic cutoff/wash (night audit), yield and revenue management, OTA / channel distribution, negotiated company rates, allowance packages, per-block rate overrides, bulk rate upload.
 
-## Phase 5 (as executed) — Folios, billing, payments and settlement (pending commit)
+## Phase 5 (as executed) — Folios, billing, payments and settlement (tag `phase-5-complete`)
 
 Delivered on the existing schema (folios/windows, the append-only folio ledger, transaction codes, tax rules, payment methods, payments, refunds, idempotency keys and the `billing:*` / `payments:*` permissions were modelled in Phase 0; no permission was added):
 
@@ -125,7 +139,7 @@ Delivered on the existing schema (housekeeping tasks/types/attendants, maintenan
 
 Deferred: task sheets and credits, night-audit task generation and carry-over, discrepancies, DND / make-up room, turndown workflow, lost and found, preventive maintenance, attachments, parts and time, scheduled blocks activated by night audit.
 
-## Phase 3 (as executed) — Front desk: check-in, room moves, check-out (pending commit)
+## Phase 3 (as executed) — Front desk: check-in, room moves, check-out (tag `phase-3-complete`)
 
 Delivered on the existing schema (`Stay`, `RoomAssignment`, room status, `room_status_history`, reason categories, `frontdesk:*` permissions were already modelled):
 

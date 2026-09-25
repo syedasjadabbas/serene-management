@@ -1,6 +1,7 @@
 import type {
   CreatePackageInput,
   CreateRatePlanInput,
+  RatePlanAccountsInput,
   RatePlanPackagesInput,
   SeasonInput,
   UpdatePackageInput,
@@ -132,6 +133,16 @@ export const ratesApi = baseApi.injectEndpoints({
       transformResponse: (response: ApiSuccess<RatePlanDetail>) => response.data,
       invalidatesTags: [...RATES],
     }),
+    /** Companies a negotiated plan is sold to (Phase 7). */
+    setPlanAccounts: build.mutation<RatePlanDetail, PlanArg & { body: RatePlanAccountsInput }>({
+      query: ({ propertyId, ratePlanId, body }) => ({
+        url: `/properties/${propertyId}/rate-plans/${ratePlanId}/accounts`,
+        method: "PUT",
+        body,
+      }),
+      transformResponse: (response: ApiSuccess<RatePlanDetail>) => response.data,
+      invalidatesTags: [...RATES, "Account"],
+    }),
     setRestrictions: build.mutation<
       { days: string[]; action: string; changed: number },
       { propertyId: string; body: SetRestrictionsInput }
@@ -173,6 +184,7 @@ export const {
   useSaveSeasonMutation,
   useDeleteSeasonMutation,
   useSetPlanPackagesMutation,
+  useSetPlanAccountsMutation,
   useSetRestrictionsMutation,
   useSavePackageMutation,
 } = ratesApi;

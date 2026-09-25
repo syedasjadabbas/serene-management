@@ -38,6 +38,7 @@ export function RatePlanFormDialog({
   const [kind, setKind] = useState(plan?.kind ?? "CORPORATE");
   const [description, setDescription] = useState(plan?.description ?? "");
   const [taxInclusive, setTaxInclusive] = useState(plan?.taxInclusive ?? false);
+  const [negotiatedOnly, setNegotiatedOnly] = useState(plan?.requiresNegotiation ?? false);
   const [roomCodeId, setRoomCodeId] = useState(plan?.roomTransactionCode.id ?? "");
   const [derived, setDerived] = useState(plan ? plan.derivation !== null : true);
   const [parentId, setParentId] = useState(plan?.derivation?.parentRatePlanId ?? "");
@@ -67,6 +68,8 @@ export function RatePlanFormDialog({
     description: description.trim() || null,
     kind: kind as (typeof RATE_PLAN_KINDS)[number],
     taxInclusive,
+    // A NEGOTIATED plan is always sold only to its companies (server-enforced too).
+    requiresNegotiation: negotiatedOnly || kind === "NEGOTIATED",
     roomTransactionCodeId: roomCodeId,
     derivation: derived
       ? {
@@ -171,6 +174,15 @@ export function RatePlanFormDialog({
           onChange={(e) => setTaxInclusive(e.target.checked)}
         />
         Prices include taxes
+      </label>
+      <label className="flex min-h-11 items-center gap-2 text-sm">
+        <input
+          type="checkbox"
+          checked={negotiatedOnly || kind === "NEGOTIATED"}
+          disabled={kind === "NEGOTIATED"}
+          onChange={(e) => setNegotiatedOnly(e.target.checked)}
+        />
+        Sold only to linked companies (negotiated rate, never public)
       </label>
 
       <fieldset className="flex flex-col gap-2 rounded-md border border-border-subtle p-3">

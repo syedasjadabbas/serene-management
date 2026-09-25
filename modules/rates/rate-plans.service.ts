@@ -27,6 +27,8 @@ import {
   insertRatePlan,
   insertSeason,
   lockRatePlanChain,
+  findCompanies,
+  replacePlanAccounts,
   replacePlanPackages,
   replacePlanRoomTypes,
   replaceSeasonAmounts,
@@ -36,6 +38,7 @@ import {
 import type {
   CalendarQuery,
   CreateRatePlanInput,
+  RatePlanAccountsInput,
   RatePlanPackagesInput,
   SeasonInput,
   UpdateRatePlanInput,
@@ -103,6 +106,7 @@ export async function listRatePlans(ctx: PropertyContext): Promise<RatePlanListI
     roomTypes: row.roomTypes.map((rt) => rt.roomType.code),
     seasons: row._count.seasons,
     packages: row.packages.map((p) => p.package.code),
+    requiresNegotiation: row.requiresNegotiation,
   }));
 }
 
@@ -165,6 +169,12 @@ export async function getRatePlan(
     })),
     packages: row.packages.map((p) => p.package),
     derivedPlans: row.derived,
+    requiresNegotiation: row.requiresNegotiation,
+    negotiated: row.negotiated.map((n) => ({
+      account: n.account,
+      validFrom: n.validFrom ? toDateOnly(n.validFrom) : null,
+      validTo: n.validTo ? toDateOnly(n.validTo) : null,
+    })),
     actions: { manage: can("rates:manage"), managePackages: can("rates:manage") },
   };
 }
@@ -248,6 +258,7 @@ async function planColumns(
     defaultMarketCodeId: input.defaultMarketCodeId ?? null,
     defaultSourceCodeId: input.defaultSourceCodeId ?? null,
     displayOrder: input.displayOrder,
+    requiresNegotiation: input.requiresNegotiation,
   };
 }
 
@@ -618,6 +629,69 @@ export async function setRatePlanPackages(
         risk: "HIGH",
         before: { packages: before },
         after: { packages: packages.map((p) => p.code) },
+        reason: input.reason,
+        permission: "rates:manage",
+      },
+    );
+  });
+  return getRatePlan(ctx, ratePlanId);
+}
+
+/**
+ * Sets the companies a negotiated plan is sold to (Phase 7). Only active
+ * companies of the organization; the plan must be marked requiresNegotiation
+ * so it never appears in public quotes.
+ */
+export async function setRatePlanAccounts(
+  ctx: PropertyContext,
+  ratePlanId: string,
+  input: RatePlanAccountsInput,
+): Promise<RatePlanDetail> {
+  const ids = input.accounts.map((a) => a.accountProfileId);
+  if (new Set(ids).size !== ids.length) throw fieldError("accounts", "Each company once");
+  await runInTransaction(async (tx) => {
+    const locked = await lockRatePlanChain(tx, ctx.propertyId, ratePlanId, "update");
+    const self = locked.find((row) => row.id === ratePlanId);
+    if (!self) throw notFound("Rate plan");
+    if (self.version !== input.version) throw staleVersion("Rate plan");
+    const before = (await findRatePlanDetail(tx, ctx.propertyId, ratePlanId))!;
+    if (!before.requiresNegotiation && input.accounts.length > 0) {
+      throw rule("Mark the plan as negotiated before linking companies", "PLAN_NOT_NEGOTIATED");
+    }
+    const companies = await findCompanies(tx, ctx.organizationId, ids);
+    if (companies.length !== ids.length) throw fieldError("accounts", "Choose active companies");
+    const { count } = await updateRatePlanVersioned(tx, ratePlanId, input.version, {});
+    if (count !== 1) throw staleVersion("Rate plan");
+    await replacePlanAccounts(
+      tx,
+      ctx.propertyId,
+      ratePlanId,
+      input.accounts.map((a) => ({
+        accountProfileId: a.accountProfileId,
+        validFrom: a.validFrom ? fromDateOnly(a.validFrom) : null,
+        validTo: a.validTo ? fromDateOnly(a.validTo) : null,
+      })),
+    );
+    const code = new Map(companies.map((c) => [c.id, c.code ?? c.name]));
+    const describe = (id: string, from: string | null, to: string | null) =>
+      `${code.get(id) ?? id}${from || to ? ` ${from ?? "…"}..${to ?? "…"}` : ""}`;
+    await recordAudit(
+      tx,
+      { ...auditActor(ctx) },
+      {
+        action: "rate_plan.accounts",
+        resourceType: "RatePlan",
+        resourceId: ratePlanId,
+        risk: "HIGH",
+        before: {
+          accounts: before.negotiated.map(
+            (n) =>
+              `${n.account.code ?? n.account.name}${n.validFrom || n.validTo ? ` ${n.validFrom ? toDateOnly(n.validFrom) : "…"}..${n.validTo ? toDateOnly(n.validTo) : "…"}` : ""}`,
+          ),
+        },
+        after: {
+          accounts: input.accounts.map((a) => describe(a.accountProfileId, a.validFrom, a.validTo)),
+        },
         reason: input.reason,
         permission: "rates:manage",
       },

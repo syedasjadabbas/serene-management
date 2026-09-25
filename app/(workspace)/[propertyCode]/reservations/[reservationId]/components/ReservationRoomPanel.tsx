@@ -5,9 +5,11 @@ import type { Route } from "next";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { CheckInDialog } from "@/components/front-desk/CheckInDialog";
+import { GuestRecognition } from "@/components/guests/GuestRecognition";
 import { BookingStateBadge } from "@/components/reservations/BookingStateBadge";
 import { Button } from "@/components/ui/Button";
 import { formatCurrency, formatDate, formatDateTime, pluralize } from "@/lib/utils/format";
+import { usePermissions } from "@/hooks/usePermissions";
 import { useProperty } from "@/hooks/useProperty";
 import type {
   ReservationDetail,
@@ -31,6 +33,7 @@ export function ReservationRoomPanel({
   reservation: ReservationDetail;
 }) {
   const property = useProperty();
+  const { can } = usePermissions(property.id);
   const router = useRouter();
   const [dialog, setDialog] = useState<DialogName>(null);
   const close = () => setDialog(null);
@@ -116,6 +119,11 @@ export function ReservationRoomPanel({
           ) : null}
         </div>
       </div>
+      {can("guests:read") ? (
+        <div className="px-4 pt-3">
+          <GuestRecognition guestId={room.primaryGuest.id} propertyCode={property.code} />
+        </div>
+      ) : null}
       <div className="grid gap-4 p-4 lg:grid-cols-[3fr_2fr]">
         <dl className="grid grid-cols-1 gap-x-6 gap-y-1.5 sm:grid-cols-[10rem_1fr]">
           {facts.map(([term, value]) => (

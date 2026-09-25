@@ -1,11 +1,14 @@
-import { defineSessionRoute } from "@/lib/http/route";
+import { defineSessionRoute, withMeta } from "@/lib/http/route";
 import { createGuestSchema, guestSearchQuerySchema } from "@/modules/guests/guests.schema";
 import { createGuest, searchGuests } from "@/modules/guests/guests.service";
 
-/** Organization-wide guest search (bounded, server-side). */
+/** Organization-wide guest search / list (server-side, keyset pages). */
 export const GET = defineSessionRoute({
   query: guestSearchQuerySchema,
-  handler: ({ ctx, query }) => searchGuests(ctx, query),
+  handler: async ({ ctx, query }) => {
+    const { items, nextCursor } = await searchGuests(ctx, query);
+    return withMeta(items, { nextCursor, limit: query.limit });
+  },
 });
 
 export const POST = defineSessionRoute({

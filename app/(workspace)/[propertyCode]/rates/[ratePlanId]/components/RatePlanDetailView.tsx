@@ -3,6 +3,7 @@
 import Link from "next/link";
 import type { Route } from "next";
 import { useState } from "react";
+import { type PickedCompany, CompanyPicker } from "@/components/accounts/CompanyPicker";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { FormDialog, WeekdayPicker } from "@/components/ui/FormDialog";
@@ -17,6 +18,7 @@ import {
   useRateOptionsQuery,
   useRatePlanQuery,
   useSaveSeasonMutation,
+  useSetPlanAccountsMutation,
   useSetPlanPackagesMutation,
 } from "@/lib/api/endpoints/rates.api";
 import { toClientApiError } from "@/lib/api/errors";
@@ -30,7 +32,8 @@ const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const weekdays = (mask: number) =>
   mask === 127 ? "Every day" : WEEKDAYS.filter((_, i) => (mask & (1 << i)) !== 0).join(", ");
 
-type Dialog = null | "edit" | "packages" | { season: SeasonView | "new" } | { remove: SeasonView };
+type Dialog =
+  null | "edit" | "packages" | "accounts" | { season: SeasonView | "new" } | { remove: SeasonView };
 
 /** One rate plan: configuration, seasons (base plans), packages and prices. */
 export function RatePlanDetailView({ ratePlanId }: { ratePlanId: string }) {
@@ -247,6 +250,48 @@ export function RatePlanDetailView({ ratePlanId }: { ratePlanId: string }) {
         </p>
       </section>
 
+      {plan.requiresNegotiation ? (
+        <section className="rounded-lg border border-border-subtle bg-surface p-4">
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <h2 className="text-lg font-semibold">Companies</h2>
+            <span className="text-xs text-fg-muted">
+              Negotiated plan: quoted and sold only for these companies.
+            </span>
+            {plan.actions.manage && can("accounts:read") ? (
+              <Button
+                size="sm"
+                variant="secondary"
+                className="ms-auto min-h-11 md:min-h-0"
+                onClick={() => setDialog("accounts")}
+              >
+                Change companies
+              </Button>
+            ) : null}
+          </div>
+          {plan.negotiated.length === 0 ? (
+            <p className="text-sm text-fg-secondary">No company yet: the plan cannot be sold.</p>
+          ) : (
+            <ul className="flex flex-col gap-1 text-sm">
+              {plan.negotiated.map((n) => (
+                <li key={n.account.id}>
+                  <Link
+                    href={`/${property.code}/companies/${n.account.id}` as Route}
+                    className="text-brand hover:underline"
+                  >
+                    {n.account.name}
+                  </Link>{" "}
+                  <span className="text-fg-muted">
+                    {n.validFrom || n.validTo
+                      ? `${n.validFrom ? formatDate(n.validFrom) : "…"} → ${n.validTo ? formatDate(n.validTo) : "…"}`
+                      : "open-ended"}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      ) : null}
+
       <section className="flex flex-col gap-2">
         <h2 className="text-lg font-semibold">Prices by night</h2>
         <RateCalendarPanel initialPlanId={plan.id} />
@@ -257,6 +302,9 @@ export function RatePlanDetailView({ ratePlanId }: { ratePlanId: string }) {
       ) : null}
       {dialog === "packages" ? (
         <PlanPackagesDialog plan={plan} onClose={() => setDialog(null)} />
+      ) : null}
+      {dialog === "accounts" ? (
+        <PlanAccountsDialog plan={plan} onClose={() => setDialog(null)} />
       ) : null}
       {dialog && typeof dialog === "object" && "season" in dialog ? (
         <SeasonDialog
@@ -492,6 +540,95 @@ function PlanPackagesDialog({ plan, onClose }: { plan: RatePlanDetail; onClose: 
             {p.code} · {p.name}
           </label>
         ))}
+      <TextArea
+        label="Reason (audited)"
+        value={reason}
+        onChange={(e) => setReason(e.target.value)}
+        maxLength={1000}
+      />
+    </FormDialog>
+  );
+}
+
+function PlanAccountsDialog({ plan, onClose }: { plan: RatePlanDetail; onClose: () => void }) {
+  const property = useProperty();
+  const [save, state] = useSetPlanAccountsMutation();
+  const [rows, setRows] = useState(
+    plan.negotiated.map((n) => ({
+      company: { id: n.account.id, label: n.account.name },
+      validFrom: n.validFrom ?? "",
+      validTo: n.validTo ?? "",
+    })),
+  );
+  const [adding, setAdding] = useState<PickedCompany | null>(null);
+  const [reason, setReason] = useState("");
+  const patch = (id: string, value: Partial<(typeof rows)[number]>) =>
+    setRows((list) => list.map((r) => (r.company.id === id ? { ...r, ...value } : r)));
+  return (
+    <FormDialog
+      title={`Companies for ${plan.code}`}
+      description="Only these companies see and book this plan, for stays inside their window."
+      onClose={onClose}
+      onSubmit={async () => {
+        const result = await save({
+          propertyId: property.id,
+          ratePlanId: plan.id,
+          body: {
+            version: plan.version,
+            accounts: rows.map((r) => ({
+              accountProfileId: r.company.id,
+              validFrom: r.validFrom || null,
+              validTo: r.validTo || null,
+            })),
+            reason: reason.trim(),
+          },
+        });
+        if ("data" in result) onClose();
+      }}
+      submitLabel="Save companies"
+      disabled={reason.trim().length < 3}
+      pending={state.isLoading}
+      error={toClientApiError(state.error)}
+      size="lg"
+    >
+      {rows.map((r) => (
+        <div
+          key={r.company.id}
+          className="grid items-end gap-2 border-b border-border-subtle pb-2 sm:grid-cols-[minmax(0,1fr)_10rem_10rem_auto]"
+        >
+          <p className="min-h-11 content-center text-sm font-medium">{r.company.label}</p>
+          <TextField
+            label="From"
+            type="date"
+            value={r.validFrom}
+            onChange={(e) => patch(r.company.id, { validFrom: e.target.value })}
+          />
+          <TextField
+            label="To"
+            type="date"
+            value={r.validTo}
+            onChange={(e) => patch(r.company.id, { validTo: e.target.value })}
+          />
+          <Button
+            size="sm"
+            variant="ghost"
+            className="min-h-11 md:min-h-0"
+            onClick={() => setRows((list) => list.filter((x) => x.company.id !== r.company.id))}
+          >
+            Remove
+          </Button>
+        </div>
+      ))}
+      <CompanyPicker
+        value={adding}
+        onChange={(company) => {
+          if (company && !rows.some((r) => r.company.id === company.id)) {
+            setRows((list) => [...list, { company, validFrom: "", validTo: "" }]);
+          }
+          setAdding(null);
+        }}
+        label="Add a company"
+      />
       <TextArea
         label="Reason (audited)"
         value={reason}

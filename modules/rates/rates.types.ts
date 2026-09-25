@@ -18,6 +18,7 @@ export interface RatePlanListItem {
   roomTypes: string[];
   seasons: number;
   packages: string[];
+  requiresNegotiation: boolean;
 }
 
 export interface SeasonView {
@@ -71,6 +72,13 @@ export interface RatePlanDetail {
   seasons: SeasonView[];
   packages: Ref[];
   derivedPlans: Ref[];
+  requiresNegotiation: boolean;
+  /** Companies the plan is sold to (negotiated plans). */
+  negotiated: {
+    account: { id: string; code: string | null; name: string };
+    validFrom: string | null;
+    validTo: string | null;
+  }[];
   actions: { manage: boolean; managePackages: boolean };
 }
 

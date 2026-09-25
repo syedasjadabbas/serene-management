@@ -397,4 +397,6 @@ Only via §26 step 6. Effects visible to all modules: new postings dated D+1; ar
 
 ## 31. Profile merge and duplicate detection
 
+**Status (Phase 7)**: duplicate _detection_ at creation is implemented (same e-mail or phone digits → `409 POSSIBLE_DUPLICATE` with the matches; the clerk uses the existing profile or confirms a new one). Merge itself is deferred.
+
 Duplicate candidates by exact email/phone/document hash and trigram name similarity + birth date. Merge: survivor keeps its values, fills empty fields from the merged profile; all references (reservations, reservation guests, stays, folios payee, preferences, notes, memberships, statistics summed) re-pointed in one Tx; merged profile status MERGED with `merged_into_id`. Permission `guests:merge` (HIGH), audit HIGH with both snapshots. Irreversible except by audit-assisted manual correction.

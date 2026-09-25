@@ -29,6 +29,7 @@ export const TAG_TYPES = [
   "RatePlan",
   "Guest",
   "Account",
+  "Loyalty",
   "Reservation",
   "Stay",
   "Folio",

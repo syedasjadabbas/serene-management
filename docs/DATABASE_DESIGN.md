@@ -239,6 +239,30 @@ Migration `20260927090000_rates_packages_groups` (hand-written parts, rules Pris
 - **Restrictions** are rows per stay date and scope (house, room type, rate plan, both). A set or clear replaces the rows of that scope and type in one transaction under `pg_advisory_xact_lock(hashtext('restrictions:' || property_id))`.
 - `SM003` is mapped to `BUSINESS_RULE_VIOLATION` (422) by the HTTP layer.
 
+### Phase 7 notes
+
+Migration `20260928090000_guests_companies_loyalty`:
+
+| Rule                                                                                           | Mechanism                                                                                                     |
+| ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Phone search by digits                                                                         | Column `guests.phone_digits` (maintained by the service, backfilled) + trigram GIN index                      |
+| One relationship per guest and account; at most one primary contact per account                | Primary key `(account_profile_id, guest_id)` + partial unique `account_contacts_one_primary_key`              |
+| One membership per guest and program (re-activate instead of re-enrolling)                     | Unique `(program_id, guest_id)`                                                                               |
+| A membership's tier belongs to its program                                                     | Trigger `loyalty_memberships_tier_guard` (SQLSTATE `SM003`)                                                   |
+| Whole, non-negative points balance; non-zero whole points per transaction; tier thresholds ≥ 0 | Checks `loyalty_memberships_points_chk`, `loyalty_transactions_points_chk`, `loyalty_tiers_qualification_chk` |
+| Points ledger and membership history are append-only                                           | Triggers `loyalty_transactions_append_only`, `loyalty_membership_changes_append_only` (`SM001`)               |
+| Negotiated-rate windows ordered                                                                | Check `negotiated_rates_window_chk`                                                                           |
+
+- **Reused tables**: `guests` and children (contacts, addresses, preferences, notes), `preference_codes`, `vip_levels`, `account_profiles`, `account_contacts`, `negotiated_rates`, `loyalty_programs`, `loyalty_tiers`, `loyalty_memberships`, `loyalty_transactions` were modelled in Phase 0. Phase 7 adds only: guest `preferred_name`, `preferred_contact`, `phone_digits`; account `notes`; account-contact `kind`; membership `version`; tier qualification thresholds and status; the append-only `loyalty_membership_changes` history.
+- **History is derived**, never copied: a guest's reservations, stays and folio balances are read from `reservation_rooms` / `reservation_guests` / `stays` / `folios` (one query with per-row sums); `guest_stay_statistics` stays reserved for night audit.
+- **Identity documents** (`guest_documents`) stay unused: they require the application-level encryption (`FIELD_ENCRYPTION_KEY`) that is not implemented yet.
+
+### Time zones (all phases)
+
+- **Instants** (`timestamptz`) are stored as real UTC instants. Every application session runs with `TimeZone=UTC` (set on the connection in `lib/db/prisma.ts`), because `@prisma/adapter-pg` sends a JavaScript `Date` as offset-less UTC wall-clock text and re-labels timestamps it reads as `+00:00`: in any other session zone both directions are shifted by the zone offset. Values written by PostgreSQL itself (`now()`, column defaults, triggers) and by the application therefore share one clock.
+- **Calendar dates** (`date`: business dates, stay dates) are zone-free `YYYY-MM-DD` values and are unaffected. Property-local days and times are always computed from the property's own time zone (`localDateInZone`, `localMidnightUtc`), never from the database session.
+- **Correction of earlier data**: before the fix sessions used the server's default zone (Asia/Karachi on the development installation), so application-written timestamps were stored early by the zone offset. Migration `20260929090000_utc_session_timestamps` (approved one-time correction) converted every application-written `timestamptz` value with `serene_legacy_session_timestamp(stored, zone) = (stored AT TIME ZONE zone) AT TIME ZONE 'UTC'` — the exact inverse of the old write path, per row and across DST — using the migration session's zone as the legacy zone (no-op on a UTC server). Values PostgreSQL produced itself were already correct and were excluded (`idempotency_keys.created_at`, `room_type_inventory.updated_at`, `property_sequences.updated_at`); `folios.updated_at`, written both by the ledger trigger and by the application, was left unchanged (informational, rewritten on the next change). Append-only and guard triggers were disabled per table only around that single statement and re-enabled in the same transaction; each organization's audit trail records a HIGH `system.timestamp_correction` entry with the legacy zone and per-table row counts. Scripts and tools that open their own connections must also use UTC to compare with application-written instants.
+
 ## 6. Transaction boundaries
 
 | Command                      | Rows locked (in order)                                                       | Written in the same transaction                                                                                                                                                   |

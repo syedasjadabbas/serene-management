@@ -6,10 +6,10 @@ import { Button } from "@/components/ui/Button";
 import { TextField } from "@/components/ui/TextField";
 import { toClientApiError } from "@/lib/api/errors";
 import { createGuestSchema } from "@/modules/guests/guests.schema";
-import type { GuestSummaryView } from "@/modules/guests/guests.types";
+import type { GuestSummaryView, PossibleDuplicate } from "@/modules/guests/guests.types";
 import { useCreateGuestMutation } from "@/lib/api/endpoints/guests.api";
 
-/** Minimal guest profile for booking; full profile management comes with the profiles phase. */
+/** Minimal guest profile for booking; the full profile lives in Guests (Phase 7). */
 export function NewGuestForm({
   initialName,
   onCancel,
@@ -17,7 +17,7 @@ export function NewGuestForm({
 }: {
   initialName: string;
   onCancel: () => void;
-  onCreated: (guest: GuestSummaryView) => void;
+  onCreated: (guest: Pick<GuestSummaryView, "id" | "fullName" | "profileNumber">) => void;
 }) {
   const [firstGuess, ...rest] = initialName.trim().split(/\s+/);
   const [values, setValues] = useState({
@@ -34,9 +34,17 @@ export function NewGuestForm({
   const set = (key: keyof typeof values) => (event: { target: { value: string } }) =>
     setValues((current) => ({ ...current, [key]: event.target.value }));
 
+  const duplicates =
+    apiError?.details.reason === "POSSIBLE_DUPLICATE"
+      ? ((apiError.details.matches as PossibleDuplicate[] | undefined) ?? [])
+      : [];
+
   async function submit(event: FormEvent) {
     event.preventDefault();
-    const parsed = createGuestSchema.safeParse(values);
+    const parsed = createGuestSchema.safeParse({
+      ...values,
+      allowDuplicate: duplicates.length > 0,
+    });
     if (!parsed.success) {
       const fieldErrors: Record<string, string[]> = {};
       for (const issue of parsed.error.issues) fieldErrors[String(issue.path[0])] = [issue.message];
@@ -57,7 +65,22 @@ export function NewGuestForm({
       aria-label="New guest profile"
     >
       <h2 className="text-lg font-semibold">New guest profile</h2>
-      {apiError && Object.keys(apiError.fieldErrors).length === 0 ? (
+      {duplicates.length > 0 ? (
+        <Alert tone="warning">
+          <p>
+            A profile with this e-mail or phone already exists. Use it, or create a new one anyway:
+          </p>
+          <ul className="mt-1 flex flex-col gap-1">
+            {duplicates.map((d) => (
+              <li key={d.id}>
+                <Button size="sm" variant="secondary" onClick={() => onCreated(d)}>
+                  Use {d.fullName} · {d.profileNumber}
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </Alert>
+      ) : apiError && Object.keys(apiError.fieldErrors).length === 0 ? (
         <Alert tone="danger">{apiError.message}</Alert>
       ) : null}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-[6rem_1fr_1fr]">
@@ -104,7 +127,7 @@ export function NewGuestForm({
       </div>
       <div className="flex gap-2">
         <Button type="submit" pending={isLoading}>
-          Create and select
+          {duplicates.length > 0 ? "Create new anyway" : "Create and select"}
         </Button>
         <Button variant="ghost" onClick={onCancel}>
           Back to search

@@ -3,6 +3,7 @@ import { prisma, type Tx } from "@/lib/db/prisma";
 import type { PropertyContext } from "@/lib/http/context";
 import { AppError } from "@/lib/http/errors";
 import { toDateOnly } from "@/modules/business-date/business-date.policy";
+import { findBookableAccount } from "@/modules/accounts/accounts.repository";
 import { loadRates, quoteRoomType, type StayRequest } from "@/modules/rates/rates.service";
 import { occupancyProblems, stayNights } from "@/modules/reservations/reservations.policy";
 import {
@@ -127,6 +128,12 @@ export async function searchAvailability(
     throw new AppError("NOT_FOUND", "Room type not found");
   }
   const roomTypeIds = roomTypes.map((rt) => rt.id);
+  if (
+    query.companyId &&
+    !(await findBookableAccount(prisma, ctx.organizationId, query.companyId))
+  ) {
+    throw new AppError("NOT_FOUND", "Company not found");
+  }
   const stay: StayRequest = {
     propertyId: ctx.propertyId,
     businessDate,
@@ -135,6 +142,7 @@ export async function searchAvailability(
     nights,
     adults: query.adults,
     children: query.children,
+    accountId: query.companyId ?? null,
   };
 
   const [inventory, restrictionRows, rates] = await Promise.all([

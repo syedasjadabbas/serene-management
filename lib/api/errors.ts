@@ -8,6 +8,8 @@ export interface ClientApiError {
   status: number | null;
   requestId: string | null;
   fieldErrors: Record<string, string[]>;
+  /** Machine-readable details (e.g. `reason`, duplicate `matches`). */
+  details: Record<string, unknown>;
 }
 
 /** Normalizes RTK Query errors into the API error envelope for display. */
@@ -24,6 +26,7 @@ export function toClientApiError(
       status: error.status,
       requestId: envelope?.requestId ?? null,
       fieldErrors: (envelope?.details?.fields as Record<string, string[]> | undefined) ?? {},
+      details: (envelope?.details as Record<string, unknown> | undefined) ?? {},
     };
   }
   return {
@@ -32,5 +35,6 @@ export function toClientApiError(
     status: null,
     requestId: null,
     fieldErrors: {},
+    details: {},
   };
 }

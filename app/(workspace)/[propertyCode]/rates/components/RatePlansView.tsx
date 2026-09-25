@@ -83,6 +83,7 @@ export function RatePlansView() {
                 </span>
                 <span className="col-span-2 flex gap-1 md:col-span-1 md:justify-end">
                   {plan.kind === "GROUP" ? <Badge tone="info">Groups only</Badge> : null}
+                  {plan.requiresNegotiation ? <Badge tone="info">Negotiated</Badge> : null}
                   {plan.taxInclusive ? <Badge>Tax incl.</Badge> : null}
                   {plan.status === "ACTIVE" ? (
                     <Badge tone="success">Active</Badge>

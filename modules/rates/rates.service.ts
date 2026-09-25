@@ -8,7 +8,7 @@ import {
 } from "@/modules/availability/availability.policy";
 import type { RateQuoteView } from "@/modules/availability/availability.types";
 import { toDateOnly } from "@/modules/business-date/business-date.policy";
-import { type RatePlanPricing, priceNights } from "./rates.policy";
+import { type RatePlanPricing, negotiatedFor, priceNights } from "./rates.policy";
 import {
   type RatePlanRow,
   findCurrencyMinorUnits,
@@ -17,9 +17,9 @@ import {
 } from "./rates.repository";
 
 /**
- * Rate quoting for a stay (Phase 2 scope). Plans that need a negotiated
- * account or a membership, and day-use plans, are not offered yet; they
- * arrive with profiles/loyalty and day-use handling.
+ * Rate quoting for a stay. Negotiated plans (requiresNegotiation) are offered
+ * only for a stay booked for a company they are negotiated for (Phase 7);
+ * member-only and day-use plans are not offered yet.
  */
 
 export interface StayRequest {
@@ -30,6 +30,8 @@ export interface StayRequest {
   nights: string[];
   adults: number;
   children: number;
+  /** Company the stay is booked for: unlocks its negotiated plans. Validated by the caller. */
+  accountId?: string | null;
 }
 
 export interface LoadedRates {
@@ -167,10 +169,16 @@ function isOfferable(
   roomTypeId: string,
   allowGroupRates = false,
 ): boolean {
-  if (plan.requiresNegotiation || plan.requiresMembership || plan.isDayUse) return false;
+  if (plan.requiresMembership || plan.isDayUse) return false;
   if (plan.kind === "GROUP" && !allowGroupRates) return false;
   if (!plan.roomTypes.some((rt) => rt.roomTypeId === roomTypeId)) return false;
   const lastNight = stay.nights.at(-1) ?? stay.arrival;
+  if (
+    plan.requiresNegotiation &&
+    !negotiatedFor(plan, stay.accountId ?? null, stay.arrival, lastNight)
+  ) {
+    return false;
+  }
   if (plan.sellFrom && stay.businessDate < toDateOnly(plan.sellFrom)) return false;
   if (plan.sellTo && stay.businessDate > toDateOnly(plan.sellTo)) return false;
   if (plan.stayFrom && stay.arrival < toDateOnly(plan.stayFrom)) return false;

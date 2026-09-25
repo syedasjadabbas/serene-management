@@ -43,6 +43,15 @@ enum AccountProfileType {
   @@map("account_profile_type")
 }
 
+/// How a guest relates to an account (Phase 7).
+enum AccountContactKind {
+  EMPLOYEE // works for the company
+  CONTACT // company contact person (booker, travel manager ...)
+  ASSOCIATE // otherwise associated
+
+  @@map("account_contact_kind")
+}
+
 enum ProfileStatus {
   ACTIVE
   INACTIVE
@@ -83,6 +92,8 @@ model Guest {
   firstName         String        @map("first_name") @db.VarChar(100)
   middleName        String?       @map("middle_name") @db.VarChar(100)
   lastName          String        @map("last_name") @db.VarChar(100)
+  /// Name the guest likes to be addressed by (Phase 7).
+  preferredName     String?       @map("preferred_name") @db.VarChar(100)
   /// Lower-cased, accent-stripped "last first" used by trigram search.
   searchName        String        @map("search_name") @db.VarChar(250)
   gender            String?       @db.VarChar(20)
@@ -91,6 +102,10 @@ model Guest {
   languageCode      String?       @map("language_code") @db.VarChar(10)
   primaryEmail      String?       @map("primary_email") @db.VarChar(254)
   primaryPhone      String?       @map("primary_phone") @db.VarChar(40)
+  /// Digits of primary_phone, maintained by the service for trigram phone search.
+  phoneDigits       String?       @map("phone_digits") @db.VarChar(40)
+  /// Preferred channel for communication (Phase 7).
+  preferredContact  ContactType?  @map("preferred_contact")
   vipLevelId        String?       @map("vip_level_id") @db.Uuid
   isRestricted      Boolean       @default(false) @map("is_restricted")
   restrictionReason String?       @map("restriction_reason") @db.VarChar(500)
@@ -129,6 +144,7 @@ model Guest {
   @@index([searchName(ops: raw("gin_trgm_ops"))], type: Gin, map: "guests_search_name_trgm_idx")
   @@index([organizationId, primaryEmail])
   @@index([organizationId, primaryPhone])
+  @@index([phoneDigits(ops: raw("gin_trgm_ops"))], type: Gin, map: "guests_phone_digits_trgm_idx")
   @@map("guests")
 }
 
@@ -298,6 +314,7 @@ model AccountProfile {
   isRestricted      Boolean            @default(false) @map("is_restricted")
   restrictionReason String?            @map("restriction_reason") @db.VarChar(500)
   salesOwnerId      String?            @map("sales_owner_id") @db.Uuid
+  notes             String?            @db.VarChar(4000)
   status            ProfileStatus      @default(ACTIVE)
   mergedIntoId      String?            @map("merged_into_id") @db.Uuid
   version           Int                @default(1)
@@ -329,14 +346,19 @@ model AccountProfile {
 /// A guest profile acting as contact person for an account.
 model AccountContact {
   accountProfileId String   @map("account_profile_id") @db.Uuid
-  guestId          String   @map("guest_id") @db.Uuid
-  role             String?  @db.VarChar(100)
-  isPrimary        Boolean  @default(false) @map("is_primary")
-  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  guestId          String             @map("guest_id") @db.Uuid
+  kind             AccountContactKind @default(CONTACT)
+  /// Job title or role at the account.
+  role             String?            @db.VarChar(100)
+  /// At most one primary contact per account (partial unique index).
+  isPrimary        Boolean            @default(false) @map("is_primary")
+  createdAt        DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
 
   account AccountProfile @relation(fields: [accountProfileId], references: [id], onDelete: Cascade)
   guest   Guest          @relation(fields: [guestId], references: [id], onDelete: Cascade)
 
   @@id([accountProfileId, guestId])
+  @@unique([accountProfileId], map: "account_contacts_one_primary_key", where: raw("is_primary"))
+  @@index([guestId])
   @@map("account_contacts")
 }

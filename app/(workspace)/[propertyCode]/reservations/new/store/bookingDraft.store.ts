@@ -27,6 +27,8 @@ export interface BookingDraft {
     waitlist: boolean;
   } | null;
   guest: { id: string; label: string } | null;
+  /** Company the booking is for: its negotiated rates are quoted (Phase 7). */
+  company: { id: string; label: string } | null;
   details: {
     reservationTypeId: string;
     marketCodeId: string;
@@ -35,6 +37,8 @@ export interface BookingDraft {
     roomId: string;
     eta: string;
     specialRequests: string;
+    /** Company contact who booked (empty: the guest). */
+    bookerGuestId: string;
   };
 }
 
@@ -46,6 +50,7 @@ const EMPTY_DETAILS: BookingDraft["details"] = {
   roomId: "",
   eta: "",
   specialRequests: "",
+  bookerGuestId: "",
 };
 
 interface BookingDraftStore extends BookingDraft {
@@ -54,6 +59,7 @@ interface BookingDraftStore extends BookingDraft {
   setStay: (stay: NonNullable<BookingDraft["stay"]>) => void;
   select: (selection: NonNullable<BookingDraft["selection"]>) => void;
   setGuest: (guest: BookingDraft["guest"]) => void;
+  setCompany: (company: BookingDraft["company"]) => void;
   setDetails: (details: Partial<BookingDraft["details"]>) => void;
   reset: () => void;
 }
@@ -64,6 +70,7 @@ export const useBookingDraft = create<BookingDraftStore>()((set) => ({
   stay: null,
   selection: null,
   guest: null,
+  company: null,
   details: EMPTY_DETAILS,
   setMode: (mode) => set({ mode }),
   setStep: (step) => set({ step }),
@@ -72,6 +79,14 @@ export const useBookingDraft = create<BookingDraftStore>()((set) => ({
   select: (selection) =>
     set((s) => ({ selection, step: 2, details: { ...s.details, roomId: "" } })),
   setGuest: (guest) => set({ guest }),
+  // Another company quotes other (negotiated) rates: the selection and booker are cleared.
+  setCompany: (company) =>
+    set((s) => ({
+      company,
+      selection: null,
+      step: 1,
+      details: { ...s.details, bookerGuestId: "" },
+    })),
   setDetails: (details) => set((s) => ({ details: { ...s.details, ...details } })),
   reset: () =>
     set({
@@ -80,6 +95,7 @@ export const useBookingDraft = create<BookingDraftStore>()((set) => ({
       stay: null,
       selection: null,
       guest: null,
+      company: null,
       details: EMPTY_DETAILS,
     }),
 }));

@@ -235,6 +235,7 @@ const GUESTS: [string, string, string, string | null, string | null][] = [
 
 export async function seedDemo(): Promise<void> {
   const organization = await ensureOrganization();
+  const ratePlansByProperty: { propertyId: string; corpId: string }[] = [];
 
   for (const spec of PROPERTIES) {
     const property = await prisma.property.findFirst({
@@ -267,8 +268,179 @@ export async function seedDemo(): Promise<void> {
     await seedOperations(ctx, businessDate, inventory);
     await seedFolios(ctx, businessDate);
     await seedGroups(ctx, businessDate, inventory);
+    ratePlansByProperty.push({ propertyId: property.id, corpId: inventory.ratePlans.CORP! });
     console.warn(`Seeded inventory and sample reservations for ${spec.code}.`);
   }
+  await seedProfiles(organization.id, organization.adminCtx.userId, ratePlansByProperty);
+}
+
+// --- Phase 7: profiles, companies and loyalty ----------------------------------------------
+
+const PREFERENCE_CODES: [string, string, string][] = [
+  ["ROOM", "HIGHFLOOR", "High floor"],
+  ["ROOM", "LOWFLOOR", "Low floor"],
+  ["ROOM", "QUIET", "Quiet room, away from lift"],
+  ["BED", "KING", "King bed"],
+  ["BED", "TWIN", "Twin beds"],
+  ["SMOKING", "NONSMOKING", "Non-smoking room"],
+  ["PILLOW", "FOAM", "Foam pillow"],
+  ["PILLOW", "HYPOALLERGENIC", "Feather-free bedding"],
+  ["DIETARY", "VEGETARIAN", "Vegetarian"],
+  ["DIETARY", "VEGAN", "Vegan"],
+  ["DIETARY", "HALAL", "Halal"],
+  ["DIETARY", "GLUTENFREE", "Gluten-free"],
+  ["DIETARY", "NUTALLERGY", "Nut allergy"],
+  ["ACCESS", "ACCESSIBLE", "Accessible room"],
+  ["ACCESS", "NEARLIFT", "Near the lift"],
+  ["AMENITY", "NEWSPAPER", "Morning newspaper"],
+];
+
+async function seedProfiles(
+  organizationId: string,
+  adminId: string,
+  plans: { propertyId: string; corpId: string }[],
+) {
+  for (const [groupCode, code, name] of PREFERENCE_CODES) {
+    await prisma.preferenceCode.upsert({
+      where: { organizationId_groupCode_code: { organizationId, groupCode, code } },
+      create: { organizationId, groupCode, code, name },
+      update: {},
+    });
+  }
+  for (const [code, name, rank] of [
+    ["VIP", "VIP", 1],
+    ["VVIP", "VVIP / owner's guest", 2],
+  ] as const) {
+    await prisma.vipLevel.upsert({
+      where: { organizationId_code: { organizationId, code } },
+      create: { organizationId, code, name, rank },
+      update: {},
+    });
+  }
+
+  const program = await prisma.loyaltyProgram.upsert({
+    where: { organizationId_code: { organizationId, code: "SRW" } },
+    create: { organizationId, code: "SRW", name: "Serene Rewards" },
+    update: {},
+    select: { id: true },
+  });
+  const tiers: Record<string, string> = {};
+  for (const [code, name, rank, nights] of [
+    ["SILVER", "Silver", 1, null],
+    ["GOLD", "Gold", 2, 20],
+    ["PLATINUM", "Platinum", 3, 50],
+  ] as const) {
+    const tier = await prisma.loyaltyTier.upsert({
+      where: { programId_code: { programId: program.id, code } },
+      create: { programId: program.id, code, name, rank, qualifyingNights: nights },
+      update: {},
+      select: { id: true },
+    });
+    tiers[code] = tier.id;
+  }
+
+  const acme =
+    (await prisma.accountProfile.findFirst({
+      where: { organizationId, type: "COMPANY", code: "ACME" },
+      select: { id: true },
+    })) ??
+    (await prisma.accountProfile.create({
+      data: {
+        organizationId,
+        type: "COMPANY",
+        code: "ACME",
+        name: "Acme Corporation",
+        searchName: "acme corporation",
+        legalName: "Acme Corporation (Pvt) Ltd",
+        email: "travel@acme.example.com",
+        phone: "+92 51 111 000 222",
+        city: "Islamabad",
+        countryCode: "PK",
+        notes: "Demo corporate account with a negotiated rate (CORP).",
+      },
+      select: { id: true },
+    }));
+  for (const plan of plans) {
+    await prisma.negotiatedRate.upsert({
+      where: {
+        ratePlanId_accountProfileId: { ratePlanId: plan.corpId, accountProfileId: acme.id },
+      },
+      create: { propertyId: plan.propertyId, ratePlanId: plan.corpId, accountProfileId: acme.id },
+      update: {},
+    });
+  }
+  // The SMR retreat is Acme's: its pickups carry the company.
+  await prisma.group.updateMany({
+    where: { organizationId, code: "SMR-RETREAT", accountProfileId: null },
+    data: { accountProfileId: acme.id },
+  });
+
+  const guest = (firstName: string, lastName: string) =>
+    prisma.guest.findFirst({
+      where: { organizationId, firstName, lastName },
+      select: { id: true },
+    });
+  const hamza = await guest("Hamza", "Qureshi");
+  const mahnoor = await guest("Mahnoor", "Siddiqui");
+  const sofia = await guest("Sofia", "Rossi");
+  for (const [g, kind, role, isPrimary] of [
+    [hamza, "EMPLOYEE", "Head of administration", true],
+    [mahnoor, "CONTACT", "Travel coordinator", false],
+  ] as const) {
+    if (!g) continue;
+    await prisma.accountContact.upsert({
+      where: { accountProfileId_guestId: { accountProfileId: acme.id, guestId: g.id } },
+      create: { accountProfileId: acme.id, guestId: g.id, kind, role, isPrimary },
+      update: {},
+    });
+  }
+  if (sofia) {
+    const exists = await prisma.loyaltyMembership.findUnique({
+      where: { programId_guestId: { programId: program.id, guestId: sofia.id } },
+      select: { id: true },
+    });
+    if (!exists) {
+      const membership = await prisma.loyaltyMembership.create({
+        data: {
+          programId: program.id,
+          guestId: sofia.id,
+          membershipNumber: "SRW1000001",
+          tierId: tiers.GOLD!,
+        },
+        select: { id: true },
+      });
+      await prisma.loyaltyMembershipChange.create({
+        data: {
+          membershipId: membership.id,
+          type: "ENROLLED",
+          toTierId: tiers.GOLD!,
+          toStatus: "ACTIVE",
+          reason: "Demo member",
+          createdById: adminId,
+        },
+      });
+    }
+    const highFloor = await prisma.preferenceCode.findFirstOrThrow({
+      where: { organizationId, groupCode: "ROOM", code: "HIGHFLOOR" },
+      select: { id: true },
+    });
+    const vegetarian = await prisma.preferenceCode.findFirstOrThrow({
+      where: { organizationId, groupCode: "DIETARY", code: "VEGETARIAN" },
+      select: { id: true },
+    });
+    for (const code of [highFloor, vegetarian]) {
+      const has = await prisma.guestPreference.findFirst({
+        where: { guestId: sofia.id, preferenceCodeId: code.id, propertyId: null },
+        select: { id: true },
+      });
+      if (!has) {
+        await prisma.guestPreference.create({
+          data: { guestId: sofia.id, preferenceCodeId: code.id },
+        });
+      }
+    }
+  }
+  console.warn("Seeded preference catalog, VIP levels, Serene Rewards and the Acme account.");
 }
 
 async function seedPropertyReservations(

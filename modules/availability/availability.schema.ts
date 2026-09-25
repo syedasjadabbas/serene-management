@@ -39,6 +39,8 @@ export const availabilityQuerySchema = z
     rooms: z.coerce.number().int().min(1).max(MAX_ROOMS_PER_BOOKING).default(1),
     roomTypeId: idSchema.optional(),
     ratePlanId: idSchema.optional(),
+    /** Company the stay is for: also quotes its negotiated rate plans (Phase 7). */
+    companyId: idSchema.optional(),
   })
   .strict()
   .superRefine(refineStay);

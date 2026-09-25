@@ -67,12 +67,23 @@ export const createReservationSchema = z
     externalReference: optionalText(60),
     /** Book onto the waitlist instead of deducting inventory. */
     waitlist: z.boolean().default(false),
+    /** Company the booking is for (Phase 7): unlocks its negotiated rates. */
+    companyId: idSchema.optional(),
+    /** Company contact who booked; must be a contact of `companyId`. */
+    bookerGuestId: idSchema.optional(),
     ...overrideFields,
   })
   .strict()
   .superRefine((value, ctx) => {
     refineStay(value, ctx);
     requireReasonForOverride(value, ctx);
+    if (value.bookerGuestId && !value.companyId) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["bookerGuestId"],
+        message: "A booker contact needs a company",
+      });
+    }
     if (value.roomId && value.rooms > 1) {
       ctx.addIssue({
         code: "custom",
@@ -238,3 +249,24 @@ export const availableRoomsQuerySchema = z
   .superRefine(refineStay);
 
 export type AvailableRoomsQuery = z.infer<typeof availableRoomsQuerySchema>;
+
+/** Company / booker of a reservation (Phase 7); null clears. */
+export const reservationCompanySchema = z
+  .object({
+    version: z.number().int().positive(),
+    companyId: idSchema.nullable(),
+    bookerGuestId: idSchema.nullable().default(null),
+    reason: z.string().trim().min(3).max(1000).optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.bookerGuestId && !value.companyId) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["bookerGuestId"],
+        message: "A booker contact needs a company",
+      });
+    }
+  });
+
+export type ReservationCompanyInput = z.infer<typeof reservationCompanySchema>;

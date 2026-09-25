@@ -8,6 +8,7 @@ import { TextArea } from "@/components/ui/TextArea";
 import { TextField } from "@/components/ui/TextField";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useProperty } from "@/hooks/useProperty";
+import { useAccountQuery } from "@/lib/api/endpoints/accounts.api";
 import {
   useAvailableRoomsQuery,
   useBookingOptionsQuery,
@@ -21,7 +22,8 @@ const toOptions = (rows: { id: string; code: string; name: string }[]) =>
 export function StepDetails() {
   const property = useProperty();
   const { can } = usePermissions(property.id);
-  const { stay, selection, details, setDetails, setStep, mode } = useBookingDraft();
+  const { stay, selection, details, setDetails, setStep, mode, company } = useBookingDraft();
+  const account = useAccountQuery(company?.id ?? "", { skip: !company });
   const walkIn = mode === "walk-in";
   const options = useBookingOptionsQuery(property.id);
   const canPickRoom = can("rooms:assign") && stay?.rooms === 1 && !selection?.waitlist;
@@ -129,6 +131,19 @@ export function StepDetails() {
           />
         ) : null}
       </div>
+      {company ? (
+        <Select
+          label={`Booked by (${company.label} contact)`}
+          placeholder="The guest"
+          options={(account.data?.contacts ?? []).map((c) => ({
+            value: c.guest.id,
+            label: `${c.guest.fullName}${c.role ? ` · ${c.role}` : ""}`,
+          }))}
+          value={details.bookerGuestId}
+          onChange={set("bookerGuestId")}
+          className="max-w-md"
+        />
+      ) : null}
       <TextArea
         label="Special requests"
         value={details.specialRequests}

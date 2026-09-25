@@ -25,7 +25,7 @@ export function StepReview() {
   const property = useProperty();
   const router = useRouter();
   const { can } = usePermissions(property.id);
-  const { stay, selection, guest, details, setStep, reset, mode } = useBookingDraft();
+  const { stay, selection, guest, details, setStep, reset, mode, company } = useBookingDraft();
   const walkIn = mode === "walk-in";
   const options = useBookingOptionsQuery(property.id);
   // Same arguments as step 3, so this is served from the cache.
@@ -80,6 +80,8 @@ export function StepReview() {
       ...(details.roomId ? { roomId: details.roomId } : {}),
       ...(details.eta ? { eta: details.eta } : {}),
       ...(details.specialRequests ? { specialRequests: details.specialRequests } : {}),
+      ...(company ? { companyId: company.id } : {}),
+      ...(company && details.bookerGuestId ? { bookerGuestId: details.bookerGuestId } : {}),
       waitlist: selection.waitlist,
       ...(override ? { override: true, reason } : {}),
     };
@@ -113,6 +115,7 @@ export function StepReview() {
     ["Room", details.roomId ? (roomNumber ?? "Selected room") : "Assign later"],
     ["Total per room", formatCurrency(selection.total, selection.currencyCode)],
     ["Guest", guest.label],
+    ...(company ? ([["Company", company.label]] as [string, string][]) : []),
     ["Reservation type", label(options.data?.reservationTypes, details.reservationTypeId)],
     [
       "Market / source",

@@ -36,6 +36,15 @@ enum LoyaltyTransactionType {
   @@map("loyalty_transaction_type")
 }
 
+/// Membership lifecycle history (Phase 7), append-only.
+enum LoyaltyMembershipChangeType {
+  ENROLLED
+  TIER_CHANGED
+  STATUS_CHANGED
+
+  @@map("loyalty_membership_change_type")
+}
+
 enum StockMovementType {
   RECEIPT
   ISSUE
@@ -111,14 +120,20 @@ model LoyaltyProgram {
 }
 
 model LoyaltyTier {
-  id        String @id @default(uuid(7)) @db.Uuid
-  programId String @map("program_id") @db.Uuid
-  code      String @db.VarChar(20)
-  name      String @db.VarChar(100)
-  rank      Int    @default(0)
+  id               String       @id @default(uuid(7)) @db.Uuid
+  programId        String       @map("program_id") @db.Uuid
+  code             String       @db.VarChar(20)
+  name             String       @db.VarChar(100)
+  rank             Int          @default(0)
+  /// Qualification thresholds (Phase 7 foundation; evaluated once stay events feed loyalty).
+  qualifyingNights Int?         @map("qualifying_nights")
+  qualifyingStays  Int?         @map("qualifying_stays")
+  status           RecordStatus @default(ACTIVE)
 
-  program     LoyaltyProgram      @relation(fields: [programId], references: [id], onDelete: Cascade)
+  program     LoyaltyProgram            @relation(fields: [programId], references: [id], onDelete: Cascade)
   memberships LoyaltyMembership[]
+  changesFrom LoyaltyMembershipChange[] @relation("LoyaltyChangeFromTier")
+  changesTo   LoyaltyMembershipChange[] @relation("LoyaltyChangeToTier")
 
   @@unique([programId, code])
   @@map("loyalty_tiers")
@@ -134,13 +149,17 @@ model LoyaltyMembership {
   enrolledAt       DateTime     @default(now()) @map("enrolled_at") @db.Timestamptz(3)
   expiresAt        DateTime?    @map("expires_at") @db.Timestamptz(3)
   status           RecordStatus @default(ACTIVE)
+  version          Int          @default(1)
 
-  program      LoyaltyProgram       @relation(fields: [programId], references: [id], onDelete: Restrict)
-  guest        Guest                @relation(fields: [guestId], references: [id], onDelete: Restrict)
-  tier         LoyaltyTier?         @relation(fields: [tierId], references: [id], onDelete: Restrict)
+  program      LoyaltyProgram            @relation(fields: [programId], references: [id], onDelete: Restrict)
+  guest        Guest                     @relation(fields: [guestId], references: [id], onDelete: Restrict)
+  tier         LoyaltyTier?              @relation(fields: [tierId], references: [id], onDelete: Restrict)
   transactions LoyaltyTransaction[]
+  changes      LoyaltyMembershipChange[]
 
   @@unique([programId, membershipNumber])
+  /// One membership per guest and program: re-activate instead of re-enrolling.
+  @@unique([programId, guestId])
   @@index([guestId])
   @@map("loyalty_memberships")
 }
@@ -160,6 +179,27 @@ model LoyaltyTransaction {
 
   @@index([membershipId, createdAt])
   @@map("loyalty_transactions")
+}
+
+/// Enrollment, tier and status history of a membership (append-only).
+model LoyaltyMembershipChange {
+  id           String                      @id @default(uuid(7)) @db.Uuid
+  membershipId String                      @map("membership_id") @db.Uuid
+  type         LoyaltyMembershipChangeType
+  fromTierId   String?                     @map("from_tier_id") @db.Uuid
+  toTierId     String?                     @map("to_tier_id") @db.Uuid
+  fromStatus   RecordStatus?               @map("from_status")
+  toStatus     RecordStatus?               @map("to_status")
+  reason       String?                     @db.VarChar(500)
+  createdById  String                      @map("created_by_id") @db.Uuid
+  createdAt    DateTime                    @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  membership LoyaltyMembership @relation(fields: [membershipId], references: [id], onDelete: Restrict)
+  fromTier   LoyaltyTier?      @relation("LoyaltyChangeFromTier", fields: [fromTierId], references: [id], onDelete: Restrict)
+  toTier     LoyaltyTier?      @relation("LoyaltyChangeToTier", fields: [toTierId], references: [id], onDelete: Restrict)
+
+  @@index([membershipId, createdAt])
+  @@map("loyalty_membership_changes")
 }
 
 /// Operational item (minibar, amenity, linen, supplies, retail).

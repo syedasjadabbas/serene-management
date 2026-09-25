@@ -59,3 +59,14 @@ export function permissionsInScope(
   if (propertyId === null) return access.organizationPermissions;
   return access.byProperty[propertyId] ?? [];
 }
+
+/**
+ * Accessible properties where the user holds the permission. Organization data
+ * (guest and company profiles) is shown with property facts — history,
+ * balances, property notes — only from these properties (docs/RBAC.md §5).
+ */
+export function propertiesWithPermission(access: AccessProfile, permission: Permission): string[] {
+  return Object.keys(access.byProperty).filter((propertyId) =>
+    hasPermission(access, propertyId, permission),
+  );
+}

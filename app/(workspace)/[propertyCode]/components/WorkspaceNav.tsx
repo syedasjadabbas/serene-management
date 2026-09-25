@@ -16,6 +16,7 @@ const ITEMS: { segment: string; label: string; permission: Permission | null }[]
   { segment: "maintenance", label: "Maintenance", permission: "maintenance:read" },
   { segment: "availability", label: "Availability", permission: "availability:read" },
   { segment: "reservations", label: "Reservations", permission: "reservations:read" },
+  { segment: "guests", label: "Guests", permission: "guests:read" },
   { segment: "groups", label: "Groups", permission: "groups:read" },
   { segment: "rates", label: "Rates", permission: "rates:read" },
 ];

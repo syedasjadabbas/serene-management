@@ -11,6 +11,8 @@ import { useProperty } from "@/hooks/useProperty";
 import { useReservationQuery } from "@/lib/api/endpoints/reservations.api";
 import { toClientApiError } from "@/lib/api/errors";
 import { formatDateTime } from "@/lib/utils/format";
+import { useState } from "react";
+import { CompanyDialog } from "./CompanyDialog";
 import { ReservationRoomPanel } from "./ReservationRoomPanel";
 
 export function ReservationDetailView({
@@ -27,6 +29,7 @@ export function ReservationDetailView({
     { skip: !can("reservations:read") },
   );
   const error = toClientApiError(query.error);
+  const [editingCompany, setEditingCompany] = useState(false);
 
   if (permissionsLoading) return <StatusPanel kind="loading" title="Loading reservation" />;
   if (!can("reservations:read")) {
@@ -89,6 +92,34 @@ export function ReservationDetailView({
           {reservation.externalReference ? ` · Ref ${reservation.externalReference}` : ""}
         </p>
       </header>
+      {reservation.company || reservation.actions.changeCompany ? (
+        <p className="flex flex-wrap items-center gap-2 text-sm">
+          <span className="text-fg-muted">Company</span>
+          {reservation.company ? (
+            <Link
+              href={`/${property.code}/companies/${reservation.company.id}` as Route}
+              className="font-medium text-brand hover:underline"
+            >
+              {reservation.company.name}
+            </Link>
+          ) : (
+            <span>None</span>
+          )}
+          {reservation.company && reservation.booker ? (
+            <span className="text-fg-secondary">· booked by {reservation.booker.fullName}</span>
+          ) : null}
+          {reservation.actions.changeCompany ? (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="min-h-11 md:min-h-0"
+              onClick={() => setEditingCompany(true)}
+            >
+              {reservation.company ? "Change" : "Set company"}
+            </Button>
+          ) : null}
+        </p>
+      ) : null}
 
       {reservation.rooms.map((room) => (
         <ReservationRoomPanel key={room.id} room={room} reservation={reservation} />
@@ -116,6 +147,9 @@ export function ReservationDetailView({
       ) : null}
 
       <AuditHistory entries={reservation.history} timezone={property.timezone} />
+      {editingCompany ? (
+        <CompanyDialog reservation={reservation} onClose={() => setEditingCompany(false)} />
+      ) : null}
     </div>
   );
 }

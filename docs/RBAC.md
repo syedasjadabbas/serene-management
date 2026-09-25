@@ -161,3 +161,25 @@ No permission was added; the Phase 0 catalog covers Phase 6:
 | Add / remove packages on a reservation; view its charge estimate | `reservations:update` / `reservations:read` | STANDARD / —    |
 
 The UI hides what the user lacks (server-computed `actions` flags plus `can()`); every route enforces it regardless (verified with the read-only auditor: all Phase 6 mutations answer 403 with no state change).
+
+## Guests, companies and loyalty (Phase 7, as implemented)
+
+No permission was added. Profiles are organization data: a permission held at any property applies to the profile itself; property facts follow the permission at each property.
+
+| Action                                             | Permission                                            | Risk                                       |
+| -------------------------------------------------- | ----------------------------------------------------- | ------------------------------------------ |
+| Search / read guest profiles                       | `guests:read`                                         | —                                          |
+| Date of birth, management / internal notes         | + `guests:read_sensitive` ★                           | —                                          |
+| Create a profile                                   | `guests:create`                                       | STANDARD                                   |
+| Edit a profile, preferences, notes                 | `guests:update` (DOB: + `guests:read_sensitive`)      | STANDARD / HIGH (restriction, status, DOB) |
+| Guest history (reservations, stays)                | `reservations:read` at each property shown            | —                                          |
+| Room totals and folio balances in history          | + `billing:read` at that property                     | —                                          |
+| Read companies, a guest's companies                | `accounts:read`                                       | —                                          |
+| Create / edit companies and relationships          | `accounts:manage` (+ `guests:read` for relationships) | STANDARD / HIGH (restriction, status)      |
+| Read loyalty programs and a guest's memberships    | `loyalty:read`                                        | —                                          |
+| Programs, tiers, enrollment, tier / status, points | `loyalty:manage` ★ (reason required)                  | HIGH                                       |
+| Company on a reservation                           | `reservations:update` (+ `accounts:read` in the UI)   | STANDARD                                   |
+| Negotiated companies of a rate plan                | `rates:manage` ★                                      | HIGH                                       |
+| Profile audit trail on the profile page            | + `audit:read`                                        | —                                          |
+
+Role templates: `loyalty:read` was added to the Read-only template (and so to Auditor) and to the Reservations agent template (and so to Front desk agent and Front office manager). Templates apply when an organization's roles are created; existing organizations keep their tailored roles until an administrator grants the permission.

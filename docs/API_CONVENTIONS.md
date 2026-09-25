@@ -186,6 +186,39 @@ POST   /api/v1/properties/{id}/blocks/{blockId}/pickups                     { gu
 
 Prices, totals, pickup counts, remaining rooms and currencies are never accepted from the client; the rate plan's currency is always the property's. Overbooking (`override`) additionally requires `reservations:override_availability` and is audited HIGH. Error reasons: `INVALID_DERIVATION`, `PLAN_IS_DERIVED`, `PLAN_HAS_SEASONS`, `PLAN_HAS_ACTIVE_CHILDREN`, `SEASON_CONFLICT`, `NO_SEASON`, `OCCUPANCY_NOT_PRICED`, `RATE_NOT_SELLABLE`, `COMPONENT_POSTED`, `PACKAGE_NOT_SOLD_SEPARATELY`, `RESERVATION_NOT_ACTIVE`, `GROUP_NOT_ACTIVE`, `BLOCK_WITHOUT_RATE`, `BLOCK_NO_AVAILABILITY`, `BLOCK_NOT_DEFINITE`, `NOT_IN_BLOCK`, `BLOCK_EXHAUSTED`, `BLOCK_HAS_PICKUP`, `BLOCK_CANCELLED`, `ALLOCATION_BELOW_PICKUP`, `NOTHING_TO_RELEASE`, `BLOCK_PICKUP_LOCKED`, `NO_CANCEL_STATUS`, `INVALID_STATE_TRANSITION`, database guard `SM003` (422); `STALE_VERSION`, `IDEMPOTENCY_CONFLICT` (409). A group or block of another property answers 404; a property the user cannot access answers 403.
 
+**Implemented in Phase 7 (guests, companies, loyalty)** — organization-level routes; the service checks the permission at any accessible property:
+
+```text
+GET    /api/v1/guests?q=&status=&cursor=&limit=                 search / list (name words, e-mail, phone digits, profile or readable confirmation number)   guests:read
+POST   /api/v1/guests                                            { names, email?, phone?, …, allowDuplicate? } → 409 POSSIBLE_DUPLICATE with matches              guests:create
+GET    /api/v1/guests/options                                    VIP levels, preference catalog, properties for scoping
+GET    /api/v1/guests/{id}                                        profile (+ companies with accounts:read, loyalty with loyalty:read, history with audit:read)
+PATCH  /api/v1/guests/{id}                                        { version, …fields, contacts?, addresses?, isRestricted?, status?, reason? }   guests:update (DOB: guests:read_sensitive)
+PUT    /api/v1/guests/{id}/preferences                            { version, preferences[{ preferenceCodeId, propertyId|null, note }] }
+POST   /api/v1/guests/{id}/notes                                  { body, visibility, isAlert, propertyId|null }
+DELETE /api/v1/guests/{id}/notes/{noteId}
+GET    /api/v1/guests/{id}/history?propertyId=&status=&from=&to=&cursor=   reservations / stays at readable properties; money only with billing:read
+POST   /api/v1/guests/{id}/loyalty                                { programId, tierId?, membershipNumber? (external), reason }   loyalty:manage
+GET    /api/v1/accounts?q=&type=&status=&cursor=                  companies / travel agents                                     accounts:read
+POST   /api/v1/accounts                                          { type, code, name, … }                                        accounts:manage
+GET    /api/v1/accounts/{id}                                      detail + contacts (guests:read) + reservations + negotiated rates
+PATCH  /api/v1/accounts/{id}                                      { version, …, status?, isRestricted?, reason? }
+PUT    /api/v1/accounts/{id}/contacts/{guestId}                  { kind, role, isPrimary } (one relationship per pair)
+DELETE /api/v1/accounts/{id}/contacts/{guestId}
+GET    /api/v1/loyalty/programs                                   programs, tiers, member counts                                 loyalty:read
+POST   /api/v1/loyalty/programs                                   { code, name, isExternal, reason }                             loyalty:manage (HIGH)
+PATCH  /api/v1/loyalty/programs/{id}                              { name?, status?, reason }
+POST   /api/v1/loyalty/programs/{id}/tiers                        { code, name, rank, qualifyingNights?, qualifyingStays?, reason }
+GET    /api/v1/loyalty/programs/{id}/members?cursor=
+PATCH  /api/v1/loyalty/tiers/{id}                                 { name?, rank?, thresholds?, status?, reason }
+PATCH  /api/v1/loyalty/memberships/{id}                           { version, tierId?, status?, reason }
+POST   /api/v1/loyalty/memberships/{id}/adjustments               { version, points (whole, signed), description, reason }
+PUT    /api/v1/properties/{id}/reservations/{reservationId}/company    { version, companyId|null, bookerGuestId|null, reason? }   reservations:update
+PUT    /api/v1/properties/{id}/rate-plans/{planId}/accounts            { version, accounts[{ accountProfileId, validFrom, validTo }], reason }   rates:manage (HIGH)
+```
+
+`POST /reservations` (and walk-ins) accept `companyId` and `bookerGuestId`; `GET /availability` accepts `companyId` and then also quotes that company's negotiated plans. Error reasons: `POSSIBLE_DUPLICATE`, `CODE_TAKEN`, `ALREADY_ENROLLED`, `NUMBER_TAKEN`, `STALE_VERSION` (409); `NOT_COMPANY_CONTACT`, `COMPANY_RESTRICTED`, `RATE_REQUIRES_COMPANY`, `PLAN_NOT_NEGOTIATED`, `INVALID_MEMBERSHIP_CHANGE`, `INSUFFICIENT_POINTS`, `MEMBERSHIP_INACTIVE`, `PROGRAM_INACTIVE`, `TIER_INACTIVE`, `GUEST_INACTIVE`, `PLAN_HAS_ACTIVE_CHILDREN` (422). Profiles, companies and memberships of another organization answer 404.
+
 ## 3. Request validation
 
 - Every handler declares Zod schemas for `params`, `query` and `body`. Objects are `.strict()` (unknown fields → `VALIDATION_FAILED`).

@@ -8,7 +8,16 @@ import { serverEnv } from "@/lib/env";
  * cached on globalThis so hot reload does not exhaust database connections.
  */
 function createPrismaClient() {
-  const adapter = new PrismaPg({ connectionString: serverEnv().DATABASE_URL });
+  const adapter = new PrismaPg({
+    connectionString: serverEnv().DATABASE_URL,
+    // Every session runs in UTC (ARCHITECTURE D29). @prisma/adapter-pg sends
+    // Dates as offset-less UTC wall-clock text and re-labels timestamptz read
+    // back as +00:00, so any other session zone (a server default such as
+    // Asia/Karachi) stores instants shifted by the zone offset and makes
+    // app-written values disagree with SQL now(). Property-local dates and
+    // times are computed from the property's own time zone, never the session's.
+    options: "-c TimeZone=UTC",
+  });
   return new PrismaClient({ adapter });
 }
 

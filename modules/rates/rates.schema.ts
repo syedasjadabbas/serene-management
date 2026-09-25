@@ -78,7 +78,24 @@ const ratePlanFields = {
   defaultSourceCodeId: idSchema.nullable().optional(),
   displayOrder: z.number().int().min(0).max(9999).default(0),
   roomTypeIds: z.array(idSchema).min(1, "Select at least one room type").max(50),
+  /** Sold only to companies linked to the plan (negotiated rates, Phase 7). */
+  requiresNegotiation: z.boolean().default(false),
 };
+
+/** Window order, and negotiated plans are never public (Phase 7). */
+function refinePlan(
+  value: Parameters<typeof refineWindows>[0] & { kind: string; requiresNegotiation: boolean },
+  ctx: z.RefinementCtx,
+) {
+  refineWindows(value, ctx);
+  if (value.kind === "NEGOTIATED" && !value.requiresNegotiation) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["requiresNegotiation"],
+      message: "A negotiated plan is sold only to its companies",
+    });
+  }
+}
 
 function refineWindows(
   value: {
@@ -100,7 +117,7 @@ function refineWindows(
 export const createRatePlanSchema = z
   .object({ code, ...ratePlanFields, reason })
   .strict()
-  .superRefine(refineWindows);
+  .superRefine(refinePlan);
 export type CreateRatePlanInput = z.infer<typeof createRatePlanSchema>;
 
 export const updateRatePlanSchema = z
@@ -111,7 +128,7 @@ export const updateRatePlanSchema = z
     reason,
   })
   .strict()
-  .superRefine(refineWindows);
+  .superRefine(refinePlan);
 export type UpdateRatePlanInput = z.infer<typeof updateRatePlanSchema>;
 
 const seasonAmount = z
@@ -156,6 +173,30 @@ export const ratePlanPackagesSchema = z
   .object({ version, packageIds: z.array(idSchema).max(20), reason })
   .strict();
 export type RatePlanPackagesInput = z.infer<typeof ratePlanPackagesSchema>;
+
+/** Companies a negotiated plan is sold to, with optional stay windows (Phase 7). */
+export const ratePlanAccountsSchema = z
+  .object({
+    version,
+    accounts: z
+      .array(
+        z
+          .object({
+            accountProfileId: idSchema,
+            validFrom: isoDateSchema.nullable().default(null),
+            validTo: isoDateSchema.nullable().default(null),
+          })
+          .strict()
+          .refine((a) => !a.validFrom || !a.validTo || a.validFrom <= a.validTo, {
+            message: "The window ends before it starts",
+            path: ["validTo"],
+          }),
+      )
+      .max(100),
+    reason,
+  })
+  .strict();
+export type RatePlanAccountsInput = z.infer<typeof ratePlanAccountsSchema>;
 
 export const MAX_CALENDAR_DAYS = 62;
 

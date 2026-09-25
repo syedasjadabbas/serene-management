@@ -350,6 +350,14 @@ Inventory effect: **OOO removes the room from sellable inventory** (`room_type_i
 
 **As implemented (Phase 2):** the source of truth for `sold` is the reservation nights themselves (`reservation_room_nights` of `RESERVED`/`IN_HOUSE` rooms with a deducting type), and `physical` / `out_of_order` are counted live from `rooms` and `room_service_blocks`. The `room_type_inventory` row for each (room type, night) is the **serialization point**: every inventory-changing command inserts missing rows, locks them `FOR UPDATE` in (room type, date) order, re-counts from the source rows, and after writing its nights rewrites the cached counters of those rows. Availability search reads the source rows directly (always exact); the cached counters serve reports and future channel pushes.
 
+### 5.3a Profiles, companies and loyalty (Phase 7, as implemented)
+
+- **Guest profile**: identity (title, names, preferred name, gender, date of birth — sensitive), primary e-mail / phone plus additional contacts (one primary per type), addresses (one primary), nationality, language, preferred contact channel, VIP level, marketing opt-in, restriction (blocks booking), status ACTIVE / INACTIVE. Updates are version-checked; restriction and status changes need a reason and are audited HIGH; the date of birth is never copied into the audit trail.
+- **Preferences** come from the organization catalog (`PreferenceCode`, grouped: room, bed, smoking, pillow, dietary, access, amenity) and apply to every property or one property. **Notes** are visible to all staff, or restricted (management / internal) to `guests:read_sensitive`; alert notes are shown for recognition.
+- **Company** = `AccountProfile` COMPANY (or TRAVEL_AGENT): code, names, tax id, contact data, address, notes, status and restriction. **Relationships** = `AccountContact` (employee / contact / associate, role, one primary contact).
+- **Reservation ↔ company**: `reservations.company_id` and `booker_guest_id` (a contact of that company). A group pickup inherits the group's company. The company unlocks the plans negotiated for it (`negotiated_rates`).
+- **Loyalty**: program (internal or external) → tiers (rank, qualification thresholds) → one membership per guest and program (number generated for internal programs) → append-only tier/status history and points ledger. Recognition (reservation, stay) shows active memberships to users with `loyalty:read`.
+
 ### 5.4 Billing model
 
 - Transaction code hierarchy: group (REVENUE / PAYMENT / WRAPPER) → subgroup → code; each code has a revenue bucket, tax generates, adjustment code, deposit/cancellation-rule inclusion flags.

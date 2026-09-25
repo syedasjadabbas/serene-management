@@ -513,6 +513,25 @@ export async function buildPropertyInventory(db: Db, spec: InventorySpec): Promi
     displayOrder: 2,
   });
 
+  // Phase 7: a corporate negotiated rate, sold only to companies linked to it
+  // (negotiated_rates); never quoted publicly.
+  await ensurePlan("CORP", {
+    name: "Corporate negotiated (-12%)",
+    categoryId: category.id,
+    kind: "NEGOTIATED",
+    requiresNegotiation: true,
+    currencyCode: spec.currencyCode,
+    roomTransactionCodeId: roomCharge.id,
+    parentRatePlanId: barId,
+    derivationType: "PERCENT",
+    derivationValue: "-12",
+    roundingIncrement: "1",
+    defaultMarketCodeId: marketCodes.COR,
+    defaultSourceCodeId: sourceCodes.DIR,
+    cancellationPolicyId: cancellationPolicies["24H"],
+    displayOrder: 6,
+  });
+
   // Phase 6 commercial configuration: a group rate, a bed & breakfast package
   // and the rate plan that includes it, and the configurable block statuses.
   await ensurePlan("GRP", {
