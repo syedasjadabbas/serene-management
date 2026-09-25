@@ -192,7 +192,7 @@ Implemented in `20260924000100_constraints` unless noted as schema-level:
 | One OPEN cashier shift per user & property; one RUNNING night audit; one live HK task per room/date/type; one OPEN discrepancy per room/date/type | Partial uniques (schema)                                                                         |
 | Role scope ⇔ property id                                                                                                                          | Check                                                                                            |
 
-Custom SQLSTATEs: `SM001` (immutable/append-only violation), `SM002` (closed folio). The HTTP layer maps them to `BUSINESS_RULE_VIOLATION` (mapping completed in Phase 1, see API_CONVENTIONS.md §5).
+Custom SQLSTATEs: `SM001` (immutable/append-only violation), `SM002` (closed folio), `SM003` (rate-plan derivation or block pickup guard, Phase 6). The HTTP layer maps them to `BUSINESS_RULE_VIOLATION` (mapping completed in Phase 1, see API_CONVENTIONS.md §5).
 
 ### Phase 2 notes
 
@@ -221,6 +221,23 @@ Custom SQLSTATEs: `SM001` (immutable/append-only violation), `SM002` (closed fol
 - **Deterministic postings**: system postings (room night, package component) carry `posting_key`; the unique index `(property_id, posting_key)` makes a duplicate posting impossible even if two runs raced.
 - **Money**: every amount is `NUMERIC(19,4)` holding values rounded to the currency's minor units (`currencies.minor_units`); rates of tax rules are percent `NUMERIC(19,4)` (16% = `16.0000`).
 - **Idempotency**: `idempotency_keys (user_id, key)` rows are inserted inside the command transaction (`INSERT … ON CONFLICT DO UPDATE … WHERE expires_at < now()`), so a concurrent duplicate waits on the uncommitted row and then replays the stored response.
+
+### Phase 6 notes
+
+Migration `20260927090000_rates_packages_groups` (hand-written parts, rules Prisma cannot express):
+
+| Rule                                                                                                                                                                 | Mechanism                                                                  |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| Derived rate plans: no cycle, at most 3 derivation steps (including descendants), parent ACTIVE and same currency; a plan with ACTIVE children cannot be deactivated | Trigger `rate_plans_guard` → `serene_rate_plan_guard()` (SQLSTATE `SM003`) |
+| Non-elastic block: `picked_up ≤ allocated − released` per room type and night                                                                                        | Trigger `block_allocations_guard` (SQLSTATE `SM003`)                       |
+| `released ≤ allocated`                                                                                                                                               | Check `block_allocations_released_chk`                                     |
+| Block cutoff on or before its departure                                                                                                                              | Check `blocks_cutoff_chk`                                                  |
+| A group is managed from one property                                                                                                                                 | Column `groups.property_id` (FK, index `groups_property_id_status_idx`)    |
+
+- **Reused tables**: `rate_plans`, `rate_seasons`, `rate_season_amounts`, `rate_plan_room_types`, `rate_plan_packages`, `packages`, `package_components`, `reservation_packages`, `restrictions`, `groups`, `blocks`, `block_statuses`, `block_allocations` were modelled in Phase 0. Phase 6 adds only the migration above; no pricing, package or group table was duplicated.
+- **Blocked inventory is derived**: for every DEDUCT block, `blocked = Σ max(0, allocated − released − picked)` per room type and night, where _picked_ counts the deducting nights of reservation rooms with that `block_id` (RESERVED, IN_HOUSE, CHECKED_OUT). `room_type_inventory.blocked` and `block_allocations.picked_up` are caches rewritten under the inventory lock, like `sold` (D12).
+- **Restrictions** are rows per stay date and scope (house, room type, rate plan, both). A set or clear replaces the rows of that scope and type in one transaction under `pg_advisory_xact_lock(hashtext('restrictions:' || property_id))`.
+- `SM003` is mapped to `BUSINESS_RULE_VIOLATION` (422) by the HTTP layer.
 
 ## 6. Transaction boundaries
 

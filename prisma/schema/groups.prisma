@@ -23,6 +23,9 @@ enum GroupStatus {
 model Group {
   id               String      @id @default(uuid(7)) @db.Uuid
   organizationId   String      @map("organization_id") @db.Uuid
+  /// Property the group is managed from (Phase 6): property-scoped routes
+  /// show a group only at this property. Null for legacy/organization groups.
+  propertyId       String?     @map("property_id") @db.Uuid
   code             String      @db.VarChar(20)
   name             String      @db.VarChar(200)
   accountProfileId String?     @map("account_profile_id") @db.Uuid
@@ -34,6 +37,7 @@ model Group {
   updatedAt        DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  property     Property?       @relation(fields: [propertyId], references: [id], onDelete: Restrict)
   account      AccountProfile? @relation(fields: [accountProfileId], references: [id], onDelete: Restrict)
   contactGuest Guest?          @relation(fields: [contactGuestId], references: [id], onDelete: Restrict)
   salesOwner   User?           @relation(fields: [salesOwnerId], references: [id], onDelete: Restrict)
@@ -41,6 +45,7 @@ model Group {
   reservations Reservation[]
 
   @@unique([organizationId, code])
+  @@index([propertyId, status])
   @@map("groups")
 }
 

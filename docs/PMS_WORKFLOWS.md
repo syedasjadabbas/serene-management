@@ -282,6 +282,7 @@ Arrival date earlier than booked: modify arrival to D (§3, inventory for the ad
 - **Group cancellation**: allowed only with zero pickup (cancel member reservations first) → releases blocked inventory.
 - **Transaction**: one Tx per block change; allocation rows locked in `(room_type_id, stay_date)` order together with inventory rows.
 - **Failure**: rollback; allocation unchanged.
+- **Status (Phase 6)**: implemented — group profile, blocks with allocation grid, status changes, manual release, idempotent pickup (lock block → re-count → validate → create reservation → sync pickup → audit), cancellation and reinstatement through the reservation engine, group cancellation. Deferred: rooming-list import, group master folio and routing, automatic cutoff/wash (night audit), per-block rate overrides.
 
 ## 19. Folio routing
 

@@ -7,8 +7,8 @@ import { TextField } from "@/components/ui/TextField";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useProperty } from "@/hooks/useProperty";
 import { toClientApiError } from "@/lib/api/errors";
-import { useDebouncedValue } from "../hooks/useDebouncedValue";
-import { useSearchGuestsQuery } from "../lib/guests.api";
+import { useDebouncedValue } from "@/hooks/useDebouncedValue";
+import { useSearchGuestsQuery } from "@/lib/api/endpoints/guests.api";
 import { useBookingDraft } from "../store/bookingDraft.store";
 import { NewGuestForm } from "./NewGuestForm";
 

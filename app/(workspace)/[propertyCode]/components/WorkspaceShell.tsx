@@ -22,7 +22,7 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
         <span aria-hidden="true" className="h-5 w-px bg-border-subtle" />
         <PropertySwitcher />
         <WorkspaceNav />
-        <div className="ms-auto flex min-w-0 items-center gap-3">
+        <div className="ms-auto flex min-w-0 items-center gap-3 lg:shrink-0">
           <BusinessDateBadge />
           <UserMenu />
         </div>

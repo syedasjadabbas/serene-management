@@ -42,6 +42,8 @@ export interface ReservationAllowedActions {
   checkIn: boolean;
   checkOut: boolean;
   moveRoom: boolean;
+  /** Book or remove packages on future nights (Phase 6). */
+  managePackages: boolean;
 }
 
 export interface ReservationRoomDetail {
@@ -78,6 +80,18 @@ export interface ReservationRoomDetail {
   noShowAt: string | null;
   /** The operational stay once checked in. */
   stay: { id: string; status: string; checkedInAt: string; checkedOutAt: string | null } | null;
+  /** Group block the room was picked up from (Phase 6). */
+  group: { id: string; code: string; name: string; blockId: string; blockCode: string } | null;
+  /** Packages booked on the room in addition to its rate plan's packages. */
+  packages: {
+    id: string;
+    code: string;
+    name: string;
+    postingType: string;
+    quantity: number;
+    startDate: string;
+    endDate: string;
+  }[];
   allowedActions: ReservationAllowedActions;
 }
 

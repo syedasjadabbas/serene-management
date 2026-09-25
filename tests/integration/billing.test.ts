@@ -485,6 +485,31 @@ describe("room charges", () => {
     expect(again.body.error.details.reason).toBe("NOTHING_TO_POST");
   });
 
+  it("posts a package booked on the reservation on top of the room charge (Phase 6)", async () => {
+    // BB is INCLUDED_IN_RATE for rate plans that include it; booked on a BAR
+    // stay it is an add-on and must not be carved out of the room line.
+    const guest = await withPastNights(1);
+    const night = addDays(D, -1);
+    await prisma.reservationPackage.create({
+      data: {
+        propertyId: A,
+        reservationRoomId: guest.rrId,
+        packageId: invA.packages.BB!,
+        quantity: 1,
+        startDate: fromDateOnly(night),
+        endDate: fromDateOnly(night),
+      },
+    });
+    const posted = await roomCharges(agent, guest.rrId);
+    expect(posted.status).toBe(201);
+    const { items } = await expectLedgerConsistent((await window1(guest.rrId)).id);
+    const charges = items.filter((i) => i.kind === "CHARGE");
+    const room = charges.find((c) => c.postingKey?.startsWith("ROOM:"));
+    const breakfast = charges.find((c) => c.transactionCodeId === invA.chargeCodes["2030"]);
+    expect(cents(room!.amount.toFixed(4))).toBe(guest.rate);
+    expect(breakfast!.amount.toFixed(2)).toBe("1500.00");
+  });
+
   it("re-posts a reversed night with the next generation", async () => {
     const guest = await withPastNights(1);
     expect((await roomCharges(agent, guest.rrId)).status).toBe(201);

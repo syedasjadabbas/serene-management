@@ -85,6 +85,20 @@ The product owner re-sequenced Phase 2 to **Reservations + Availability**. It de
 
 Moved to later phases: configuration screens for rooms, rate plans and restrictions; full guest profiles (documents, preferences, merge); room holds and auto-assign; deposits and cancellation penalties (billing); negotiated, member and day-use rates; block pickup (groups); turnaway capture.
 
+## Phase 6 (as executed) — Rates, packages and groups (pending commit)
+
+Delivered on the existing schema (rate plans, seasons, packages, restrictions, groups, blocks and allocations were modelled in Phase 0; no permission was added; one migration `20260927090000_rates_packages_groups`):
+
+- **Rates**: rate plan administration (base and derived plans with cycle/depth/parent/currency guards in the service and the database), seasons with priority and weekday conflicts rejected, included packages, pricing calendar computed by the booking pricing engine; group-only rates.
+- **Restrictions**: administration by range, weekdays and scope; one evaluator for search, quote and booking (fixes quotes ignoring house/room-type rows).
+- **Packages**: administration with components; packages on a reservation for future nights; stay charge estimate from the billing line builder (the Phase 5 carve-out and postings are reused).
+- **Groups**: group profile, blocks with allocation grid (committed = DEDUCT, tentative = NON_DEDUCT, inquiry), derived blocked inventory, status transitions, manual release, idempotent pickup under lock, pickup cancellation / reinstatement through the reservation engine, group cancellation.
+- **UI**: Rates workspace (plans, pricing calendar, restrictions, packages), rate plan page, Groups workspace and group page with night grid and dialogs, packages and estimate on the reservation page.
+
+How the pieces connect: **Reservation → Rate plan** (chosen by the guest, or taken from the block for a pickup) **→ Pricing** (`quotePlan`: seasons, derivation, occupancy, restrictions; locked FOR SHARE) **→ Package** (included by the plan or added to the room; carved out of the room line) **→ Group block** (allocation grid; DEDUCT holds inventory) **→ Pickup** (reservation with `block_id`; moves a room from blocked to sold) **→ Stay** (check-in, Phase 3) **→ Folio** (nightly room + package lines posted by billing, Phase 5).
+
+Deferred: rooming-list import, group master folio and routing, automatic cutoff/wash (night audit), yield and revenue management, OTA / channel distribution, negotiated company rates, allowance packages, per-block rate overrides, bulk rate upload.
+
 ## Phase 5 (as executed) — Folios, billing, payments and settlement (pending commit)
 
 Delivered on the existing schema (folios/windows, the append-only folio ledger, transaction codes, tax rules, payment methods, payments, refunds, idempotency keys and the `billing:*` / `payments:*` permissions were modelled in Phase 0; no permission was added):

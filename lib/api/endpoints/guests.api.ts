@@ -1,9 +1,9 @@
-import { baseApi } from "@/lib/api/baseApi";
+import { baseApi } from "../baseApi";
 import type { CreateGuestInput } from "@/modules/guests/guests.schema";
 import type { GuestSummaryView } from "@/modules/guests/guests.types";
 import type { ApiSuccess } from "@/types/api";
 
-/** Guest lookup for the booking workflow (organization-wide profiles). */
+/** Guest lookup (organization-wide profiles): booking workflow and group pickup. */
 export const bookingGuestsApi = baseApi.injectEndpoints({
   endpoints: (build) => ({
     searchGuests: build.query<GuestSummaryView[], string>({

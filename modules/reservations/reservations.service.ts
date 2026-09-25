@@ -9,18 +9,17 @@ import { hasPermission } from "@/lib/permissions/evaluate";
 import { decodeCursor, encodeCursor } from "@/lib/utils/cursor";
 import { formatMoney, parseMoney, sum } from "@/lib/utils/money";
 import { recordAudit } from "@/modules/audit/audit.service";
-import {
-  type RestrictionViolation,
-  restrictionViolations,
-} from "@/modules/availability/availability.policy";
+import type { RestrictionViolation } from "@/modules/availability/availability.policy";
 import {
   type InventoryDemand,
   loadRestrictions,
   lockInventoryForRelease,
+  reserveBlockInventory,
   reserveInventory,
   syncInventoryCounters,
 } from "@/modules/availability/availability.service";
 import {
+  addDays,
   fromDateOnly,
   localMidnightUtc,
   toDateOnly,
@@ -33,8 +32,11 @@ import {
   type StayRequest,
   currencyMinorUnits,
   loadRates,
+  lockRatePlanForPricing,
   priceForBooking,
 } from "@/modules/rates/rates.service";
+import { requireSellablePackage } from "@/modules/rates/packages.service";
+import type { ReservationPackageInput } from "@/modules/rates/rates.schema";
 import type { CursorPageMeta } from "@/types/api";
 import {
   type ReservationAction,
@@ -61,6 +63,9 @@ import {
   findChannel,
   findMarketCode,
   findNightsForPosting,
+  findReservationPackage,
+  deleteReservationPackage,
+  insertReservationPackage,
   findRatePlanDefaults,
   findReasonCode,
   findReservationDetail,
@@ -249,6 +254,7 @@ async function priceStay(
     roomTypeId: string;
     ratePlanId: string;
   },
+  options: { allowGroupRates?: boolean } = {},
 ) {
   const request: StayRequest = {
     propertyId: ctx.propertyId,
@@ -259,6 +265,9 @@ async function priceStay(
     adults: stay.adults,
     children: stay.children,
   };
+  // The plan and its parents are read under FOR SHARE, so a concurrent rate
+  // change either commits before this price is taken or waits for it.
+  await lockRatePlanForPricing(tx, ctx.propertyId, stay.ratePlanId);
   const rates = await loadRates(tx, request, ctx.currencyCode);
   const restrictions = await loadRestrictions(tx, ctx.propertyId, stay.arrival, stay.departure);
   const { quote, nightly } = priceForBooking(
@@ -267,19 +276,11 @@ async function priceStay(
     stay.roomTypeId,
     stay.ratePlanId,
     restrictions,
+    options,
   );
-  const violations: RestrictionViolation[] = [
-    ...restrictionViolations({
-      rows: restrictions.filter((r) => r.ratePlanId === null),
-      roomTypeId: stay.roomTypeId,
-      ratePlanId: null,
-      arrival: stay.arrival,
-      departure: stay.departure,
-      nights: request.nights,
-      businessDate,
-    }),
-    ...quote.restrictions,
-  ];
+  // The quote already evaluates every applicable restriction (house, room
+  // type, rate plan) with the same evaluator the availability search uses.
+  const violations: RestrictionViolation[] = quote.restrictions;
   return { nightly, violations, total: quote.total };
 }
 
@@ -335,7 +336,20 @@ export async function createReservationInTx(
   ctx: PropertyContext,
   businessDate: string,
   input: CreateReservationInput,
-  options: { walkIn?: boolean } = {},
+  options: {
+    walkIn?: boolean;
+    /**
+     * Group-block pickup (validated by modules/groups, which holds the block
+     * FOR SHARE): inventory comes from the block's allocation and the
+     * reservation is linked to the group and block.
+     */
+    block?: {
+      id: string;
+      groupId: string;
+      cancellationPolicyId: string | null;
+      depositPolicyId: string | null;
+    };
+  } = {},
 ): Promise<{ reservationId: string; reservationRoomIds: string[] }> {
   if (input.override) requirePermission(ctx, "reservations:override_availability");
   if (input.waitlist) requirePermission(ctx, "reservations:waitlist");
@@ -379,7 +393,9 @@ export async function createReservationInTx(
     roomTypeId: roomType.id,
     ratePlanId: ratePlan.id,
   };
-  const priced = await priceStay(tx, ctx, businessDate, stay);
+  const priced = await priceStay(tx, ctx, businessDate, stay, {
+    allowGroupRates: options.block !== undefined,
+  });
   assertNoRestrictions(priced.violations, input.override);
 
   const status: ReservationStatus = input.waitlist ? "WAITLISTED" : "RESERVED";
@@ -388,8 +404,13 @@ export async function createReservationInTx(
     ...demandOf(roomType.id, input.arrival, input.departure),
     rooms: input.rooms,
   };
-  if (deducts)
+  if (deducts && options.block) {
+    await reserveBlockInventory(tx, ctx.propertyId, options.block.id, demand, {
+      allowOverbooking: input.override,
+    });
+  } else if (deducts) {
     await reserveInventory(tx, ctx.propertyId, [demand], { allowOverbooking: input.override });
+  }
 
   const confirmationNumber = await allocateNumber(tx, ctx.propertyId, "confirmation");
   // The specific room is locked and checked after inventory and sequence (lock order).
@@ -413,6 +434,8 @@ export async function createReservationInTx(
     marketCodeId,
     externalReference: input.externalReference ?? null,
     bookedById: ctx.userId,
+    groupId: options.block?.groupId ?? null,
+    blockId: options.block?.id ?? null,
   });
 
   const roomIds: string[] = [];
@@ -437,8 +460,9 @@ export async function createReservationInTx(
       reservationTypeId: reservationType.id,
       marketCodeId,
       sourceCodeId,
-      cancellationPolicyId: ratePlan.cancellationPolicyId,
-      depositPolicyId: ratePlan.depositPolicyId,
+      cancellationPolicyId: options.block?.cancellationPolicyId ?? ratePlan.cancellationPolicyId,
+      depositPolicyId: options.block?.depositPolicyId ?? ratePlan.depositPolicyId,
+      blockId: options.block?.id ?? null,
       guests: { create: [{ guestId: guest.id, isPrimary: true, sequence: 1 }] },
     });
     roomIds.push(created.id);
@@ -500,6 +524,7 @@ export async function createReservationInTx(
         override: input.override,
         restrictionsOverridden: input.override ? priced.violations : [],
         ...(options.walkIn ? { walkIn: true } : {}),
+        ...(options.block ? { blockId: options.block.id, groupId: options.block.groupId } : {}),
       },
       reason: input.reason ?? null,
       permission: input.override ? "reservations:override_availability" : "reservations:create",
@@ -566,6 +591,14 @@ export async function updateReservationRoom(
       next.arrival !== before.arrival ||
       next.departure !== before.departure ||
       next.roomTypeId !== current.roomTypeId;
+    if (current.blockId && (datesOrTypeChanged || next.ratePlanId !== current.ratePlanId)) {
+      // A pickup's dates, room type and rate belong to the block contract.
+      throw new AppError(
+        "BUSINESS_RULE_VIOLATION",
+        "This reservation is picked up from a group block: change its dates, room type or rate through the group",
+        { reason: "BLOCK_PICKUP_LOCKED" },
+      );
+    }
 
     let total: string | null = null;
     const consumes = consumesInventory(before.status, before.deductsInventory);
@@ -573,7 +606,9 @@ export async function updateReservationRoom(
     const newDemand = demandOf(next.roomTypeId, next.arrival, next.departure);
 
     if (stayChanged) {
-      const priced = await priceStay(tx, ctx, businessDate, next);
+      const priced = await priceStay(tx, ctx, businessDate, next, {
+        allowGroupRates: current.blockId !== null,
+      });
       assertNoRestrictions(priced.violations, input.override);
       total = priced.total;
       if (consumes && datesOrTypeChanged) {
@@ -856,7 +891,12 @@ export async function reinstateReservation(
     assertTransition("reinstate", current, businessDate);
     const before = stateOf(current);
     const demand = demandOf(current.roomTypeId, before.arrival, before.departure);
-    if (before.deductsInventory) {
+    if (before.deductsInventory && current.blockId) {
+      // A reinstated pickup takes its room back from the block.
+      await reserveBlockInventory(tx, ctx.propertyId, current.blockId, demand, {
+        allowOverbooking: input.override,
+      });
+    } else if (before.deductsInventory) {
       await reserveInventory(tx, ctx.propertyId, [demand], { allowOverbooking: input.override });
     }
     await saveVersioned(tx, current, {
@@ -1114,6 +1154,119 @@ export async function markCheckedOut(
   });
   if (early) await syncInventoryCounters(tx, ctx.propertyId, [unused]);
   return { departure: finalDeparture, releasedNights };
+}
+
+// --- Packages (Phase 6) ------------------------------------------------------------------
+
+/**
+ * Books a package (sold separately) on a reservation room for future stay
+ * nights. Package lines are priced and posted by Phase 5 billing; only
+ * nights from the business date on may be booked, so a nightly posting
+ * already made is never followed by a package line for the same night.
+ */
+export async function addReservationPackage(
+  ctx: PropertyContext,
+  reservationRoomId: string,
+  input: ReservationPackageInput,
+): Promise<ReservationDetail> {
+  const reservationId = await runInTransaction(async (tx) => {
+    const businessDate = await requireOpenBusinessDate(tx, ctx.propertyId);
+    const current = await lockReservationRoomById(tx, ctx, reservationRoomId);
+    if (current.status !== "RESERVED" && current.status !== "IN_HOUSE") {
+      throw new AppError(
+        "BUSINESS_RULE_VIOLATION",
+        "Packages can be added to active reservations only",
+        {
+          reason: "RESERVATION_NOT_ACTIVE",
+        },
+      );
+    }
+    const { arrival, departure } = stateOf(current);
+    const firstNight = arrival > businessDate ? arrival : businessDate;
+    const lastNight = addDays(departure, -1);
+    if (
+      input.startDate < firstNight ||
+      input.endDate > lastNight ||
+      input.endDate < input.startDate
+    ) {
+      throw new AppError(
+        "VALIDATION_FAILED",
+        `Choose nights between ${firstNight} and ${lastNight}`,
+        {
+          fields: { startDate: [`From ${firstNight}`], endDate: [`Until ${lastNight}`] },
+        },
+      );
+    }
+    const pkg = await requireSellablePackage(tx, ctx.propertyId, input.packageId);
+    const row = await insertReservationPackage(tx, {
+      propertyId: ctx.propertyId,
+      reservationRoomId: current.id,
+      packageId: pkg.id,
+      quantity: input.quantity,
+      startDate: fromDateOnly(input.startDate),
+      endDate: fromDateOnly(input.endDate),
+    });
+    await recordAudit(
+      tx,
+      { ...auditActor(ctx), businessDate },
+      {
+        action: "reservation.package_add",
+        resourceType: "ReservationRoom",
+        resourceId: current.id,
+        after: {
+          reservationPackageId: row.id,
+          package: pkg.code,
+          quantity: input.quantity,
+          startDate: input.startDate,
+          endDate: input.endDate,
+        },
+        permission: "reservations:update",
+      },
+    );
+    return current.reservationId;
+  });
+  return getReservation(ctx, reservationId);
+}
+
+/** Removes a booked package that has not reached a postable night yet. */
+export async function removeReservationPackage(
+  ctx: PropertyContext,
+  reservationRoomId: string,
+  reservationPackageId: string,
+): Promise<ReservationDetail> {
+  const reservationId = await runInTransaction(async (tx) => {
+    const businessDate = await requireOpenBusinessDate(tx, ctx.propertyId);
+    const current = await lockReservationRoomById(tx, ctx, reservationRoomId);
+    const row = await findReservationPackage(tx, current.id, reservationPackageId);
+    if (!row) throw notFound("Package");
+    if (toDateOnly(row.startDate) < businessDate) {
+      throw new AppError(
+        "BUSINESS_RULE_VIOLATION",
+        "This package has already started; nights that may have been posted cannot be removed",
+        { reason: "PACKAGE_IN_USE" },
+      );
+    }
+    await deleteReservationPackage(tx, row.id);
+    await recordAudit(
+      tx,
+      { ...auditActor(ctx), businessDate },
+      {
+        action: "reservation.package_remove",
+        resourceType: "ReservationRoom",
+        resourceId: current.id,
+        before: {
+          reservationPackageId: row.id,
+          package: row.package.code,
+          quantity: row.quantity,
+          startDate: toDateOnly(row.startDate),
+          endDate: toDateOnly(row.endDate),
+        },
+        permission: "reservations:update",
+      },
+    );
+    return current.reservationId;
+  });
+  return getReservation(ctx, reservationId);
 }
 
 // --- Billing hooks ----------------------------------------------------------------------
@@ -1466,6 +1619,24 @@ export async function getReservation(
             checkedOutAt: room.stay.checkedOutAt?.toISOString() ?? null,
           }
         : null,
+      group: room.block
+        ? {
+            id: room.block.group.id,
+            code: room.block.group.code,
+            name: room.block.group.name,
+            blockId: room.block.id,
+            blockCode: room.block.code,
+          }
+        : null,
+      packages: room.packages.map((p) => ({
+        id: p.id,
+        code: p.package.code,
+        name: p.package.name,
+        postingType: p.package.postingType,
+        quantity: p.quantity,
+        startDate: toDateOnly(p.startDate),
+        endDate: toDateOnly(p.endDate),
+      })),
       allowedActions: {
         modify: allowed("modify", "reservations:update"),
         confirm: allowed("confirm", "reservations:update"),
@@ -1476,6 +1647,11 @@ export async function getReservation(
         checkIn: allowed("check_in", "frontdesk:checkin"),
         checkOut: allowed("check_out", "frontdesk:checkout"),
         moveRoom: allowed("room_move", "rooms:assign"),
+        managePackages:
+          businessDate !== null &&
+          can("reservations:update") &&
+          (room.status === "RESERVED" || room.status === "IN_HOUSE") &&
+          departure > businessDate,
       },
     };
   });

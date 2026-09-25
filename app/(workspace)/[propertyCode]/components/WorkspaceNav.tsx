@@ -16,6 +16,8 @@ const ITEMS: { segment: string; label: string; permission: Permission | null }[]
   { segment: "maintenance", label: "Maintenance", permission: "maintenance:read" },
   { segment: "availability", label: "Availability", permission: "availability:read" },
   { segment: "reservations", label: "Reservations", permission: "reservations:read" },
+  { segment: "groups", label: "Groups", permission: "groups:read" },
+  { segment: "rates", label: "Rates", permission: "rates:read" },
 ];
 
 /** Primary workspace navigation; items the user cannot use are not shown (the server still enforces). */
@@ -28,7 +30,7 @@ export function WorkspaceNav() {
   return (
     <nav
       aria-label="Workspace"
-      className="order-last -mx-1 w-full overflow-x-auto lg:order-none lg:mx-0 lg:w-auto"
+      className="order-last -mx-1 w-full overflow-x-auto lg:order-none lg:mx-0 lg:w-auto lg:min-w-0"
     >
       <ul className="flex items-center gap-0.5">
         {ITEMS.filter((item) => !item.permission || can(item.permission)).map((item) => {

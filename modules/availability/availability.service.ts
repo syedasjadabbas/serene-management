@@ -14,8 +14,13 @@ import {
   stayAvailability,
 } from "./availability.policy";
 import {
+  countBlockedNights,
   countCommittedNights,
   countOutOfOrder,
+  findBlockNights,
+  lockAllocationCells,
+  lockBlockForShare,
+  syncAllocationPickup,
   countPhysicalRooms,
   findInventoryControls,
   findRestrictions,
@@ -58,6 +63,7 @@ export async function loadNightInventory(
   arrival: string,
   departure: string,
   excludeReservationRoomIds: string[] = [],
+  excludeBlockId: string | null = null,
 ): Promise<Map<string, NightInventory[]>> {
   // Sequential on purpose: this also runs inside interactive transactions,
   // which execute one statement at a time on a single connection.
@@ -71,8 +77,13 @@ export async function loadNightInventory(
     departure,
     excludeReservationRoomIds,
   );
+  const blocked = await countBlockedNights(db, propertyId, roomTypeIds, arrival, departure, {
+    excludeReservationRoomIds,
+    excludeBlockId,
+  });
   const controls = await findInventoryControls(db, propertyId, roomTypeIds, arrival, departure);
   const key = (roomTypeId: string, date: Date) => `${roomTypeId}|${toDateOnly(date)}`;
+  const blockedMap = new Map(blocked.map((r) => [key(r.room_type_id, r.stay_date), r.blocked]));
   const oooMap = new Map(outOfOrder.map((r) => [key(r.room_type_id, r.stay_date), r.rooms]));
   const committedMap = new Map(committed.map((r) => [key(r.room_type_id, r.stay_date), r]));
   const controlMap = new Map(controls.map((r) => [key(r.room_type_id, r.stay_date), r]));
@@ -90,7 +101,8 @@ export async function loadNightInventory(
           outOfOrder: oooMap.get(k) ?? 0,
           sold: committedMap.get(k)?.sold ?? 0,
           tentative: committedMap.get(k)?.tentative ?? 0,
-          blocked: control?.blocked ?? 0,
+          // Held by deducting group blocks, counted from the source rows (Phase 6).
+          blocked: blockedMap.get(k) ?? 0,
           overbookLimit: control?.overbook_limit ?? 0,
           sellLimit: control?.sell_limit ?? null,
         };
@@ -238,6 +250,7 @@ export async function reserveInventory(
 ): Promise<void> {
   const cells = demandCells(demands);
   await lockInventoryCells(tx, propertyId, cells);
+  await lockAllocationCells(tx, propertyId, cells);
   for (const demand of demands) {
     const inventory = await loadNightInventory(
       tx,
@@ -273,7 +286,9 @@ export async function lockInventoryForRelease(
   propertyId: string,
   demands: readonly InventoryDemand[],
 ) {
-  await lockInventoryCells(tx, propertyId, demandCells(demands));
+  const cells = demandCells(demands);
+  await lockInventoryCells(tx, propertyId, cells);
+  await lockAllocationCells(tx, propertyId, cells);
 }
 
 /**
@@ -301,6 +316,7 @@ export async function syncInventoryCounters(
     physical: number;
     outOfOrder: number;
     sold: number;
+    blocked: number;
   }[] = [];
   for (const [roomTypeId, range] of byType) {
     const inventory = await loadNightInventory(tx, propertyId, [roomTypeId], range.from, range.to);
@@ -312,10 +328,90 @@ export async function syncInventoryCounters(
         physical: night.physical,
         outOfOrder: night.outOfOrder,
         sold: night.sold,
+        blocked: night.blocked,
       });
     }
   }
   await writeInventoryCounters(tx, propertyId, rows);
+  // Block pickup caches of the same cells (rows locked with the cells).
+  await syncAllocationPickup(tx, propertyId, demandCells(demands));
+}
+
+/**
+ * Inventory guard for a group-block pickup (docs/PMS_WORKFLOWS.md §18). Takes
+ * the block FOR SHARE (serializing with block status changes and releases),
+ * locks the inventory cells and then the allocation rows of the stay, and
+ * re-counts pickup from the source rows. Each night needs the rooms from
+ * what the block still holds; an elastic block may take the excess from
+ * house availability. Within the allocation, a pickup moves a room from
+ * `blocked` to `sold`, so house availability does not change.
+ */
+export async function reserveBlockInventory(
+  tx: Tx,
+  propertyId: string,
+  blockId: string,
+  demand: InventoryDemand,
+  options: { allowOverbooking: boolean; excludeReservationRoomIds?: string[] },
+): Promise<void> {
+  const block = await lockBlockForShare(tx, propertyId, blockId);
+  if (!block) throw new AppError("NOT_FOUND", "Block not found");
+  if (block.status_type !== "DEDUCT") {
+    throw new AppError(
+      "BUSINESS_RULE_VIOLATION",
+      "Rooms can be picked up only from a definite block",
+      {
+        reason: "BLOCK_NOT_DEFINITE",
+      },
+    );
+  }
+  const cells = demandCells([demand]);
+  await lockInventoryCells(tx, propertyId, cells);
+  await lockAllocationCells(tx, propertyId, cells);
+
+  const excluded = options.excludeReservationRoomIds ?? [];
+  const held = await findBlockNights(
+    tx,
+    blockId,
+    demand.roomTypeId,
+    demand.arrival,
+    demand.departure,
+    excluded,
+  );
+  const heldByDate = new Map(held.map((row) => [toDateOnly(row.stay_date), row]));
+  const house =
+    (
+      await loadNightInventory(
+        tx,
+        propertyId,
+        [demand.roomTypeId],
+        demand.arrival,
+        demand.departure,
+        excluded,
+      )
+    ).get(demand.roomTypeId) ?? [];
+  const short = [];
+  for (const night of house) {
+    const row = heldByDate.get(night.date);
+    if (!row) {
+      throw new AppError(
+        "BUSINESS_RULE_VIOLATION",
+        `The block holds no rooms of this type on ${night.date}`,
+        { reason: "NOT_IN_BLOCK", date: night.date },
+      );
+    }
+    const remaining = Math.max(0, row.allocated - row.released - row.picked);
+    const fromHouse = block.is_elastic ? Math.max(0, availableForNight(night)) : 0;
+    if (remaining + fromHouse < demand.rooms) {
+      short.push({ date: night.date, remaining, available: remaining + fromHouse });
+    }
+  }
+  if (short.length > 0 && !options.allowOverbooking) {
+    throw new AppError(
+      "BUSINESS_RULE_VIOLATION",
+      "The block does not hold enough rooms for the selected dates",
+      { reason: "BLOCK_EXHAUSTED", requested: demand.rooms, nights: short },
+    );
+  }
 }
 
 function demandCells(demands: readonly InventoryDemand[]) {

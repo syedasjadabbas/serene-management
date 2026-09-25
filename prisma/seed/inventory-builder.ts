@@ -39,6 +39,8 @@ export interface InventorySpec {
   roomsPerFloor?: number;
   /** Tax / service-charge rules (Phase 5); none when omitted. */
   taxes?: TaxSpec[];
+  /** Breakfast price per person for the demo bed & breakfast package (Phase 6). */
+  breakfastPrice?: string;
 }
 
 export interface TaxSpec {
@@ -99,6 +101,9 @@ export interface BuiltInventory {
   chargeCodes: Record<string, string>;
   paymentMethods: Record<string, string>;
   taxRules: Record<string, string>;
+  /** Block statuses by code: INQ, TENT, DEF, LOST (Phase 6). */
+  blockStatuses: Record<string, string>;
+  packages: Record<string, string>;
 }
 
 const date = (value: string) => new Date(`${value}T00:00:00.000Z`);
@@ -127,6 +132,7 @@ export async function buildPropertyInventory(db: Db, spec: InventorySpec): Promi
     ["COR", "Corporate"],
     ["LEI", "Leisure package"],
     ["OTA", "Online travel agency"],
+    ["GRP", "Groups"],
   ] as const) {
     const row = await upsertByCode(
       await db.marketCode.findFirst({ where: { propertyId, code }, select: { id: true } }),
@@ -507,6 +513,87 @@ export async function buildPropertyInventory(db: Db, spec: InventorySpec): Promi
     displayOrder: 2,
   });
 
+  // Phase 6 commercial configuration: a group rate, a bed & breakfast package
+  // and the rate plan that includes it, and the configurable block statuses.
+  await ensurePlan("GRP", {
+    name: "Group rate (-15%)",
+    categoryId: category.id,
+    kind: "GROUP",
+    currencyCode: spec.currencyCode,
+    roomTransactionCodeId: roomCharge.id,
+    parentRatePlanId: barId,
+    derivationType: "PERCENT",
+    derivationValue: "-15",
+    roundingIncrement: "1",
+    defaultMarketCodeId: marketCodes.GRP,
+    defaultSourceCodeId: sourceCodes.DIR,
+    cancellationPolicyId: cancellationPolicies["24H"],
+    displayOrder: 5,
+  });
+  const packages: Record<string, string> = {};
+  const breakfast = await upsertByCode(
+    await db.package.findFirst({ where: { propertyId, code: "BB" }, select: { id: true } }),
+    () =>
+      db.package.create({
+        data: {
+          propertyId,
+          code: "BB",
+          name: "Bed & breakfast",
+          description: "Breakfast for every guest, every night",
+          postingType: "INCLUDED_IN_RATE",
+          sellSeparately: true,
+          components: {
+            create: {
+              name: "Breakfast",
+              transactionCodeId: chargeCodes["2030"]!,
+              calculation: "PER_PERSON",
+              postingRhythm: "EVERY_NIGHT",
+              unitPrice: spec.breakfastPrice ?? "1500",
+            },
+          },
+        },
+        select: { id: true },
+      }),
+  );
+  packages.BB = breakfast.id;
+  const bbkId = await ensurePlan("BBK", {
+    name: "Bed & breakfast",
+    categoryId: category.id,
+    kind: "PACKAGE",
+    currencyCode: spec.currencyCode,
+    roomTransactionCodeId: roomCharge.id,
+    parentRatePlanId: barId,
+    derivationType: "PERCENT",
+    derivationValue: "12",
+    roundingIncrement: "1",
+    defaultMarketCodeId: marketCodes.LEI,
+    defaultSourceCodeId: sourceCodes.DIR,
+    cancellationPolicyId: cancellationPolicies["24H"],
+    displayOrder: 3,
+  });
+  await db.ratePlanPackage.upsert({
+    where: { ratePlanId_packageId: { ratePlanId: bbkId, packageId: breakfast.id } },
+    create: { propertyId, ratePlanId: bbkId, packageId: breakfast.id },
+    update: {},
+  });
+  const blockStatuses: Record<string, string> = {};
+  for (const [code, name, type, allowsPickup, isDefault, sortOrder] of [
+    ["INQ", "Inquiry", "INQUIRY", false, false, 1],
+    ["TENT", "Tentative", "NON_DEDUCT", false, false, 2],
+    ["DEF", "Definite", "DEDUCT", true, true, 3],
+    ["LOST", "Lost / cancelled", "CANCEL", false, false, 4],
+  ] as const) {
+    const row = await upsertByCode(
+      await db.blockStatus.findFirst({ where: { propertyId, code }, select: { id: true } }),
+      () =>
+        db.blockStatus.create({
+          data: { propertyId, code, name, type, allowsPickup, isDefault, sortOrder },
+          select: { id: true },
+        }),
+    );
+    blockStatuses[code] = row.id;
+  }
+
   if ((await db.rateSeason.count({ where: { ratePlanId: barId } })) === 0) {
     for (const [name, daysOfWeek, priority, weekend] of [
       ["Base", 127, 0, false],
@@ -600,5 +687,7 @@ export async function buildPropertyInventory(db: Db, spec: InventorySpec): Promi
     chargeCodes,
     paymentMethods,
     taxRules,
+    blockStatuses,
+    packages,
   };
 }

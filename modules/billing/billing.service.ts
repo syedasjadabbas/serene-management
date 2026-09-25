@@ -89,6 +89,7 @@ import type {
   LedgerPage,
   PostingResult,
   RoomChargesResult,
+  StayChargeEstimate,
 } from "./billing.types";
 
 /**
@@ -550,8 +551,14 @@ function packageComponentsFor(
     pkg: PackageRows[number],
     packageQuantity: number,
     override: Prisma.Decimal | null,
+    addOn: boolean,
   ) => {
     if (pkg.status !== "ACTIVE") return;
+    // A package booked on the reservation is sold on top of the rate: it was
+    // never part of it, so an "included" package posts as its own line
+    // instead of being carved out of the room charge.
+    const postingType =
+      addOn && pkg.postingType === "INCLUDED_IN_RATE" ? "SEPARATE_LINE" : pkg.postingType;
     for (const component of pkg.components) {
       const seasonal = component.prices.find(
         (price) =>
@@ -567,7 +574,7 @@ function packageComponentsFor(
         componentId: component.id,
         name: component.name,
         transactionCodeId: component.transactionCodeId,
-        postingType: pkg.postingType,
+        postingType,
         calculation: component.calculation,
         rhythm: component.postingRhythm,
         daysOfWeek: component.daysOfWeek,
@@ -577,12 +584,12 @@ function packageComponentsFor(
       });
     }
   };
-  for (const pkg of ratePlanPackages) add(pkg, 1, null);
+  for (const pkg of ratePlanPackages) add(pkg, 1, null, false);
   for (const booked of reservationPackages) {
     const from = toDateOnly(booked.startDate);
     const to = toDateOnly(booked.endDate);
     if (night.stayDate >= from && night.stayDate <= to) {
-      add(booked.package, booked.quantity, booked.unitPriceOverride);
+      add(booked.package, booked.quantity, booked.unitPriceOverride, true);
     }
   }
   return components;
@@ -617,6 +624,215 @@ type ReservationPackageRows = {
   unitPriceOverride: Prisma.Decimal | null;
   package: PackageRows[number];
 }[];
+
+/** One line a stay night generates: a package component or the room line. */
+interface NightLine {
+  base: string;
+  key: (generation: number) => string;
+  codeId: string;
+  quantity: number;
+  unit: MoneyUnits;
+  amount: MoneyUnits;
+  inclusive: boolean;
+  source: "PACKAGE" | "SYSTEM";
+  description: string;
+  componentId: string | null;
+}
+
+/**
+ * The room and package lines of each night, before taxes: the single
+ * definition of what a stay night charges, used by room-charge posting and
+ * by the reservation's charge estimate. Included components are carved out
+ * of the nightly rate, combined ones are added to it, separate ones post on
+ * their own; each line carries its deterministic posting key base.
+ */
+async function planNightLines(
+  tx: Tx,
+  propertyId: string,
+  reservationRoomId: string,
+  nights: Awaited<ReturnType<typeof nightsForRoomCharges>>,
+  stay: {
+    arrival: string;
+    departure: string;
+    minorUnits: number;
+    currencyCode: string;
+    businessDate: string;
+  },
+) {
+  const { arrival, departure, minorUnits } = stay;
+  const ratePlanIds = [...new Set(nights.map((n) => n.ratePlanId))];
+  const ratePlans = await tx.ratePlan.findMany({
+    where: { propertyId: propertyId, id: { in: ratePlanIds } },
+    select: {
+      id: true,
+      code: true,
+      taxInclusive: true,
+      roomTransactionCodeId: true,
+      packages: { select: { package: { select: packageSelect } } },
+    },
+  });
+  const reservationPackages = await tx.reservationPackage.findMany({
+    where: { propertyId: propertyId, reservationRoomId },
+    select: {
+      quantity: true,
+      startDate: true,
+      endDate: true,
+      unitPriceOverride: true,
+      package: { select: packageSelect },
+    },
+  });
+
+  const plannedCodeIds = new Set<string>();
+  for (const plan of ratePlans) {
+    plannedCodeIds.add(plan.roomTransactionCodeId);
+    for (const { package: pkg } of plan.packages)
+      pkg.components.forEach((c) => plannedCodeIds.add(c.transactionCodeId));
+  }
+  reservationPackages.forEach((rp) =>
+    rp.package.components.forEach((c) => plannedCodeIds.add(c.transactionCodeId)),
+  );
+  const codes = new Map(
+    (await findTransactionCodes(tx, propertyId, [...plannedCodeIds])).map((c) => [c.id, c]),
+  );
+  const rules = await taxRulesByCode(tx, propertyId, [...plannedCodeIds], stay.businessDate);
+
+  const byNight = new Map<string, NightLine[]>();
+  for (const night of nights) {
+    if (night.currencyCode !== stay.currencyCode) {
+      throw rule(
+        `The night of ${night.stayDate} is priced in ${night.currencyCode}; this folio is in ${stay.currencyCode}. Currency conversion is not supported.`,
+        "CURRENCY_MISMATCH",
+      );
+    }
+    const plan = ratePlans.find((p) => p.id === night.ratePlanId)!;
+    const packages = packageLinesForNight(
+      packageComponentsFor(
+        night,
+        plan.packages.map((p) => p.package),
+        reservationPackages,
+      ),
+      {
+        night: night.stayDate,
+        arrival,
+        departure,
+        adults: night.adults,
+        children: night.children,
+      },
+    );
+    const rate = roundToMinorUnits(parseMoney(night.rateAmount), minorUnits);
+    let roomAmount: MoneyUnits;
+    try {
+      roomAmount = roomLineAmount(rate, packages);
+    } catch {
+      throw rule(
+        `Included packages exceed the room rate on ${night.stayDate}`,
+        "PACKAGE_EXCEEDS_RATE",
+      );
+    }
+
+    const lines: NightLine[] = [
+      ...packages
+        .filter((line) => line.postingType !== "COMBINED_WITH_ROOM")
+        .map((line) => ({
+          base: packagePostingKey(reservationRoomId, night.stayDate, line.componentId, 0).replace(
+            /:0$/,
+            "",
+          ),
+          key: (generation: number) =>
+            packagePostingKey(reservationRoomId, night.stayDate, line.componentId, generation),
+          codeId: line.transactionCodeId,
+          quantity: line.quantity,
+          unit: line.unitPrice,
+          amount: line.amount,
+          // Included components are carved out of a tax-inclusive rate: they stay inclusive.
+          inclusive:
+            line.postingType === "INCLUDED_IN_RATE"
+              ? plan.taxInclusive || codes.get(line.transactionCodeId)!.isTaxInclusive
+              : codes.get(line.transactionCodeId)!.isTaxInclusive,
+          source: "PACKAGE" as const,
+          description: line.name,
+          componentId: line.componentId,
+        })),
+      {
+        base: roomPostingKey(reservationRoomId, night.stayDate, 0).replace(/:0$/, ""),
+        key: (generation: number) => roomPostingKey(reservationRoomId, night.stayDate, generation),
+        codeId: plan.roomTransactionCodeId,
+        quantity: 1,
+        unit: roomAmount,
+        amount: roomAmount,
+        inclusive: plan.taxInclusive || codes.get(plan.roomTransactionCodeId)!.isTaxInclusive,
+        source: "SYSTEM" as const,
+        description: `${codes.get(plan.roomTransactionCodeId)!.name} · ${night.stayDate}`,
+        componentId: null,
+      },
+    ];
+
+    byNight.set(night.stayDate, lines);
+  }
+  return { codes, rules, byNight };
+}
+
+/**
+ * What the stay's nights will charge (room, packages, taxes), computed with
+ * the posting engine itself — for the reservation screen. Nothing is posted.
+ */
+export async function estimateStayCharges(
+  ctx: PropertyContext,
+  reservationRoomId: string,
+): Promise<StayChargeEstimate> {
+  const room = await findRoomDatesForEstimate(ctx.propertyId, reservationRoomId);
+  if (!room) throw notFound("Reservation");
+  const businessDate = requireLiveBusinessDate(ctx);
+  const nights = await nightsForRoomCharges(prisma, ctx.propertyId, reservationRoomId);
+  const minorUnits = await currencyMinorUnits(prisma, ctx.currencyCode);
+  const planned = await planNightLines(prisma, ctx.propertyId, reservationRoomId, nights, {
+    arrival: toDateOnly(room.arrivalDate),
+    departure: toDateOnly(room.departureDate),
+    minorUnits,
+    currencyCode: ctx.currencyCode,
+    businessDate,
+  });
+  let grand = 0n;
+  const result = nights.map((night) => {
+    const lines = (planned.byNight.get(night.stayDate) ?? [])
+      .filter((line) => line.amount !== 0n)
+      .map((line) => {
+        const breakdown = calculateCharge({
+          amount: roundToMinorUnits(line.amount, minorUnits),
+          quantity: line.quantity,
+          inclusive: line.inclusive,
+          rules: planned.rules.get(line.codeId) ?? [],
+          minorUnits,
+        });
+        return {
+          description: line.componentId ? line.description : planned.codes.get(line.codeId)!.name,
+          code: planned.codes.get(line.codeId)!.code,
+          kind: line.componentId ? ("PACKAGE" as const) : ("ROOM" as const),
+          quantity: line.quantity,
+          net: money(breakdown.net),
+          taxes: money(breakdown.taxes.reduce((sum, t) => sum + t.amount, 0n)),
+          total: breakdown.total,
+        };
+      });
+    const total = lines.reduce((sum, line) => sum + line.total, 0n);
+    grand += total;
+    return {
+      date: night.stayDate,
+      rate: money(parseMoney(night.rateAmount)),
+      posted: night.posted,
+      lines: lines.map((line) => ({ ...line, total: money(line.total) })),
+      total: money(total),
+    };
+  });
+  return { currencyCode: ctx.currencyCode, minorUnits, nights: result, total: money(grand) };
+}
+
+function findRoomDatesForEstimate(propertyId: string, reservationRoomId: string) {
+  return prisma.reservationRoom.findFirst({
+    where: { id: reservationRoomId, propertyId },
+    select: { arrivalDate: true, departureDate: true },
+  });
+}
 
 /**
  * Posts the room charge (and package lines) of every stay night before the
@@ -672,118 +888,21 @@ export async function postRoomCharges(
         byBase.set(base, entry);
       }
 
-      const ratePlanIds = [...new Set(nights.map((n) => n.ratePlanId))];
-      const ratePlans = await tx.ratePlan.findMany({
-        where: { propertyId: ctx.propertyId, id: { in: ratePlanIds } },
-        select: {
-          id: true,
-          code: true,
-          taxInclusive: true,
-          roomTransactionCodeId: true,
-          packages: { select: { package: { select: packageSelect } } },
-        },
-      });
-      const reservationPackages = await tx.reservationPackage.findMany({
-        where: { propertyId: ctx.propertyId, reservationRoomId },
-        select: {
-          quantity: true,
-          startDate: true,
-          endDate: true,
-          unitPriceOverride: true,
-          package: { select: packageSelect },
-        },
-      });
-
       const header = await findAccountHeader(tx, ctx.propertyId, reservationRoomId);
-      const plannedCodeIds = new Set<string>();
-      for (const plan of ratePlans) {
-        plannedCodeIds.add(plan.roomTransactionCodeId);
-        for (const { package: pkg } of plan.packages)
-          pkg.components.forEach((c) => plannedCodeIds.add(c.transactionCodeId));
-      }
-      reservationPackages.forEach((rp) =>
-        rp.package.components.forEach((c) => plannedCodeIds.add(c.transactionCodeId)),
-      );
-      const codes = new Map(
-        (await findTransactionCodes(tx, ctx.propertyId, [...plannedCodeIds])).map((c) => [c.id, c]),
-      );
-      const rules = await taxRulesByCode(tx, ctx.propertyId, [...plannedCodeIds], businessDate);
+      const planned = await planNightLines(tx, ctx.propertyId, reservationRoomId, nights, {
+        arrival,
+        departure,
+        minorUnits,
+        currencyCode: folio.currency_code,
+        businessDate,
+      });
+      const { codes, rules } = planned;
 
       const postedNights: string[] = [];
       const itemIds: string[] = [];
       let total = 0n;
       for (const night of nights) {
-        if (night.currencyCode !== folio.currency_code) {
-          throw rule(
-            `The night of ${night.stayDate} is priced in ${night.currencyCode}; this folio is in ${folio.currency_code}. Currency conversion is not supported.`,
-            "CURRENCY_MISMATCH",
-          );
-        }
-        const plan = ratePlans.find((p) => p.id === night.ratePlanId)!;
-        const packages = packageLinesForNight(
-          packageComponentsFor(
-            night,
-            plan.packages.map((p) => p.package),
-            reservationPackages,
-          ),
-          {
-            night: night.stayDate,
-            arrival,
-            departure,
-            adults: night.adults,
-            children: night.children,
-          },
-        );
-        const rate = roundToMinorUnits(parseMoney(night.rateAmount), minorUnits);
-        let roomAmount: MoneyUnits;
-        try {
-          roomAmount = roomLineAmount(rate, packages);
-        } catch {
-          throw rule(
-            `Included packages exceed the room rate on ${night.stayDate}`,
-            "PACKAGE_EXCEEDS_RATE",
-          );
-        }
-
-        const lines = [
-          ...packages
-            .filter((line) => line.postingType !== "COMBINED_WITH_ROOM")
-            .map((line) => ({
-              base: packagePostingKey(
-                reservationRoomId,
-                night.stayDate,
-                line.componentId,
-                0,
-              ).replace(/:0$/, ""),
-              key: (generation: number) =>
-                packagePostingKey(reservationRoomId, night.stayDate, line.componentId, generation),
-              codeId: line.transactionCodeId,
-              quantity: line.quantity,
-              unit: line.unitPrice,
-              amount: line.amount,
-              // Included components are carved out of a tax-inclusive rate: they stay inclusive.
-              inclusive:
-                line.postingType === "INCLUDED_IN_RATE"
-                  ? plan.taxInclusive || codes.get(line.transactionCodeId)!.isTaxInclusive
-                  : codes.get(line.transactionCodeId)!.isTaxInclusive,
-              source: "PACKAGE" as const,
-              description: line.name,
-              componentId: line.componentId,
-            })),
-          {
-            base: roomPostingKey(reservationRoomId, night.stayDate, 0).replace(/:0$/, ""),
-            key: (generation: number) =>
-              roomPostingKey(reservationRoomId, night.stayDate, generation),
-            codeId: plan.roomTransactionCodeId,
-            quantity: 1,
-            unit: roomAmount,
-            amount: roomAmount,
-            inclusive: plan.taxInclusive || codes.get(plan.roomTransactionCodeId)!.isTaxInclusive,
-            source: "SYSTEM" as const,
-            description: `${codes.get(plan.roomTransactionCodeId)!.name} · ${night.stayDate}`,
-            componentId: null,
-          },
-        ];
+        const lines = planned.byNight.get(night.stayDate)!;
 
         let postedAny = false;
         for (const line of lines) {

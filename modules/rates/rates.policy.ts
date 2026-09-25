@@ -154,3 +154,71 @@ function priceOneNight(
   if (!season || !amounts) return "NO_SEASON";
   return occupancyAmount(amounts, adults, children) ?? "OCCUPANCY_NOT_PRICED";
 }
+
+// --- Administration rules (Phase 6) ------------------------------------------------------
+
+export interface SeasonWindow {
+  startDate: string;
+  endDate: string;
+  daysOfWeek: number;
+  priority: number;
+}
+
+/**
+ * Two seasons of one plan are ambiguous when they share a priority and a
+ * stay date on which both apply (overlapping dates and weekday). Such a pair
+ * is rejected, so `selectSeason` always has a single winner: the highest
+ * priority season covering the date and weekday.
+ */
+export function seasonsConflict(a: SeasonWindow, b: SeasonWindow): boolean {
+  if (a.priority !== b.priority) return false;
+  const from = a.startDate > b.startDate ? a.startDate : b.startDate;
+  const to = a.endDate < b.endDate ? a.endDate : b.endDate;
+  if (from > to) return false;
+  const shared = a.daysOfWeek & b.daysOfWeek;
+  if (shared === 0) return false;
+  // A week of overlap contains every weekday; shorter overlaps are checked day by day.
+  let date = from;
+  for (let i = 0; i < 7 && date <= to; i++) {
+    if ((weekdayBit(date) & shared) !== 0) return true;
+    date = new Date(Date.parse(`${date}T00:00:00.000Z`) + 86_400_000).toISOString().slice(0, 10);
+  }
+  return false;
+}
+
+/**
+ * Why a plan cannot derive from `parentId` (null = allowed): self-reference,
+ * a cycle through the plan's own descendants, an inactive parent, or a chain
+ * deeper than the 3 derivation steps `priceNights` resolves. The database
+ * trigger `rate_plans_guard` enforces the same rules.
+ */
+export function derivationProblem(
+  plans: readonly { id: string; parentRatePlanId: string | null; status: string }[],
+  planId: string | null,
+  parentId: string,
+): string | null {
+  if (planId && parentId === planId) return "A rate plan cannot derive from itself";
+  const byId = new Map(plans.map((p) => [p.id, p]));
+  const parent = byId.get(parentId);
+  if (!parent) return "The parent rate plan does not exist";
+  if (parent.status !== "ACTIVE") return "The parent rate plan is not active";
+  let ancestors = 0;
+  for (
+    let cursor: string | null = parentId;
+    cursor;
+    cursor = byId.get(cursor)?.parentRatePlanId ?? null
+  ) {
+    if (cursor === planId) return "This would make the rate plan derive from itself";
+    ancestors += 1;
+    if (ancestors > 3) return "Derived rates may be at most 3 levels deep";
+  }
+  const depthBelow = (id: string, depth: number): number => {
+    if (depth > 5) return depth;
+    const children = plans.filter((p) => p.parentRatePlanId === id);
+    return children.reduce((max, child) => Math.max(max, depthBelow(child.id, depth + 1)), depth);
+  };
+  if (planId && ancestors + depthBelow(planId, 0) > 3) {
+    return "Derived rates may be at most 3 levels deep";
+  }
+  return null;
+}

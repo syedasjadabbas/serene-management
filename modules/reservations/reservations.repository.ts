@@ -114,6 +114,30 @@ export function deleteNights(tx: Tx, reservationRoomId: string) {
   return tx.reservationRoomNight.deleteMany({ where: { reservationRoomId } });
 }
 
+export function insertReservationPackage(
+  tx: Tx,
+  data: Prisma.ReservationPackageUncheckedCreateInput,
+) {
+  return tx.reservationPackage.create({ data, select: { id: true } });
+}
+
+export function findReservationPackage(tx: Tx, reservationRoomId: string, id: string) {
+  return tx.reservationPackage.findFirst({
+    where: { id, reservationRoomId },
+    select: {
+      id: true,
+      quantity: true,
+      startDate: true,
+      endDate: true,
+      package: { select: { code: true } },
+    },
+  });
+}
+
+export function deleteReservationPackage(tx: Tx, id: string) {
+  return tx.reservationPackage.delete({ where: { id } });
+}
+
 /** A reservation room's stay nights, for room-charge posting (billing). */
 export function findNightsForPosting(tx: Tx, propertyId: string, reservationRoomId: string) {
   return tx.reservationRoomNight.findMany({
@@ -244,6 +268,7 @@ export async function lockReservationRoom(tx: Tx, propertyId: string, id: string
       marketCodeId: true,
       sourceCodeId: true,
       shareGroupId: true,
+      blockId: true,
       currencyCode: true,
       cancellationNumber: true,
       reservationType: { select: { code: true, deductsInventory: true } },
@@ -361,6 +386,24 @@ export function findReservationDetail(tx: Tx, propertyId: string, reservationId:
           cancellationPolicy: { select: { ...codeSelect, description: true } },
           cancelReason: { select: codeSelect },
           stay: { select: { id: true, status: true, checkedInAt: true, checkedOutAt: true } },
+          block: {
+            select: {
+              id: true,
+              code: true,
+              name: true,
+              group: { select: { id: true, code: true, name: true } },
+            },
+          },
+          packages: {
+            orderBy: { startDate: "asc" },
+            select: {
+              id: true,
+              quantity: true,
+              startDate: true,
+              endDate: true,
+              package: { select: { id: true, code: true, name: true, postingType: true } },
+            },
+          },
           nights: {
             orderBy: { stayDate: "asc" },
             select: {

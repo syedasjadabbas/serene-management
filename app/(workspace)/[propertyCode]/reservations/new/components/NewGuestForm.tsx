@@ -7,7 +7,7 @@ import { TextField } from "@/components/ui/TextField";
 import { toClientApiError } from "@/lib/api/errors";
 import { createGuestSchema } from "@/modules/guests/guests.schema";
 import type { GuestSummaryView } from "@/modules/guests/guests.types";
-import { useCreateGuestMutation } from "../lib/guests.api";
+import { useCreateGuestMutation } from "@/lib/api/endpoints/guests.api";
 
 /** Minimal guest profile for booking; full profile management comes with the profiles phase. */
 export function NewGuestForm({

@@ -17,6 +17,7 @@ import { AssignRoomDialog } from "./AssignRoomDialog";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ModifyDialog } from "./ModifyDialog";
 import { ReasonDialog } from "./ReasonDialog";
+import { RoomPackagesPanel } from "./RoomPackagesPanel";
 
 type DialogName =
   "modify" | "confirm" | "cancel" | "noShow" | "reinstate" | "assign" | "checkIn" | null;
@@ -133,6 +134,20 @@ export function ReservationRoomPanel({
               </dd>
             </div>
           ) : null}
+          {room.group ? (
+            <div className="contents">
+              <dt className="text-xs text-fg-muted sm:py-0.5">Group block</dt>
+              <dd className="text-sm">
+                <Link
+                  href={`/${property.code}/groups/${room.group.id}` as Route}
+                  className="text-brand hover:underline"
+                >
+                  {room.group.code} · {room.group.name}
+                </Link>{" "}
+                · {room.group.blockCode}
+              </dd>
+            </div>
+          ) : null}
           {room.noShowAt ? (
             <div className="contents">
               <dt className="text-xs text-fg-muted sm:py-0.5">No-show</dt>
@@ -172,6 +187,7 @@ export function ReservationRoomPanel({
           </tbody>
         </table>
       </div>
+      <RoomPackagesPanel room={room} businessDate={reservation.businessDate} />
 
       <ModifyDialog
         key={`m${room.version}`}

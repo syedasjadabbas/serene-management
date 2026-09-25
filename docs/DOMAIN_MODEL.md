@@ -545,6 +545,14 @@ Block status follows the configured `BlockStatus.type`:
 
 Cutoff and wash release un-picked-up allocation back to house (`released`), irreversibly.
 
+As implemented (Phase 6):
+
+- `blocked` is derived, not incremented: for DEDUCT blocks `Σ max(0, allocated − released − picked)` per room type and night (ARCHITECTURE D21). A pickup inside the allocation therefore moves a room from _blocked_ to _sold_ and leaves house availability unchanged; an **elastic** block may pick up beyond its allocation from house availability.
+- Pickup is allowed only on DEDUCT blocks whose status `allowsPickup`, within the block's dates and room types. The reservation takes the block's rate plan (GROUP rates allowed), reservation type, market and source codes and policies; its dates, room type and rate plan cannot be modified afterwards (`BLOCK_PICKUP_LOCKED`) — cancel and pick up again.
+- Cancelling a pickup returns the room to the block (not to house) while the block is DEDUCT; reinstating it needs room in the block again.
+- Release is manual (cutoff processing arrives with night audit): it moves what the block still holds to `released` and cannot touch picked-up rooms.
+- Allocation can be changed but never below the pickup of a night (`ALLOCATION_BELOW_PICKUP`); DEDUCT → other types requires zero active pickup (`BLOCK_HAS_PICKUP`); a group is cancelled only with zero pickup, which cancels its blocks.
+
 ### 6.9 Night audit run
 
 RUNNING → COMPLETED | FAILED. A FAILED run is terminal; a retry creates a new run (`attempt` + 1). At most one RUNNING run per property (unique index). Steps: PENDING → RUNNING → SUCCEEDED | FAILED | SKIPPED.

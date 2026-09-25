@@ -9,7 +9,12 @@ import {
 import type { RateQuoteView } from "@/modules/availability/availability.types";
 import { toDateOnly } from "@/modules/business-date/business-date.policy";
 import { type RatePlanPricing, priceNights } from "./rates.policy";
-import { type RatePlanRow, findCurrencyMinorUnits, findRatePlansForStay } from "./rates.repository";
+import {
+  type RatePlanRow,
+  findCurrencyMinorUnits,
+  findRatePlansForStay,
+  lockRatePlanChain,
+} from "./rates.repository";
 
 /**
  * Rate quoting for a stay (Phase 2 scope). Plans that need a negotiated
@@ -71,9 +76,10 @@ export function priceForBooking(
   roomTypeId: string,
   ratePlanId: string,
   restrictions: readonly RestrictionRow[],
+  options: { allowGroupRates?: boolean } = {},
 ): { quote: RateQuoteView; nightly: { date: string; amount: MoneyUnits }[] } {
   const plan = loaded.plans.find((p) => p.id === ratePlanId);
-  if (!plan || !isOfferable(plan, stay, roomTypeId)) {
+  if (!plan || !isOfferable(plan, stay, roomTypeId, options.allowGroupRates ?? false)) {
     throw new AppError(
       "BUSINESS_RULE_VIOLATION",
       "This rate plan cannot be sold for the selected room type and dates",
@@ -122,8 +128,10 @@ function quotePlan(
   );
   const amounts = priced.map((n) => n.amount);
   const complete = amounts.every((a): a is MoneyUnits => a !== null);
+  // Every applicable row: house-wide, this room type, this plan, or both —
+  // restrictionViolations does the scoping. Search and booking see the same set.
   const violations = restrictionViolations({
-    rows: restrictions.filter((r) => r.ratePlanId === plan.id),
+    rows: restrictions,
     roomTypeId,
     ratePlanId: plan.id,
     arrival: stay.arrival,
@@ -149,8 +157,18 @@ function quotePlan(
   };
 }
 
-function isOfferable(plan: RatePlanRow, stay: StayRequest, roomTypeId: string): boolean {
+/**
+ * Whether a plan can be sold for this stay. Group rates (kind GROUP) are
+ * contract rates: never quoted publicly, sellable only for a block pickup.
+ */
+function isOfferable(
+  plan: RatePlanRow,
+  stay: StayRequest,
+  roomTypeId: string,
+  allowGroupRates = false,
+): boolean {
   if (plan.requiresNegotiation || plan.requiresMembership || plan.isDayUse) return false;
+  if (plan.kind === "GROUP" && !allowGroupRates) return false;
   if (!plan.roomTypes.some((rt) => rt.roomTypeId === roomTypeId)) return false;
   const lastNight = stay.nights.at(-1) ?? stay.arrival;
   if (plan.sellFrom && stay.businessDate < toDateOnly(plan.sellFrom)) return false;
@@ -160,7 +178,7 @@ function isOfferable(plan: RatePlanRow, stay: StayRequest, roomTypeId: string): 
   return true;
 }
 
-function toPricing(plan: RatePlanRow): RatePlanPricing {
+export function toPricing(plan: RatePlanRow): RatePlanPricing {
   return {
     id: plan.id,
     parentRatePlanId: plan.parentRatePlanId,
@@ -193,4 +211,17 @@ function toPricing(plan: RatePlanRow): RatePlanPricing {
 /** Fraction digits of a currency (2 for PKR/AED, 3 for KWD). */
 export async function currencyMinorUnits(tx: Tx, currencyCode: string): Promise<number> {
   return (await findCurrencyMinorUnits(tx, currencyCode))?.minorUnits ?? 2;
+}
+
+/**
+ * Locks the rate plan and its parents FOR SHARE for the rest of the booking
+ * transaction (ARCHITECTURE §5, step 3). A rate change (FOR UPDATE) either
+ * commits before the price is read or waits until the booking commits.
+ */
+export async function lockRatePlanForPricing(
+  tx: Tx,
+  propertyId: string,
+  ratePlanId: string,
+): Promise<void> {
+  await lockRatePlanChain(tx, propertyId, ratePlanId, "share");
 }

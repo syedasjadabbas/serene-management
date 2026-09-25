@@ -97,6 +97,7 @@ model Property {
   stockLocations             StockLocation[]
   blockStatuses              BlockStatus[]
   blocks                     Block[]
+  groups                     Group[]
   userRoleAssignments        UserRoleAssignment[]
   nightAuditRuns             NightAuditRun[]
   dailyStatistics            DailyStatistic[]

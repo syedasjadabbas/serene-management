@@ -14,6 +14,8 @@ import type {
   ReservationDetail,
   ReservationListItem,
 } from "@/modules/reservations/reservations.types";
+import type { StayChargeEstimate } from "@/modules/billing/billing.types";
+import type { ReservationPackageInput } from "@/modules/rates/rates.schema";
 import type { ApiSuccess, CursorPageMeta } from "@/types/api";
 import { baseApi } from "../baseApi";
 
@@ -180,9 +182,52 @@ function invalidateAfterCommand(
     { type: "Availability" as const, id: arg.propertyId },
     // Front desk lists (arrivals, room board) show reservation state too.
     { type: "Stay" as const, id: `FD-${arg.propertyId}` },
+    // Cancelling or reinstating a block pickup changes the group's pickup.
+    "Block" as const,
     ...(result ? [{ type: "Reservation" as const, id: result.id }] : []),
   ];
 }
+
+/** Packages on a reservation and its expected charges (Phase 6). */
+export const reservationPackagesApi = reservationsApi.injectEndpoints({
+  endpoints: (build) => ({
+    chargeEstimate: build.query<
+      StayChargeEstimate,
+      { propertyId: string; reservationRoomId: string }
+    >({
+      query: ({ propertyId, reservationRoomId }) =>
+        `/properties/${propertyId}/reservation-rooms/${reservationRoomId}/charge-estimate`,
+      transformResponse: (response: ApiSuccess<StayChargeEstimate>) => response.data,
+      providesTags: ["Reservation", "RatePlan"],
+    }),
+    addReservationPackage: build.mutation<ReservationDetail, RoomCommand<ReservationPackageInput>>({
+      query: ({ propertyId, reservationRoomId, body }) => ({
+        url: `/properties/${propertyId}/reservation-rooms/${reservationRoomId}/packages`,
+        method: "POST",
+        body,
+      }),
+      transformResponse: (response: ApiSuccess<ReservationDetail>) => response.data,
+      invalidatesTags: ["Reservation", "Folio"],
+    }),
+    removeReservationPackage: build.mutation<
+      ReservationDetail,
+      { propertyId: string; reservationRoomId: string; reservationPackageId: string }
+    >({
+      query: ({ propertyId, reservationRoomId, reservationPackageId }) => ({
+        url: `/properties/${propertyId}/reservation-rooms/${reservationRoomId}/packages/${reservationPackageId}`,
+        method: "DELETE",
+      }),
+      transformResponse: (response: ApiSuccess<ReservationDetail>) => response.data,
+      invalidatesTags: ["Reservation", "Folio"],
+    }),
+  }),
+});
+
+export const {
+  useChargeEstimateQuery,
+  useAddReservationPackageMutation,
+  useRemoveReservationPackageMutation,
+} = reservationPackagesApi;
 
 export const {
   useAvailabilityQuery,

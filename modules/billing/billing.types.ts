@@ -185,3 +185,25 @@ export interface FolioSummary {
   balance: Money;
   status: FolioStatus;
 }
+
+/** A reservation's expected charges per night (not posted), from the posting engine. */
+export interface StayChargeEstimate {
+  currencyCode: string;
+  minorUnits: number;
+  total: Money;
+  nights: {
+    date: string;
+    rate: Money;
+    posted: boolean;
+    total: Money;
+    lines: {
+      description: string;
+      code: string;
+      kind: "ROOM" | "PACKAGE";
+      quantity: number;
+      net: Money;
+      taxes: Money;
+      total: Money;
+    }[];
+  }[];
+}

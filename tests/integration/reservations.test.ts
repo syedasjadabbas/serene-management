@@ -251,9 +251,12 @@ describe("availability", () => {
       available: 3,
       status: "AVAILABLE",
     });
+    // Public quotes: BAR, its derived plans and the bed & breakfast plan (Phase 6
+    // fixture data); the GRP group rate is sold only through a block pickup.
     expect(kng.rates.map((rate: { ratePlan: { code: string } }) => rate.ratePlan.code)).toEqual([
       "BAR",
       "ADV",
+      "BBK",
     ]);
     const sgl = r.body.data.roomTypes.find(
       (rt: { roomType: { code: string } }) => rt.roomType.code === "SGL",

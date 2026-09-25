@@ -30,6 +30,7 @@ import { ensureGuestFolioInTx } from "../../modules/billing/billing.service";
 import { checkIn } from "../../modules/front-desk/front-desk.service";
 import { assignTask, queueCleaningInTx } from "../../modules/housekeeping/housekeeping.service";
 import { createRequest } from "../../modules/maintenance/maintenance.service";
+import { createBlock, createGroup } from "../../modules/groups/groups.service";
 import { createProperty } from "../../modules/properties/properties.service";
 import { stayNights } from "../../modules/reservations/reservations.policy";
 import type { CreateReservationInput } from "../../modules/reservations/reservations.schema";
@@ -251,6 +252,7 @@ export async function seedDemo(): Promise<void> {
       seasonEnd: addDays(businessDate, 730),
       roomTypes: ROOM_TYPES[spec.code]!,
       taxes: TAXES[spec.code]!,
+      breakfastPrice: spec.code === "SDX" ? "75" : "1800",
     });
     const ctx: PropertyContext = {
       ...organization.adminCtx,
@@ -264,6 +266,7 @@ export async function seedDemo(): Promise<void> {
     await seedPropertyReservations(ctx, organization.id, businessDate, inventory);
     await seedOperations(ctx, businessDate, inventory);
     await seedFolios(ctx, businessDate);
+    await seedGroups(ctx, businessDate, inventory);
     console.warn(`Seeded inventory and sample reservations for ${spec.code}.`);
   }
 }
@@ -820,4 +823,30 @@ async function seedFolios(ctx: PropertyContext, businessDate: string) {
   for (const room of rooms) {
     await runInTransaction((tx) => ensureGuestFolioInTx(tx, ctx, businessDate, room, 1));
   }
+}
+
+/**
+ * Groups (Phase 6): one group with a definite block a week out, created
+ * through the group service so it holds inventory like any other block.
+ */
+async function seedGroups(ctx: PropertyContext, businessDate: string, inventory: Inventory) {
+  const code = `${ctx.propertyCode}-RETREAT`;
+  if (await prisma.group.findFirst({ where: { code }, select: { id: true } })) return;
+  const group = await createGroup(ctx, {
+    code,
+    name: ctx.propertyCode === "SDX" ? "Gulf Tech Summit delegates" : "Acme leadership retreat",
+    notes: "Demo group: definite block at the group rate.",
+  });
+  const [firstType] = Object.values(inventory.roomTypes);
+  await createBlock(ctx, group.id, {
+    code: `${ctx.propertyCode}-R1`,
+    name: "Main block",
+    statusId: inventory.blockStatuses.DEF!,
+    startDate: addDays(businessDate, 7),
+    endDate: addDays(businessDate, 10),
+    ratePlanId: inventory.ratePlans.GRP!,
+    allocations: [{ roomTypeId: firstType!.id, rooms: 5 }],
+    isElastic: false,
+    override: false,
+  });
 }

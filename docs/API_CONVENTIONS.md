@@ -150,6 +150,42 @@ Check-in is addressed by reservation room (the stay does not exist yet); later c
 
 The reservation **room** is the unit of every command (a multi-room booking has one per room); the booking (`reservations/{id}`) is the read aggregate.
 
+**Implemented in Phase 6 (rates, packages, restrictions, groups)**:
+
+```text
+GET    /api/v1/properties/{id}/rate-plans                                   list (derivation, seasons, packages)            rates:read
+POST   /api/v1/properties/{id}/rate-plans                                   { code, name, kind, derivation?, roomTypeIds, …, reason }   rates:manage (HIGH)
+GET    /api/v1/properties/{id}/rate-plans/{planId}                          detail + seasons + actions                        rates:read
+PATCH  /api/v1/properties/{id}/rate-plans/{planId}                          { version, …, status?, reason }                   rates:manage (HIGH)
+POST   /api/v1/properties/{id}/rate-plans/{planId}/seasons                  { version, name, startDate, endDate, daysOfWeek, priority, amounts[], reason }
+PATCH  /api/v1/properties/{id}/rate-plans/{planId}/seasons/{seasonId}       new prices of a season (same body)
+DELETE /api/v1/properties/{id}/rate-plans/{planId}/seasons/{seasonId}       { version, reason }
+PUT    /api/v1/properties/{id}/rate-plans/{planId}/packages                 { version, packageIds, reason }
+GET    /api/v1/properties/{id}/rates/options                                room types, plans, codes, business date           rates:read
+GET    /api/v1/properties/{id}/rates/calendar?ratePlanId=&roomTypeId=&from=&to=   nightly prices from the pricing engine (< 62 nights)
+GET    /api/v1/properties/{id}/packages                                     packages + components                             rates:read
+POST   /api/v1/properties/{id}/packages                                     { code, name, postingType, sellSeparately, components[] }   packages:manage
+PATCH  /api/v1/properties/{id}/packages/{packageId}                         (components with id are updated, others created/removed)
+GET    /api/v1/properties/{id}/restrictions?from=&to=                       rows per night and scope                          availability:read
+POST   /api/v1/properties/{id}/restrictions                                 { action set|clear, type, from, to, daysOfWeek, roomTypeId?, ratePlanId?, value?, reason }   availability:manage (HIGH)
+POST   /api/v1/properties/{id}/reservation-rooms/{rrId}/packages            { packageId, quantity, startDate, endDate }       reservations:update
+DELETE /api/v1/properties/{id}/reservation-rooms/{rrId}/packages/{rpId}                                                       reservations:update
+GET    /api/v1/properties/{id}/reservation-rooms/{rrId}/charge-estimate     nightly room/package/tax lines (billing engine)   reservations:read
+GET    /api/v1/properties/{id}/groups?status=&q=&cursor=                    groups with pickup totals                         groups:read
+POST   /api/v1/properties/{id}/groups                                       { code, name, accountProfileId?, contactGuestId?, notes? }  groups:manage
+GET    /api/v1/properties/{id}/groups/options                               block statuses, rate plans, room types, codes
+GET    /api/v1/properties/{id}/groups/{groupId}                             group, blocks with night grid, reservations, actions
+PATCH  /api/v1/properties/{id}/groups/{groupId}                             { name?, accountProfileId?, contactGuestId?, notes? }
+POST   /api/v1/properties/{id}/groups/{groupId}/status                      { status CLOSED|CANCELLED, reason }
+POST   /api/v1/properties/{id}/groups/{groupId}/blocks                      { code, name, statusId, startDate, endDate, ratePlanId, allocations[], isElastic?, cutoffDate?, override?, reason? }
+POST   /api/v1/properties/{id}/blocks/{blockId}/allocation                  { version, roomTypeId, from, to, rooms, override?, reason? }
+POST   /api/v1/properties/{id}/blocks/{blockId}/status                      { version, statusId, override?, reason? }
+POST   /api/v1/properties/{id}/blocks/{blockId}/release                     { version, roomTypeId?, from?, to?, reason } · Idempotency-Key
+POST   /api/v1/properties/{id}/blocks/{blockId}/pickups                     { guestId, roomTypeId, arrival, departure, adults, children?, rooms?, override?, reason? } · reservations:create + groups:read · Idempotency-Key
+```
+
+Prices, totals, pickup counts, remaining rooms and currencies are never accepted from the client; the rate plan's currency is always the property's. Overbooking (`override`) additionally requires `reservations:override_availability` and is audited HIGH. Error reasons: `INVALID_DERIVATION`, `PLAN_IS_DERIVED`, `PLAN_HAS_SEASONS`, `PLAN_HAS_ACTIVE_CHILDREN`, `SEASON_CONFLICT`, `NO_SEASON`, `OCCUPANCY_NOT_PRICED`, `RATE_NOT_SELLABLE`, `COMPONENT_POSTED`, `PACKAGE_NOT_SOLD_SEPARATELY`, `RESERVATION_NOT_ACTIVE`, `GROUP_NOT_ACTIVE`, `BLOCK_WITHOUT_RATE`, `BLOCK_NO_AVAILABILITY`, `BLOCK_NOT_DEFINITE`, `NOT_IN_BLOCK`, `BLOCK_EXHAUSTED`, `BLOCK_HAS_PICKUP`, `BLOCK_CANCELLED`, `ALLOCATION_BELOW_PICKUP`, `NOTHING_TO_RELEASE`, `BLOCK_PICKUP_LOCKED`, `NO_CANCEL_STATUS`, `INVALID_STATE_TRANSITION`, database guard `SM003` (422); `STALE_VERSION`, `IDEMPOTENCY_CONFLICT` (409). A group or block of another property answers 404; a property the user cannot access answers 403.
+
 ## 3. Request validation
 
 - Every handler declares Zod schemas for `params`, `query` and `body`. Objects are `.strict()` (unknown fields → `VALIDATION_FAILED`).

@@ -142,3 +142,22 @@ No permission was added; the Phase 0 catalog covers billing:
 | Check out (with the zero-balance rule)          | `frontdesk:checkout`                       | STANDARD / HIGH (early)       |
 
 The UI hides actions the user lacks (`actions` flags computed by the server); the routes enforce them regardless.
+
+## Rates, packages and groups (Phase 6, as implemented)
+
+No permission was added; the Phase 0 catalog covers Phase 6:
+
+| Action                                                           | Permission                                  | Risk            |
+| ---------------------------------------------------------------- | ------------------------------------------- | --------------- |
+| View rate plans, seasons, pricing calendar, packages             | `rates:read`                                | —               |
+| Create / change rate plans, seasons, included packages           | `rates:manage` ★ (reason required)          | HIGH            |
+| Create / change packages and components                          | `packages:manage`                           | STANDARD        |
+| View restrictions                                                | `availability:read`                         | —               |
+| Set / clear restrictions                                         | `availability:manage` ★ (reason required)   | HIGH            |
+| View groups and blocks                                           | `groups:read`                               | —               |
+| Create / change groups, blocks, allocation, status, release      | `groups:manage`                             | STANDARD / HIGH |
+| Pick up a reservation from a block                               | `reservations:create` + `groups:read`       | STANDARD        |
+| Overbook a block or pickup beyond house availability             | + `reservations:override_availability`      | HIGH            |
+| Add / remove packages on a reservation; view its charge estimate | `reservations:update` / `reservations:read` | STANDARD / —    |
+
+The UI hides what the user lacks (server-computed `actions` flags plus `can()`); every route enforces it regardless (verified with the read-only auditor: all Phase 6 mutations answer 403 with no state change).
