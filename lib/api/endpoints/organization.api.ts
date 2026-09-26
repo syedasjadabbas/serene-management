@@ -6,7 +6,7 @@ import type {
   OrganizationPerformanceReport,
 } from "@/modules/organization/organization.types";
 import type { PropertySetupCopyResult, PropertyView } from "@/modules/properties/properties.types";
-import type { RoleView, UserView } from "@/modules/users/users.types";
+import type { PasswordResetIssued, RoleView, UserView } from "@/modules/users/users.types";
 import type { ApiSuccess, CursorPageMeta, OffsetPageMeta } from "@/types/api";
 import { baseApi } from "../baseApi";
 
@@ -108,7 +108,7 @@ export const organizationApi = baseApi.injectEndpoints({
     }),
     userStatus: build.mutation<
       UserView,
-      { userId: string; action: "disable" | "unlock"; reason: string }
+      { userId: string; action: "disable" | "unlock" | "enable"; reason: string }
     >({
       query: ({ userId, action, reason }) => ({
         url: `/users/${userId}/${action}`,
@@ -116,6 +116,15 @@ export const organizationApi = baseApi.injectEndpoints({
         body: { reason },
       }),
       transformResponse: (response: ApiSuccess<UserView>) => response.data,
+      invalidatesTags: ["User", "AuditLog"],
+    }),
+    issuePasswordReset: build.mutation<PasswordResetIssued, { userId: string; reason: string }>({
+      query: ({ userId, reason }) => ({
+        url: `/users/${userId}/password-reset`,
+        method: "POST",
+        body: { reason },
+      }),
+      transformResponse: (response: ApiSuccess<PasswordResetIssued>) => response.data,
       invalidatesTags: ["User", "AuditLog"],
     }),
     accessibleProperties: build.query<PropertyView[], void>({
@@ -164,6 +173,7 @@ export const {
   useGrantRoleMutation,
   useRevokeRoleMutation,
   useUserStatusMutation,
+  useIssuePasswordResetMutation,
   useAccessiblePropertiesQuery,
   useCreatePropertyMutation,
   useCopyPropertySetupMutation,

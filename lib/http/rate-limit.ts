@@ -31,14 +31,21 @@ export interface RateLimitStore {
   clear(): Promise<void>;
 }
 
+/** Upper bound of tracked windows, so key churn cannot grow memory without limit. */
+export const MAX_TRACKED_WINDOWS = 100_000;
+
 export class MemoryRateLimitStore implements RateLimitStore {
   private readonly windows = new Map<string, { count: number; resetAt: number }>();
   private lastSweep = 0;
+
+  constructor(private readonly maxWindows = MAX_TRACKED_WINDOWS) {}
 
   async hit(id: string, windowMs: number, now: number) {
     this.sweep(now);
     const current = this.windows.get(id);
     if (!current || current.resetAt <= now) {
+      if (current) this.windows.delete(id);
+      this.evictIfFull(now);
       const fresh = { count: 1, resetAt: now + windowMs };
       this.windows.set(id, fresh);
       return { ...fresh };
@@ -49,6 +56,22 @@ export class MemoryRateLimitStore implements RateLimitStore {
 
   async clear() {
     this.windows.clear();
+  }
+
+  get size(): number {
+    return this.windows.size;
+  }
+
+  /** Drops expired windows, then the oldest ones (Map keeps insertion order). */
+  private evictIfFull(now: number) {
+    if (this.windows.size < this.maxWindows) return;
+    for (const [id, window] of this.windows) {
+      if (window.resetAt <= now) this.windows.delete(id);
+    }
+    for (const id of this.windows.keys()) {
+      if (this.windows.size < this.maxWindows) break;
+      this.windows.delete(id);
+    }
   }
 
   private sweep(now: number) {
@@ -66,9 +89,18 @@ export function setRateLimitStore(next: RateLimitStore): void {
   store = next;
 }
 
-/** Bucket key of a request: the user when authenticated, otherwise the client IP. */
-export function rateLimitKey(subject: { userId?: string | null; ipAddress: string | null }) {
-  return subject.userId ? `user:${subject.userId}` : `ip:${subject.ipAddress ?? "unknown"}`;
+/**
+ * Bucket key of a request: the user when authenticated, otherwise the
+ * trusted client IP (D44). Null when neither is known: such requests are not
+ * IP-limited rather than all sharing one global bucket that any client could
+ * exhaust for everyone (login still has its per-account limit).
+ */
+export function rateLimitKey(subject: {
+  userId?: string | null;
+  ipAddress: string | null;
+}): string | null {
+  if (subject.userId) return `user:${subject.userId}`;
+  return subject.ipAddress ? `ip:${subject.ipAddress}` : null;
 }
 
 export async function consumeRateLimit(

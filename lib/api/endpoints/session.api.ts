@@ -1,4 +1,8 @@
-import type { LoginInput } from "@/modules/identity/identity.schema";
+import type {
+  ChangePasswordInput,
+  CompletePasswordResetInput,
+  LoginInput,
+} from "@/modules/identity/identity.schema";
 import type { LoginResult } from "@/modules/identity/identity.types";
 import type { MeView } from "@/modules/access/access.types";
 import type { ApiSuccess } from "@/types/api";
@@ -22,7 +26,22 @@ export const sessionApi = baseApi.injectEndpoints({
     logout: build.mutation<void, void>({
       query: () => ({ url: "/auth/logout", method: "POST" }),
     }),
+    /** Every other session is signed out; this browser gets a fresh session. */
+    changePassword: build.mutation<{ changed: true }, ChangePasswordInput>({
+      query: (body) => ({ url: "/auth/password", method: "POST", body }),
+      transformResponse: (response: ApiSuccess<{ changed: true }>) => response.data,
+    }),
+    completePasswordReset: build.mutation<{ reset: true }, CompletePasswordResetInput>({
+      query: (body) => ({ url: "/auth/password/reset", method: "POST", body }),
+      transformResponse: (response: ApiSuccess<{ reset: true }>) => response.data,
+    }),
   }),
 });
 
-export const { useMeQuery, useLoginMutation, useLogoutMutation } = sessionApi;
+export const {
+  useMeQuery,
+  useLoginMutation,
+  useLogoutMutation,
+  useChangePasswordMutation,
+  useCompletePasswordResetMutation,
+} = sessionApi;

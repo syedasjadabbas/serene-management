@@ -6,6 +6,7 @@ import { Select } from "@/components/ui/Select";
 import { TextArea } from "@/components/ui/TextArea";
 import {
   useGrantRoleMutation,
+  useIssuePasswordResetMutation,
   useRevokeRoleMutation,
   useUserStatusMutation,
 } from "@/lib/api/endpoints/organization.api";
@@ -17,7 +18,9 @@ export type UserDialog =
   | { kind: "grant"; user: UserView }
   | { kind: "revoke"; user: UserView; assignment: RoleAssignmentView }
   | { kind: "disable"; user: UserView }
-  | { kind: "unlock"; user: UserView };
+  | { kind: "unlock"; user: UserView }
+  | { kind: "enable"; user: UserView }
+  | { kind: "reset"; user: UserView };
 
 /** Role grant / revoke and account status changes; each is audited with a reason. */
 export function UserDialogs({
@@ -47,7 +50,68 @@ export function UserDialogs({
   if (dialog.kind === "revoke") {
     return <RevokeDialog user={dialog.user} assignment={dialog.assignment} onClose={onClose} />;
   }
+  if (dialog.kind === "reset") return <ResetDialog user={dialog.user} onClose={onClose} />;
   return <StatusDialog user={dialog.user} action={dialog.kind} onClose={onClose} />;
+}
+
+/**
+ * Issues a one-time reset link (30 minutes). It is shown once, here: the
+ * administrator hands it to the user over a trusted channel.
+ */
+function ResetDialog({ user, onClose }: { user: UserView; onClose: () => void }) {
+  const [issue, state] = useIssuePasswordResetMutation();
+  const [reason, setReason] = useState("");
+  const [link, setLink] = useState<{ url: string; expiresAt: string } | null>(null);
+  const [copied, setCopied] = useState(false);
+  const error = toClientApiError(state.error);
+  if (link) {
+    return (
+      <FormDialog
+        title={`Reset link for ${user.displayName}`}
+        description="Shown only once. Give it to the user in person or over a trusted channel. Their old password and every session have been revoked."
+        onClose={onClose}
+        onSubmit={onClose}
+        submitLabel="Done"
+        pending={false}
+        error={null}
+      >
+        <TextArea label="One-time link" value={link.url} readOnly rows={3} />
+        <p className="text-xs text-fg-secondary">
+          Expires {new Date(link.expiresAt).toLocaleString()}. It works once.
+        </p>
+        <button
+          type="button"
+          className="self-start text-sm font-medium text-brand underline-offset-2 hover:underline"
+          onClick={async () => {
+            await navigator.clipboard.writeText(link.url);
+            setCopied(true);
+          }}
+        >
+          {copied ? "Copied" : "Copy link"}
+        </button>
+      </FormDialog>
+    );
+  }
+  return (
+    <FormDialog
+      title={`Reset the password of ${user.displayName}`}
+      description="The current password stops working and the user is signed out everywhere. You receive a one-time link valid for 30 minutes."
+      onClose={onClose}
+      onSubmit={async () => {
+        const result = await issue({ userId: user.id, reason: reason.trim() });
+        if ("data" in result && result.data) {
+          setLink({ url: result.data.resetUrl, expiresAt: result.data.expiresAt });
+        }
+      }}
+      submitLabel="Reset password"
+      danger
+      disabled={reason.trim().length < 3}
+      pending={state.isLoading}
+      error={error}
+    >
+      <Reason value={reason} onChange={setReason} errors={error?.fieldErrors.reason} />
+    </FormDialog>
+  );
 }
 
 function Reason({
@@ -171,7 +235,7 @@ function StatusDialog({
   onClose,
 }: {
   user: UserView;
-  action: "disable" | "unlock";
+  action: "disable" | "unlock" | "enable";
   onClose: () => void;
 }) {
   const [change, state] = useUserStatusMutation();
@@ -179,18 +243,22 @@ function StatusDialog({
   const error = toClientApiError(state.error);
   return (
     <FormDialog
-      title={action === "disable" ? `Disable ${user.displayName}` : `Unlock ${user.displayName}`}
+      title={`${action === "disable" ? "Disable" : action === "enable" ? "Enable" : "Unlock"} ${user.displayName}`}
       description={
         action === "disable"
           ? "The user is signed out everywhere and can no longer sign in."
-          : "Clears the lockout so the user can sign in again."
+          : action === "enable"
+            ? "The user can sign in again with their password (a new session is required)."
+            : "Clears the lockout so the user can sign in again."
       }
       onClose={onClose}
       onSubmit={async () => {
         const result = await change({ userId: user.id, action, reason: reason.trim() });
         if ("data" in result) onClose();
       }}
-      submitLabel={action === "disable" ? "Disable user" : "Unlock user"}
+      submitLabel={
+        action === "disable" ? "Disable user" : action === "enable" ? "Enable user" : "Unlock user"
+      }
       danger={action === "disable"}
       disabled={reason.trim().length < 3}
       pending={state.isLoading}

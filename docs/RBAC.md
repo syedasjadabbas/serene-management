@@ -227,3 +227,9 @@ No permission was added (`integrations:manage` is deliberately not created). Org
 - **Organization scope** means a grant from an ORGANIZATION-scope role assignment (`hasOrganizationPermission`); a property grant of the same permission is not enough. Such grants also cover every property of the organization (§1).
 - **History** (D41): property auditors see the rows written at properties where they hold `audit:read`; organization-level rows (guests, companies, loyalty, users, properties) need `audit:read` at organization scope.
 - **Loyalty UI**: the guest profile shows _Enroll_ with a property grant and _Tier / status_ and _Points_ only with the organization grant; the preferences dialog shows preferences for every property read-only without the organization grant.
+
+## User administration safeguards (Phase 10, as implemented)
+
+- **Outranking** (ARCHITECTURE D46): disabling, enabling, unlocking and resetting the password of another user need `users:manage` at organization scope AND every permission the target holds, in every scope the target holds it (an organization grant covers all properties). A General Manager therefore cannot disable, enable or reset an Organization Admin. Only a platform super admin manages a super admin. Nobody disables or resets themselves (use _Change password_).
+- **Last administrator**: a disable or an organization-scope role revoke that would leave the organization without an ACTIVE user holding `users:manage`, `roles:manage` and `properties:manage` at organization scope (or a super admin) is refused. All user administration is serialized per organization and re-reads the caller inside the lock, so concurrent administrators cannot remove each other.
+- **Locked vs disabled vs revoked**: _locked_ = too many failed sign-ins (clears by itself, or `unlock`); _disabled_ = switched off by an administrator (only `enable` restores it); _revoked_ = one session ended (logout, password change, disable, reset).

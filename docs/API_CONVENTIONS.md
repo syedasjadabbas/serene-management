@@ -339,6 +339,18 @@ Rules: messages are safe to show; the client localizes by `code` (+ `details`), 
 
 - Cookies: `sm_at` (access JWT, 15 min, `httpOnly; Secure; SameSite=Lax; Path=/`), `sm_rt` (refresh, 14 days, `httpOnly; Secure; SameSite=Strict; Path=/api/v1/auth`).
 - Endpoints: `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, `POST /auth/password/forgot`, `POST /auth/password/reset`, `GET /auth/sessions`, `DELETE /auth/sessions/{id}`.
+- **As implemented (Phase 10, batch 1)**: `POST /auth/password/forgot` (e-mail) is deferred. Implemented:
+
+  ```text
+  POST /api/v1/auth/password                     { currentPassword, newPassword }  signed in; per-user 5/15 min; all sessions revoked, fresh cookies issued   (D47)
+  POST /api/v1/auth/password/reset               { token, newPassword }            public; per trusted IP 10/min; single use; all sessions revoked
+  POST /api/v1/users/{id}/password-reset         { reason }  → 201 { resetUrl, expiresAt, sessionsRevoked }  users:manage (org) + caller outranks target; 10/h per admin
+  POST /api/v1/users/{id}/enable                 { reason }  DISABLED → ACTIVE; users:manage (org) + caller outranks target
+  POST /api/v1/users/{id}/disable | unlock       now also require the caller to outrank the target (D46)
+  ```
+
+  Errors: `TARGET_OUTRANKS_CALLER` (403, with `missingPermissions`), `LAST_ADMINISTRATOR`, `USER_NOT_DISABLED`, `USER_NOT_ACTIVE` (422), `RESET_TOKEN_INVALID` (400, same answer for unknown, used and expired tokens). Login answers `429 RATE_LIMITED` once the per-account budget is spent (D45); every other login failure is the same `401` message.
+
 - `401 UNAUTHENTICATED` → client performs one refresh (mutex-shared across concurrent requests) and retries; refresh failure → redirect to `/login?next=`.
 
 ## 10. Authorization

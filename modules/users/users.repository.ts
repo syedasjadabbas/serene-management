@@ -1,5 +1,5 @@
 import "server-only";
-import type { Prisma } from "@/generated/prisma/client";
+import { Prisma } from "@/generated/prisma/client";
 import type { Tx } from "@/lib/db/prisma";
 
 const assignmentSelect = {
@@ -111,4 +111,59 @@ export function deleteRoleAssignment(tx: Tx, assignmentId: string) {
 
 export function updateUserStatus(tx: Tx, userId: string, data: Prisma.UserUncheckedUpdateInput) {
   return tx.user.update({ where: { id: userId }, data, select: userSelect });
+}
+
+/**
+ * Serializes user administration within an organization (H3): every
+ * disable, enable, unlock, reset, grant and revoke takes this row lock first,
+ * so two administrators can never both pass the last-administrator check.
+ */
+export async function lockOrganization(tx: Tx, organizationId: string) {
+  const rows = await tx.$queryRaw<{ id: string }[]>`
+    SELECT "id" FROM "organizations" WHERE "id" = ${organizationId}::uuid FOR UPDATE`;
+  return rows.length > 0;
+}
+
+export function findUserAuthority(tx: Tx, organizationId: string, userId: string) {
+  return tx.user.findFirst({
+    where: { id: userId, organizationId },
+    select: { id: true, status: true, isSuperAdmin: true },
+  });
+}
+
+/** The organization-level administrative capabilities (discovery report H3). */
+export const ADMINISTRATOR_PERMISSIONS = ["users:manage", "roles:manage", "properties:manage"];
+
+/**
+ * ACTIVE users of the organization who can administer it: platform super
+ * admins, or holders of every administrator permission through
+ * ORGANIZATION-scope assignments. `excludeUserId` / `excludeAssignmentId`
+ * evaluate the organization as it would be after a disable / a revoke.
+ */
+export async function countOrganizationAdministrators(
+  tx: Tx,
+  organizationId: string,
+  change: { excludeUserId?: string; excludeAssignmentId?: string } = {},
+): Promise<number> {
+  const rows = await tx.$queryRaw<{ n: number }[]>`
+    SELECT count(*)::int AS "n"
+    FROM "users" u
+    WHERE u."organization_id" = ${organizationId}::uuid
+      AND u."status" = 'ACTIVE'
+      ${change.excludeUserId ? Prisma.sql`AND u."id" <> ${change.excludeUserId}::uuid` : Prisma.empty}
+      AND (
+        u."is_super_admin"
+        OR (
+          SELECT count(DISTINCT rp."permission_key")
+          FROM "user_role_assignments" a
+          JOIN "roles" r ON r."id" = a."role_id"
+          JOIN "role_permissions" rp ON rp."role_id" = r."id"
+          WHERE a."user_id" = u."id"
+            AND a."scope" = 'ORGANIZATION'
+            AND (r."organization_id" = ${organizationId}::uuid OR r."organization_id" IS NULL)
+            AND rp."permission_key" IN (${Prisma.join(ADMINISTRATOR_PERMISSIONS)})
+            ${change.excludeAssignmentId ? Prisma.sql`AND a."id" <> ${change.excludeAssignmentId}::uuid` : Prisma.empty}
+        ) = ${ADMINISTRATOR_PERMISSIONS.length}
+      )`;
+  return rows[0]?.n ?? 0;
 }

@@ -9,10 +9,12 @@ export function findSessionWithUser(tx: Tx, sessionId: string) {
       id: true,
       revokedAt: true,
       expiresAt: true,
+      createdAt: true,
       user: {
         select: {
           id: true,
           organizationId: true,
+          passwordChangedAt: true,
           email: true,
           displayName: true,
           locale: true,

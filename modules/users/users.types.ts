@@ -25,3 +25,12 @@ export interface RoleView {
   description: string | null;
   permissions: Permission[];
 }
+
+/** Returned once to the administrator; the token is never stored or logged. */
+export interface PasswordResetIssued {
+  userId: string;
+  /** One-time link; the token is in the URL fragment. */
+  resetUrl: string;
+  expiresAt: string;
+  sessionsRevoked: number;
+}

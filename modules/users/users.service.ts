@@ -11,23 +11,32 @@ import {
   permissionsInScope,
   propertiesWithPermission,
 } from "@/lib/permissions/evaluate";
+import { serverEnv } from "@/lib/env";
+import { type GrantedPermissions, loadGrantedPermissions } from "@/modules/access/access.service";
 import { recordAudit } from "@/modules/audit/audit.service";
-import { revokeAllSessionsForUser } from "@/modules/identity/identity.service";
-import type { OffsetPageMeta } from "@/types/api";
 import {
+  issuePasswordResetInTx,
+  revokeAllSessionsForUser,
+} from "@/modules/identity/identity.service";
+import type { OffsetPageMeta } from "@/types/api";
+import type { Tx } from "@/lib/db/prisma";
+import {
+  countOrganizationAdministrators,
   deleteRoleAssignment,
   findOrganizationRole,
   findPropertyInOrganization,
   findRoleAssignment,
   findRolesWithPermissions,
   findUserInOrganization,
+  findUserAuthority,
   findUsersPage,
   insertRoleAssignment,
+  lockOrganization,
   updateUserStatus,
   type UserRow,
 } from "./users.repository";
 import type { GrantRoleInput, ListUsersQuery, ReasonOnlyInput } from "./users.schema";
-import type { RoleAssignmentView, RoleView, UserView } from "./users.types";
+import type { PasswordResetIssued, RoleAssignmentView, RoleView, UserView } from "./users.types";
 
 /**
  * Users are organization data: any holder of `users:read` (org or property
@@ -90,6 +99,7 @@ export async function grantRole(
     throw new AppError("FORBIDDEN", "You cannot change your own role assignments");
 
   return runInTransaction(async (tx) => {
+    await lockAdministration(tx, ctx);
     const user = await findUserInOrganization(tx, ctx.organizationId, userId);
     if (!user) throw notFound("User");
     if (propertyId && !(await findPropertyInOrganization(tx, ctx.organizationId, propertyId))) {
@@ -138,6 +148,7 @@ export async function revokeRole(
     throw new AppError("FORBIDDEN", "You cannot change your own role assignments");
 
   return runInTransaction(async (tx) => {
+    await lockAdministration(tx, ctx);
     const user = await findUserInOrganization(tx, ctx.organizationId, userId);
     if (!user) throw notFound("User");
     const assignment = await findRoleAssignment(tx, userId, assignmentId);
@@ -151,6 +162,11 @@ export async function revokeRole(
       assignment.role.permissions.map((p) => p.permissionKey),
     );
 
+    if (assignment.scope === "ORGANIZATION") {
+      await assertKeepsAnAdministrator(tx, ctx.organizationId, {
+        excludeAssignmentId: assignment.id,
+      });
+    }
     await deleteRoleAssignment(tx, assignment.id);
     await recordAudit(
       tx,
@@ -170,7 +186,12 @@ export async function revokeRole(
   });
 }
 
-/** Disables a user everywhere and signs out all of their sessions immediately. */
+/**
+ * Disables a user everywhere and signs out all of their sessions immediately.
+ * The caller must outrank the target (hold every permission the target holds,
+ * in every scope) and the organization must keep an active administrator
+ * (H3). Serialized per organization, so concurrent disables cannot both pass.
+ */
 export async function disableUser(
   ctx: SessionContext,
   userId: string,
@@ -180,9 +201,13 @@ export async function disableUser(
   if (userId === ctx.userId) throw new AppError("FORBIDDEN", "You cannot disable your own account");
 
   return runInTransaction(async (tx) => {
+    const caller = await lockAdministration(tx, ctx);
+    requireOrganizationUsersManage(caller);
     const user = await findUserInOrganization(tx, ctx.organizationId, userId);
     if (!user) throw notFound("User");
     if (user.status === "DISABLED") return toUserView(user, inspectableScopes(ctx));
+    await assertOutranks(tx, ctx.organizationId, caller, userId);
+    await assertKeepsAnAdministrator(tx, ctx.organizationId, { excludeUserId: userId });
     const now = new Date();
     const updated = await updateUserStatus(tx, userId, { status: "DISABLED" });
     const count = await revokeAllSessionsForUser(tx, userId, "USER_DISABLED", now);
@@ -200,6 +225,52 @@ export async function disableUser(
   });
 }
 
+/**
+ * Re-enables a DISABLED user (H3 recovery path). Only a caller who outranks
+ * the target may do it. Failed sign-ins and lockout are cleared and any
+ * session left is revoked, so the user must sign in afresh. Distinct from
+ * `unlockUser`, which clears a lockout of an account that is not disabled.
+ */
+export async function enableUser(
+  ctx: SessionContext,
+  userId: string,
+  input: ReasonOnlyInput,
+): Promise<UserView> {
+  if (!hasOrganizationPermission(ctx.access, "users:manage")) throw forbidden("users:manage");
+  if (userId === ctx.userId) throw new AppError("FORBIDDEN", "You cannot enable your own account");
+
+  return runInTransaction(async (tx) => {
+    const caller = await lockAdministration(tx, ctx);
+    requireOrganizationUsersManage(caller);
+    const user = await findUserInOrganization(tx, ctx.organizationId, userId);
+    if (!user) throw notFound("User");
+    if (user.status !== "DISABLED") {
+      throw new AppError("BUSINESS_RULE_VIOLATION", "Only a disabled user can be enabled", {
+        reason: "USER_NOT_DISABLED",
+      });
+    }
+    await assertOutranks(tx, ctx.organizationId, caller, userId);
+    const now = new Date();
+    const updated = await updateUserStatus(tx, userId, {
+      status: "ACTIVE",
+      failedLoginCount: 0,
+      lockedUntil: null,
+    });
+    const count = await revokeAllSessionsForUser(tx, userId, "USER_REENABLED", now);
+    await recordAudit(tx, auditActor(ctx), {
+      action: "user.enable",
+      resourceType: "User",
+      resourceId: userId,
+      risk: "HIGH",
+      before: { status: "DISABLED" },
+      after: { status: "ACTIVE", sessionsRevoked: count },
+      reason: input.reason,
+      permission: "users:manage",
+    });
+    return toUserView(updated, inspectableScopes(ctx));
+  });
+}
+
 /** Clears an automatic lockout (and a LOCKED status) so the user can sign in again. */
 export async function unlockUser(
   ctx: SessionContext,
@@ -209,6 +280,8 @@ export async function unlockUser(
   if (!hasOrganizationPermission(ctx.access, "users:manage")) throw forbidden("users:manage");
 
   return runInTransaction(async (tx) => {
+    const caller = await lockAdministration(tx, ctx);
+    requireOrganizationUsersManage(caller);
     const user = await findUserInOrganization(tx, ctx.organizationId, userId);
     if (!user) throw notFound("User");
     if (user.status === "DISABLED" || user.status === "INVITED") {
@@ -217,6 +290,7 @@ export async function unlockUser(
         `A ${user.status.toLowerCase()} user cannot be unlocked`,
       );
     }
+    if (userId !== ctx.userId) await assertOutranks(tx, ctx.organizationId, caller, userId);
     const updated = await updateUserStatus(tx, userId, {
       status: "ACTIVE",
       failedLoginCount: 0,
@@ -234,6 +308,150 @@ export async function unlockUser(
     });
     return toUserView(updated, inspectableScopes(ctx));
   });
+}
+
+/**
+ * Administrator-initiated password reset (H4). The caller must outrank the
+ * target. The old password stops working, every session is revoked and a
+ * single-use link valid for 30 minutes is returned ONCE in this response (no
+ * e-mail infrastructure yet): the administrator hands it to the user. Only a
+ * keyed hash of the token is stored; the token never reaches logs or audit.
+ */
+export async function issuePasswordReset(
+  ctx: SessionContext,
+  userId: string,
+  input: ReasonOnlyInput,
+): Promise<PasswordResetIssued> {
+  if (!hasOrganizationPermission(ctx.access, "users:manage")) throw forbidden("users:manage");
+  if (userId === ctx.userId) {
+    throw new AppError("FORBIDDEN", "Change your own password from your account menu");
+  }
+
+  return runInTransaction(async (tx) => {
+    const caller = await lockAdministration(tx, ctx);
+    requireOrganizationUsersManage(caller);
+    const user = await findUserInOrganization(tx, ctx.organizationId, userId);
+    if (!user) throw notFound("User");
+    if (user.status !== "ACTIVE" && user.status !== "LOCKED") {
+      throw new AppError(
+        "BUSINESS_RULE_VIOLATION",
+        `A ${user.status.toLowerCase()} user cannot receive a password reset`,
+        { reason: "USER_NOT_ACTIVE" },
+      );
+    }
+    await assertOutranks(tx, ctx.organizationId, caller, userId);
+    const now = new Date();
+    const issued = await issuePasswordResetInTx(tx, userId, now);
+    await recordAudit(tx, auditActor(ctx), {
+      action: "user.password_reset_issue",
+      resourceType: "User",
+      resourceId: userId,
+      risk: "HIGH",
+      after: {
+        tokenId: issued.tokenId,
+        expiresAt: issued.expiresAt.toISOString(),
+        sessionsRevoked: issued.sessionsRevoked,
+      },
+      reason: input.reason,
+      permission: "users:manage",
+    });
+    const url = new URL("/reset-password", serverEnv().APP_URL);
+    // The token travels in the fragment: browsers never send it to a server,
+    // so it cannot end up in access logs or Referer headers.
+    url.hash = `token=${issued.token}`;
+    return {
+      userId,
+      resetUrl: url.toString(),
+      expiresAt: issued.expiresAt.toISOString(),
+      sessionsRevoked: issued.sessionsRevoked,
+    };
+  });
+}
+
+// --- Administration guards (H3) -----------------------------------------------------------
+
+interface CallerAuthority extends GrantedPermissions {
+  isSuperAdmin: boolean;
+}
+
+/**
+ * Takes the organization's administration lock, then re-reads the caller
+ * inside it: an administrator disabled or demoted by a concurrent command
+ * can no longer act, whatever their request's access profile said.
+ */
+async function lockAdministration(tx: Tx, ctx: SessionContext): Promise<CallerAuthority> {
+  await lockOrganization(tx, ctx.organizationId);
+  const caller = await findUserAuthority(tx, ctx.organizationId, ctx.userId);
+  if (!caller || caller.status !== "ACTIVE") throw forbidden("users:manage");
+  const grants = await loadGrantedPermissions(tx, ctx.userId, ctx.organizationId);
+  return { isSuperAdmin: caller.isSuperAdmin, ...grants };
+}
+
+/** Re-checked inside the lock: the grant may have been revoked concurrently. */
+function requireOrganizationUsersManage(caller: CallerAuthority) {
+  if (!caller.isSuperAdmin && !caller.organizationPermissions.has("users:manage")) {
+    throw forbidden("users:manage");
+  }
+}
+
+/**
+ * The caller must hold every permission the target holds, in every scope the
+ * target holds it (an organization grant covers every property). A platform
+ * super admin can only be managed by another super admin.
+ */
+async function assertOutranks(
+  tx: Tx,
+  organizationId: string,
+  caller: CallerAuthority,
+  targetUserId: string,
+) {
+  if (caller.isSuperAdmin) return;
+  const target = await findUserAuthority(tx, organizationId, targetUserId);
+  if (!target) throw notFound("User");
+  if (target.isSuperAdmin) {
+    throw new AppError("FORBIDDEN", "Only a platform administrator can manage this user");
+  }
+  const granted = await loadGrantedPermissions(tx, targetUserId, organizationId);
+  const missing = new Set<string>();
+  for (const permission of granted.organizationPermissions) {
+    if (!caller.organizationPermissions.has(permission)) missing.add(permission);
+  }
+  for (const [propertyId, permissions] of granted.propertyGrants) {
+    const held = caller.propertyGrants.get(propertyId);
+    for (const permission of permissions) {
+      if (!caller.organizationPermissions.has(permission) && !held?.has(permission)) {
+        missing.add(permission);
+      }
+    }
+  }
+  if (missing.size > 0) {
+    throw new AppError("FORBIDDEN", "You cannot manage a user with permissions you do not hold", {
+      reason: "TARGET_OUTRANKS_CALLER",
+      missingPermissions: [...missing].sort(),
+    });
+  }
+}
+
+/**
+ * Refuses a change that would leave the organization without an ACTIVE
+ * administrator (users, roles and properties management at organization
+ * scope, or a platform super admin). Runs under the organization lock.
+ */
+async function assertKeepsAnAdministrator(
+  tx: Tx,
+  organizationId: string,
+  change: { excludeUserId?: string; excludeAssignmentId?: string },
+) {
+  const before = await countOrganizationAdministrators(tx, organizationId);
+  if (before === 0) return; // Nothing left to protect; do not block unrelated changes.
+  const after = await countOrganizationAdministrators(tx, organizationId, change);
+  if (after === 0) {
+    throw new AppError(
+      "BUSINESS_RULE_VIOLATION",
+      "The organization must keep at least one active administrator",
+      { reason: "LAST_ADMINISTRATOR" },
+    );
+  }
 }
 
 function assertCanManageScope(ctx: SessionContext, propertyId: string | null) {

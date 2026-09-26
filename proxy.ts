@@ -11,7 +11,7 @@ import { verifyAccessToken } from "@/lib/auth/tokens";
  * authorizes on its own. API routes are excluded by the matcher.
  */
 
-const PUBLIC_PATHS = new Set(["/login", "/refresh"]);
+const PUBLIC_PATHS = new Set(["/login", "/refresh", "/reset-password"]);
 
 export async function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl;

@@ -16,6 +16,12 @@ const serverEnvSchema = z.object({
   AUTH_REFRESH_TOKEN_TTL_SECONDS: z.coerce.number().int().min(3600).default(1_209_600),
   FIELD_ENCRYPTION_KEY: z.string().optional(),
   APP_URL: z.url().default("http://localhost:3000"),
+  /**
+   * Number of reverse proxies in front of the app that append to
+   * X-Forwarded-For (D44). 0 = no proxy: forwarded headers are ignored and
+   * the client IP is unknown. Set it to the real proxy count in production.
+   */
+  TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(0),
 });
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;

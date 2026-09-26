@@ -15,6 +15,7 @@ import { type ResolvedSession, resolveSession } from "@/modules/access/access.se
 import { getCurrentBusinessDate } from "@/modules/business-date/business-date.service";
 import type { IdempotencyRequest, PropertyContext, RequestMeta, SessionContext } from "./context";
 import { AppError, forbidden } from "./errors";
+import { resolveClientIp } from "./client-ip";
 import { consumeRateLimit, type RateLimitRule, rateLimitKey } from "./rate-limit";
 import { ok, toErrorResponse } from "./response";
 
@@ -227,13 +228,12 @@ async function run(
 function requestMeta(request: NextRequest): RequestMeta {
   const incoming = request.headers.get("x-request-id");
   const requestId = incoming && /^[A-Za-z0-9-]{8,64}$/.test(incoming) ? incoming : randomUUID();
-  // X-Forwarded-For is trusted only because the app is deployed behind our own
-  // reverse proxy, which overwrites it (docs/ARCHITECTURE.md §9).
-  const forwarded = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
-  const ipAddress = forwarded || request.headers.get("x-real-ip") || null;
+  // Only the hops written by our own reverse proxies are trusted (D44); the
+  // same address is used for rate limits, sessions and audit rows.
+  const ipAddress = resolveClientIp(request.headers, serverEnv().TRUSTED_PROXY_HOPS);
   return {
     requestId,
-    ipAddress: ipAddress ? ipAddress.slice(0, 45) : null,
+    ipAddress,
     userAgent: request.headers.get("user-agent")?.slice(0, 500) ?? null,
   };
 }
@@ -247,7 +247,9 @@ function assertSameOrigin(request: NextRequest) {
   }
 }
 
-async function enforceRateLimit(rule: RateLimitRule, key: string) {
+/** A null key (anonymous request whose IP is unknown) is not IP-limited: see D44. */
+async function enforceRateLimit(rule: RateLimitRule, key: string | null) {
+  if (key === null) return;
   const result = await consumeRateLimit(rule, key);
   if (!result.allowed) {
     throw new AppError("RATE_LIMITED", "Too many requests. Please wait and try again.", {

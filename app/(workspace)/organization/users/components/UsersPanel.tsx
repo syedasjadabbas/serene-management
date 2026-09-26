@@ -160,6 +160,26 @@ export function UsersPanel() {
                         Unlock
                       </Button>
                     ) : null}
+                    {orgManage && (user.status === "ACTIVE" || user.status === "LOCKED") ? (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="min-h-11 md:min-h-0"
+                        onClick={() => setDialog({ kind: "reset", user })}
+                      >
+                        Reset password
+                      </Button>
+                    ) : null}
+                    {orgManage && user.status === "DISABLED" ? (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="min-h-11 md:min-h-0"
+                        onClick={() => setDialog({ kind: "enable", user })}
+                      >
+                        Enable
+                      </Button>
+                    ) : null}
                     {orgManage && user.status !== "DISABLED" ? (
                       <Button
                         size="sm"

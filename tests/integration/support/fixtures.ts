@@ -32,12 +32,17 @@ export async function createFixtureOrg(options: {
   properties: { key: string; timezone: string; live?: boolean; currencyCode?: string }[];
 }): Promise<FixtureOrg> {
   const suffix = uniqueSuffix();
-  const org = await prisma.$transaction((tx) =>
-    bootstrapOrganization(tx, {
-      code: `T${suffix}`,
-      name: `Test Org ${suffix}`,
-      baseCurrency: "PKR",
-    }),
+  // Prisma's defaults (2 s to get a connection, 5 s to run) are tighter than
+  // the application's own transactions (lib/db/transaction.ts: 5 s / 15 s);
+  // test files set up in parallel under CPU-heavy argon2 load.
+  const org = await prisma.$transaction(
+    (tx) =>
+      bootstrapOrganization(tx, {
+        code: `T${suffix}`,
+        name: `Test Org ${suffix}`,
+        baseCurrency: "PKR",
+      }),
+    { maxWait: 15_000, timeout: 30_000 },
   );
   passwordHash ??= hashPassword(TEST_PASSWORD);
 

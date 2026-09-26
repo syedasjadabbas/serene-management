@@ -57,6 +57,9 @@ export default defineConfig({
             DATABASE_URL: TEST_DATABASE_URL,
             APP_URL: "http://localhost:3000",
             AUTH_ACCESS_TOKEN_TTL_SECONDS: "900",
+            // Integration requests carry X-Forwarded-For as if written by one
+            // trusted reverse proxy (tests/integration/support/http.ts).
+            TRUSTED_PROXY_HOPS: "1",
           },
           testTimeout: 60_000,
           hookTimeout: 120_000,

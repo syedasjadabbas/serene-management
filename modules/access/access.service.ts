@@ -38,21 +38,14 @@ export async function resolveSession(
   const { user } = session;
   if (user.id !== claims.userId || user.organizationId !== claims.organizationId) return null;
   if (user.status !== "ACTIVE" || user.organization.status !== "ACTIVE") return null;
+  // A session opened before the current password was set is dead (H4).
+  if (user.passwordChangedAt && session.createdAt < user.passwordChangedAt) return null;
 
-  const grants = await findGrantedPermissions(prisma, user.id, user.organizationId);
-
-  const organizationPermissions = new Set<Permission>();
-  const propertyGrants = new Map<string, Set<Permission>>();
-  for (const grant of grants) {
-    if (!isPermission(grant.permission_key)) continue;
-    if (grant.scope === "ORGANIZATION") {
-      organizationPermissions.add(grant.permission_key);
-    } else if (grant.property_id) {
-      const set = propertyGrants.get(grant.property_id) ?? new Set<Permission>();
-      set.add(grant.permission_key);
-      propertyGrants.set(grant.property_id, set);
-    }
-  }
+  const { organizationPermissions, propertyGrants } = await loadGrantedPermissions(
+    prisma,
+    user.id,
+    user.organizationId,
+  );
 
   // Organization-wide grants (or super admin) cover every active property of the organization.
   const coversAllProperties = user.isSuperAdmin || organizationPermissions.size > 0;
@@ -95,6 +88,38 @@ export async function resolveSession(
     },
     properties,
   };
+}
+
+export interface GrantedPermissions {
+  /** Grants from ORGANIZATION-scope role assignments. */
+  organizationPermissions: Set<Permission>;
+  /** Grants from PROPERTY-scope assignments, per active property of the organization. */
+  propertyGrants: Map<string, Set<Permission>>;
+}
+
+/**
+ * A user's grants by scope, read in the caller's transaction. Used to resolve
+ * sessions and to compare two users' authority (users administration, H3).
+ */
+export async function loadGrantedPermissions(
+  tx: Tx,
+  userId: string,
+  organizationId: string,
+): Promise<GrantedPermissions> {
+  const grants = await findGrantedPermissions(tx, userId, organizationId);
+  const organizationPermissions = new Set<Permission>();
+  const propertyGrants = new Map<string, Set<Permission>>();
+  for (const grant of grants) {
+    if (!isPermission(grant.permission_key)) continue;
+    if (grant.scope === "ORGANIZATION") {
+      organizationPermissions.add(grant.permission_key);
+    } else if (grant.property_id) {
+      const set = propertyGrants.get(grant.property_id) ?? new Set<Permission>();
+      set.add(grant.permission_key);
+      propertyGrants.set(grant.property_id, set);
+    }
+  }
+  return { organizationPermissions, propertyGrants };
 }
 
 export function toMeView(session: ResolvedSession): MeView {

@@ -85,6 +85,10 @@ The product owner re-sequenced Phase 2 to **Reservations + Availability**. It de
 
 Moved to later phases: configuration screens for rooms, rate plans and restrictions; full guest profiles (documents, preferences, merge); room holds and auto-assign; deposits and cancellation penalties (billing); negotiated, member and day-use rates; block pickup (groups); turnaway capture.
 
+## Phase 10 batch 1 (as executed) — Account security hardening (pending commit)
+
+No migration (`password_reset_tokens` and `users.password_changed_at` already existed). Trusted client IP behind configured proxy hops (D44), per-account login budget and row-locked lockout with a 1 h cap (D45), outranking and last-administrator guards plus the missing `enable` path for disabled users (D46), password change and administrator-issued one-time reset links with session revocation (D47). UI: _Change password_ in the user menu, _Reset password_ / _Enable_ on Users & roles, public `/reset-password` page.
+
 ## Phase 9 (as executed) — Multi-property operations and integration foundation (pending commit)
 
 One migration `20261015090000_multi_property_foundation` (confirmation prefix, audit history index, group property rule; no integration tables):
