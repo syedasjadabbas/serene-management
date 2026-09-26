@@ -456,6 +456,19 @@ describe("failure at every commit step (property B)", () => {
       select: { attempt: true, status: true },
     });
     expect(runs.map((r) => r.status)).toEqual([...COMMIT_STEPS.map(() => "FAILED"), "COMPLETED"]);
+    // Integration outbox (Phase 9): the failed attempts rolled their event back
+    // with everything else; only the committed run left one.
+    const rolled = await prisma.outboxEvent.findMany({
+      where: { propertyId: B, eventType: "business_date.rolled" },
+    });
+    const forDate = rolled.filter((e) => (e.payload as { closedDate: string }).closedDate === DB);
+    expect(forDate).toHaveLength(1);
+    expect(forDate[0]!.aggregateId).toBe(run.id);
+    expect(forDate[0]!.payload).toMatchObject({
+      nightAuditRunId: run.id,
+      closedDate: DB,
+      openedDate: addDays(DB, 1),
+    });
   });
 });
 

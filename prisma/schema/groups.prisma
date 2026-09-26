@@ -24,7 +24,8 @@ model Group {
   id               String      @id @default(uuid(7)) @db.Uuid
   organizationId   String      @map("organization_id") @db.Uuid
   /// Property the group is managed from (Phase 6): property-scoped routes
-  /// show a group only at this property. Null for legacy/organization groups.
+  /// show a group only at this property. Null only on legacy rows; new and
+  /// updated rows must name a property (check groups_property_required, Phase 9).
   propertyId       String?     @map("property_id") @db.Uuid
   code             String      @db.VarChar(20)
   name             String      @db.VarChar(200)

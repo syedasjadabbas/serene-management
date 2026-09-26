@@ -25,7 +25,8 @@ export function StepReview() {
   const property = useProperty();
   const router = useRouter();
   const { can } = usePermissions(property.id);
-  const { stay, selection, guest, details, setStep, reset, mode, company } = useBookingDraft();
+  const { stay, selection, guest, details, setStep, reset, mode, company, propertyId } =
+    useBookingDraft();
   const walkIn = mode === "walk-in";
   const options = useBookingOptionsQuery(property.id);
   // Same arguments as step 3, so this is served from the cache.
@@ -46,7 +47,7 @@ export function StepReview() {
   const [reason, setReason] = useState("");
   const apiError = toClientApiError(error);
 
-  if (!stay || !selection || !guest)
+  if (!stay || !selection || !guest || propertyId !== property.id)
     return <StatusPanel kind="empty" title="The booking is incomplete" />;
   const label = (list: { id: string; code: string; name: string }[] | undefined, id: string) => {
     const item = list?.find((x) => x.id === id);
@@ -88,14 +89,14 @@ export function StepReview() {
     if (walkIn) {
       const result = await walkInMutation({ propertyId: property.id, body });
       if ("data" in result && result.data) {
-        reset();
+        reset(property.id);
         router.push(`/${property.code}/front-desk/stays/${result.data.id}?checkedIn=1` as Route);
       }
       return;
     }
     const result = await createReservation({ propertyId: property.id, body });
     if ("data" in result && result.data) {
-      reset();
+      reset(property.id);
       router.push(`/${property.code}/reservations/${result.data.id}?created=1` as Route);
     }
   }

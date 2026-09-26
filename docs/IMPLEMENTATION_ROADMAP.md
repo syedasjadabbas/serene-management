@@ -85,6 +85,18 @@ The product owner re-sequenced Phase 2 to **Reservations + Availability**. It de
 
 Moved to later phases: configuration screens for rooms, rate plans and restrictions; full guest profiles (documents, preferences, merge); room holds and auto-assign; deposits and cancellation penalties (billing); negotiated, member and day-use rates; block pickup (groups); turnaway capture.
 
+## Phase 9 (as executed) — Multi-property operations and integration foundation (pending commit)
+
+One migration `20261015090000_multi_property_foundation` (confirmation prefix, audit history index, group property rule; no integration tables):
+
+- **Security hardening**: organization-scope rules for loyalty administration, global preferences and the users list; resource history filtered by audit scope; audit history index verified with `EXPLAIN`; redacted server error logging; rate limiting behind a store abstraction keyed by user (ARCHITECTURE D39, D41, D43).
+- **Confirmation numbers** `PREFIX-number` per property, unique in the organization, legacy numbers readable (D36).
+- **Property setup copy** of reference data before go-live; the seed uses it (D37).
+- **Organization workspace**: overview, performance report grouped by currency with CSV, central availability with hand-off, organization audit trail, users and roles over the existing APIs, properties (create, copy setup); section-preserving workspace switcher; property-bound booking draft (D38).
+- **Transactional outbox** writer for nine events, written and rolled back with the command (D35); integration foundation only (D40).
+
+Deferred: API keys and service principals, external API authentication, payment gateways, OTA/channel managers, e-mail/SMS, webhooks, inbox, external mappings, accounting/GL export, an outbox relay/worker and SSE, Redis, FX conversion and organization base-currency totals, itineraries, cross-property reservations, transfers, split stays and groups, shared rate templates and central inventory, user creation and invitations.
+
 ## Phase 8 (as executed) — Night audit, finance and reports (pending commit)
 
 Delivers roadmap Phase 9 (night audit and business date roll) and the core of roadmap Phase 11 (reports and dashboard) on the existing schema (`business_dates`, `night_audit_runs` / `night_audit_steps`, `daily_statistics` / `daily_room_type_statistics` were modelled in Phase 0; the `nightaudit:*`, `reports:*`, `dashboard:read` and `audit:read` permissions already existed; one migration `20261001090000_night_audit_finance`):

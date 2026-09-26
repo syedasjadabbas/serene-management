@@ -7,8 +7,10 @@ import { recordAudit } from "@/modules/audit/audit.service";
 import { hasBusinessDateHistory } from "@/modules/business-date/business-date.service";
 import {
   type ConfigurationRow,
+  confirmationPrefixTaken,
   currencyExists,
   findConfiguration,
+  findConfirmationPrefix,
   findOrganization,
   findPropertiesByIds,
   findProperty,
@@ -19,6 +21,7 @@ import {
   updatePropertyTimes,
   upsertConfiguration,
 } from "./properties.repository";
+import { formatConfirmationNumber } from "./confirmation-number.policy";
 import type { CreatePropertyInput, UpdatePropertyConfigurationInput } from "./properties.schema";
 import type { OrganizationView, PropertyConfigurationView, PropertyView } from "./properties.types";
 
@@ -72,9 +75,12 @@ export async function createProperty(
         fields: { currencyCode: ["Unknown currency"] },
       });
     }
+    const confirmationPrefix = input.confirmationPrefix ?? input.code;
+    await assertConfirmationPrefixFree(tx, ctx.organizationId, confirmationPrefix, null);
     const row = await insertProperty(tx, {
       organizationId: ctx.organizationId,
       code: input.code,
+      confirmationPrefix,
       name: input.name,
       legalName: input.legalName ?? null,
       timezone: input.timezone,
@@ -120,13 +126,22 @@ export async function getPropertyConfiguration(
 /**
  * Changes operational settings. High-risk: audited with before/after and
  * reason. The time zone may change only before go-live, because every
- * business date and local-time rule depends on it.
+ * business date and local-time rule depends on it; so may the confirmation
+ * prefix, so one property's numbers keep a single form once it operates.
  */
 export async function updatePropertyConfiguration(
   ctx: PropertyContext,
   input: UpdatePropertyConfigurationInput,
 ): Promise<PropertyConfigurationView> {
-  const { reason, reasonCodeId, timezone, checkInTime, checkOutTime, ...settings } = input;
+  const {
+    reason,
+    reasonCodeId,
+    timezone,
+    confirmationPrefix,
+    checkInTime,
+    checkOutTime,
+    ...settings
+  } = input;
 
   return runInTransaction(async (tx) => {
     const property = await findProperty(tx, ctx.organizationId, ctx.propertyId);
@@ -143,11 +158,31 @@ export async function updatePropertyConfiguration(
         "The time zone cannot change after the property's business date has been initialized",
       );
     }
+    const prefixChanges =
+      confirmationPrefix !== undefined && confirmationPrefix !== property.confirmationPrefix;
+    if (prefixChanges) {
+      if (await hasBusinessDateHistory(tx, ctx.propertyId)) {
+        throw new AppError(
+          "BUSINESS_RULE_VIOLATION",
+          "The confirmation prefix cannot change after the property's business date has been initialized",
+        );
+      }
+      await assertConfirmationPrefixFree(
+        tx,
+        ctx.organizationId,
+        confirmationPrefix,
+        ctx.propertyId,
+      );
+    }
 
     const updatedProperty =
-      timezone !== undefined || checkInTime !== undefined || checkOutTime !== undefined
+      timezone !== undefined ||
+      prefixChanges ||
+      checkInTime !== undefined ||
+      checkOutTime !== undefined
         ? await updatePropertyTimes(tx, ctx.propertyId, {
             ...(timezone !== undefined ? { timezone } : {}),
+            ...(prefixChanges ? { confirmationPrefix } : {}),
             ...(checkInTime !== undefined ? { checkInTime } : {}),
             ...(checkOutTime !== undefined ? { checkOutTime } : {}),
           })
@@ -169,6 +204,20 @@ export async function updatePropertyConfiguration(
     });
     return after;
   });
+}
+
+/** The prefix is unique within the organization (also a unique index). */
+async function assertConfirmationPrefixFree(
+  tx: Tx,
+  organizationId: string,
+  prefix: string,
+  exceptPropertyId: string | null,
+) {
+  if ((await confirmationPrefixTaken(tx, organizationId, prefix, exceptPropertyId)) > 0) {
+    throw new AppError("CONFLICT", "Another property already uses this confirmation prefix", {
+      fields: { confirmationPrefix: ["Already used by another property"] },
+    });
+  }
 }
 
 /** The no-show fee must post with a revenue code; the automatic reason must be a NO_SHOW reason. */
@@ -228,17 +277,22 @@ function toPropertyView(row: PropertyRow): PropertyView {
     },
     phone: row.phone,
     email: row.email,
+    confirmationPrefix: row.confirmationPrefix,
   };
 }
 
 function toConfigurationView(
-  property: Pick<PropertyRow, "id" | "timezone" | "checkInTime" | "checkOutTime">,
+  property: Pick<
+    PropertyRow,
+    "id" | "timezone" | "confirmationPrefix" | "checkInTime" | "checkOutTime"
+  >,
   configuration: ConfigurationRow | null,
 ): PropertyConfigurationView {
   const { updatedAt, ...settings } = configuration ?? { ...DEFAULT_CONFIGURATION, updatedAt: null };
   return {
     propertyId: property.id,
     timezone: property.timezone,
+    confirmationPrefix: property.confirmationPrefix,
     checkInTime: property.checkInTime,
     checkOutTime: property.checkOutTime,
     ...settings,
@@ -261,7 +315,12 @@ function changedFields(
   return result;
 }
 
-/** Per-property document numbers. Confirmation numbers start at 100000 (6+ digits, human friendly). */
+/**
+ * Per-property document numbers. Confirmation numbers start at 100000 (6+
+ * digits, human friendly) and carry the property's confirmation prefix
+ * (D36): the sequence row's own prefix stays empty for them, so numbers
+ * issued before Phase 9 are unchanged and the prefix is read at issue time.
+ */
 const SEQUENCES = {
   confirmation: { start: 100000, prefix: "" },
   cancellation: { start: 1000, prefix: "X" },
@@ -275,6 +334,9 @@ export async function allocateNumber(
   name: keyof typeof SEQUENCES,
 ): Promise<string> {
   const { value, prefix } = await nextSequenceValue(tx, propertyId, name, SEQUENCES[name]);
+  if (name === "confirmation") {
+    return formatConfirmationNumber(await findConfirmationPrefix(tx, propertyId), value);
+  }
   return `${prefix}${value.toString()}`;
 }
 

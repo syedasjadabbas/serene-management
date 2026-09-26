@@ -143,6 +143,11 @@ export interface GuestProfileView extends GuestSummaryView {
     readSensitive: boolean;
     addNote: boolean;
     manageCompanies: boolean;
+    /** Preferences for every property need an organization-scope grant (D3). */
+    manageGlobalPreferences: boolean;
+    /** Enrolment is open to property staff with loyalty:manage. */
+    enrollLoyalty: boolean;
+    /** Tier/status changes and point adjustments need organization scope (D3). */
     manageLoyalty: boolean;
     readHistory: boolean;
   };

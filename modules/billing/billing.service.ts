@@ -1682,7 +1682,7 @@ export async function folioHistory(
   const windows = await findWindows(prisma, ctx.propertyId, reservationRoomId);
   return resourceHistory(
     prisma,
-    ctx.organizationId,
+    ctx,
     windows.map((w) => w.id),
     200,
   );

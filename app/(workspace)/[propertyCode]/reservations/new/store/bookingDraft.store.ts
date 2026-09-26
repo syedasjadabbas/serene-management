@@ -7,6 +7,11 @@ import { create } from "zustand";
  * from the API, and the server re-validates everything on create.
  */
 export interface BookingDraft {
+  /**
+   * Property the draft belongs to. A draft never crosses properties: every
+   * id in it (room type, rate, codes, room) is property-owned (Phase 9).
+   */
+  propertyId: string | null;
   /** "walk-in": arrival today, one specific room, checked in on creation. */
   mode: "booking" | "walk-in";
   step: 1 | 2 | 3 | 4;
@@ -61,10 +66,12 @@ interface BookingDraftStore extends BookingDraft {
   setGuest: (guest: BookingDraft["guest"]) => void;
   setCompany: (company: BookingDraft["company"]) => void;
   setDetails: (details: Partial<BookingDraft["details"]>) => void;
-  reset: () => void;
+  /** Clears the draft and binds it to a property. */
+  reset: (propertyId: string | null) => void;
 }
 
 export const useBookingDraft = create<BookingDraftStore>()((set) => ({
+  propertyId: null,
   mode: "booking",
   step: 1,
   stay: null,
@@ -88,8 +95,9 @@ export const useBookingDraft = create<BookingDraftStore>()((set) => ({
       details: { ...s.details, bookerGuestId: "" },
     })),
   setDetails: (details) => set((s) => ({ details: { ...s.details, ...details } })),
-  reset: () =>
+  reset: (propertyId) =>
     set({
+      propertyId,
       mode: "booking",
       step: 1,
       stay: null,

@@ -452,9 +452,15 @@ export function findReservationDetail(tx: Tx, propertyId: string, reservationId:
   });
 }
 
-export function findAuditHistory(tx: Tx, organizationId: string, resourceIds: string[]) {
+/** History rows written at this property only (G3): never another property's rows. */
+export function findAuditHistory(
+  tx: Tx,
+  organizationId: string,
+  propertyId: string,
+  resourceIds: string[],
+) {
   return tx.auditLog.findMany({
-    where: { organizationId, resourceId: { in: resourceIds } },
+    where: { organizationId, propertyId, resourceId: { in: resourceIds } },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: 100,
     select: {

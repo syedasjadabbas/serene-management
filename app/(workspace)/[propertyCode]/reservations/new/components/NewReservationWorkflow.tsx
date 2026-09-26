@@ -31,10 +31,11 @@ export function NewReservationWorkflow() {
   const draft = useBookingDraft();
   const walkIn = params.get("walkIn") === "1";
 
-  // Start clean, or pre-filled from an availability "Book" link.
+  // Start clean, or pre-filled from an availability "Book" link. Switching
+  // property starts a new draft: ids never carry over between properties.
   useEffect(() => {
     const store = useBookingDraft.getState();
-    store.reset();
+    store.reset(property.id);
     store.setMode(walkIn ? "walk-in" : "booking");
     const arrival = params.get("arrival");
     const departure = params.get("departure");
@@ -47,9 +48,10 @@ export function NewReservationWorkflow() {
         rooms: Number(params.get("rooms") ?? 1) || 1,
       });
     }
-    // Run once on entry; later URL changes do not reset an in-progress draft.
+    // Run on entry and on a property switch; later search-param changes do
+    // not reset an in-progress draft.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [property.id]);
 
   if (isLoading || businessDate.isLoading) return <StatusPanel kind="loading" title="Loading" />;
   if (!can("reservations:create")) {

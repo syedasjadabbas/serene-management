@@ -432,13 +432,19 @@ export function PreferencesDialog({
         note: p.note ?? "",
       })),
   );
+  // Preferences for every property need an organization-level grant (D3);
+  // without it they are shown read-only and sent back unchanged.
+  const manageGlobal = guest.access.manageGlobalPreferences;
   const codes = options.data?.preferenceCodes ?? [];
   const groups = [...new Set(codes.map((c) => c.groupCode))];
   const selected = (id: string) => rows.find((r) => r.preferenceCodeId === id);
   const toggle = (id: string, on: boolean) =>
     setRows((list) =>
       on
-        ? [...list, { preferenceCodeId: id, propertyId: null, note: "" }]
+        ? [
+            ...list,
+            { preferenceCodeId: id, propertyId: manageGlobal ? null : property.id, note: "" },
+          ]
         : list.filter((r) => r.preferenceCodeId !== id),
     );
   const patch = (id: string, value: Partial<(typeof rows)[number]>) =>
@@ -446,7 +452,11 @@ export function PreferencesDialog({
   return (
     <FormDialog
       title="Preferences"
-      description={`Apply to every property or only ${property.code}. Changes are audited.`}
+      description={
+        manageGlobal
+          ? `Apply to every property or only ${property.code}. Changes are audited.`
+          : `Set preferences for ${property.code}. Preferences for every property are managed at organization level. Changes are audited.`
+      }
       onClose={onClose}
       onSubmit={async () => {
         const result = await save({
@@ -470,22 +480,28 @@ export function PreferencesDialog({
             .filter((c) => c.groupCode === group)
             .map((code) => {
               const row = selected(code.id);
+              const locked = !manageGlobal && row?.propertyId === null;
               return (
                 <div key={code.id} className="flex flex-wrap items-center gap-2">
                   <label className="flex min-h-11 min-w-44 items-center gap-2 text-sm">
                     <input
                       type="checkbox"
                       checked={!!row}
+                      disabled={locked}
                       onChange={(e) => toggle(code.id, e.target.checked)}
                     />
                     {code.name}
                   </label>
-                  {row ? (
+                  {row && locked ? (
+                    <span className="text-xs text-fg-muted">
+                      Every property{row.note ? ` · ${row.note}` : ""}
+                    </span>
+                  ) : row ? (
                     <>
                       <Select
                         label="Applies to"
                         options={[
-                          { value: "", label: "Every property" },
+                          ...(manageGlobal ? [{ value: "", label: "Every property" }] : []),
                           { value: property.id, label: `Only ${property.code}` },
                         ]}
                         value={row.propertyId ?? ""}

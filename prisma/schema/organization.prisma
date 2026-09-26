@@ -84,6 +84,10 @@ model Property {
   /// Local wall-clock times, "HH:MM".
   checkInTime     String       @default("14:00") @map("check_in_time") @db.VarChar(5)
   checkOutTime    String       @default("12:00") @map("check_out_time") @db.VarChar(5)
+  /// Phase 9: prefix of new confirmation numbers ("SMR-100045"); defaults to
+  /// the property code, unique within the organization. Earlier (unprefixed)
+  /// confirmation numbers are kept as they are.
+  confirmationPrefix String   @map("confirmation_prefix") @db.VarChar(10)
   status          RecordStatus @default(ACTIVE)
   createdAt       DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt       DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -141,6 +145,7 @@ model Property {
   roomFeatures               RoomFeature[]
 
   @@unique([organizationId, code])
+  @@unique([organizationId, confirmationPrefix])
   @@index([organizationId])
   @@map("properties")
 }

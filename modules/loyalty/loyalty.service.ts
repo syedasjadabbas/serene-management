@@ -5,7 +5,7 @@ import { runInTransaction } from "@/lib/db/transaction";
 import { auditActor, type SessionContext } from "@/lib/http/context";
 import { AppError, forbidden, notFound, staleVersion } from "@/lib/http/errors";
 import type { Permission } from "@/lib/permissions/catalog";
-import { hasPermissionAnywhere } from "@/lib/permissions/evaluate";
+import { hasOrganizationPermission, hasPermissionAnywhere } from "@/lib/permissions/evaluate";
 import { decodeCursor, encodeCursor } from "@/lib/utils/cursor";
 import { recordAudit } from "@/modules/audit/audit.service";
 import { guestFullName } from "@/modules/guests/guests.policy";
@@ -63,6 +63,20 @@ function requirePermission(ctx: SessionContext, permission: Permission) {
   if (!can(ctx, permission)) throw forbidden(permission);
 }
 
+/**
+ * Programs, tiers, membership tier/status and points are organization data
+ * shared by every property (D3): they need the grant at organization scope.
+ * Enrolment stays open to property staff holding loyalty:manage.
+ */
+function requireOrganizationPermission(ctx: SessionContext, permission: Permission) {
+  if (!hasOrganizationPermission(ctx.access, permission)) {
+    throw new AppError("FORBIDDEN", "This change needs an organization-level loyalty grant", {
+      permission,
+      reason: "ORGANIZATION_SCOPE_REQUIRED",
+    });
+  }
+}
+
 function rule(message: string, reason: string) {
   return new AppError("BUSINESS_RULE_VIOLATION", message, { reason });
 }
@@ -98,7 +112,7 @@ export async function loyaltyOverview(ctx: SessionContext): Promise<LoyaltyOverv
         members: t._count.memberships,
       })),
     })),
-    actions: { manage: can(ctx, "loyalty:manage") },
+    actions: { manage: hasOrganizationPermission(ctx.access, "loyalty:manage") },
   };
 }
 
@@ -106,7 +120,7 @@ export async function createProgram(
   ctx: SessionContext,
   input: CreateProgramInput,
 ): Promise<LoyaltyOverview> {
-  requirePermission(ctx, "loyalty:manage");
+  requireOrganizationPermission(ctx, "loyalty:manage");
   await runInTransaction(async (tx) => {
     if ((await programCodeTaken(tx, ctx.organizationId, input.code)) > 0) {
       throw conflict(`Code ${input.code} is already used`, "CODE_TAKEN", "code");
@@ -135,7 +149,7 @@ export async function updateProgram(
   programId: string,
   input: UpdateProgramInput,
 ): Promise<LoyaltyOverview> {
-  requirePermission(ctx, "loyalty:manage");
+  requireOrganizationPermission(ctx, "loyalty:manage");
   await runInTransaction(async (tx) => {
     const program = await findProgram(tx, ctx.organizationId, programId);
     if (!program) throw notFound("Loyalty program");
@@ -159,7 +173,7 @@ export async function createTier(
   programId: string,
   input: CreateTierInput,
 ): Promise<LoyaltyOverview> {
-  requirePermission(ctx, "loyalty:manage");
+  requireOrganizationPermission(ctx, "loyalty:manage");
   await runInTransaction(async (tx) => {
     const program = await findProgram(tx, ctx.organizationId, programId);
     if (!program) throw notFound("Loyalty program");
@@ -192,7 +206,7 @@ export async function updateTier(
   tierId: string,
   input: UpdateTierInput,
 ): Promise<LoyaltyOverview> {
-  requirePermission(ctx, "loyalty:manage");
+  requireOrganizationPermission(ctx, "loyalty:manage");
   await runInTransaction(async (tx) => {
     const tier = await findTier(tx, ctx.organizationId, tierId);
     if (!tier) throw notFound("Tier");
@@ -367,7 +381,7 @@ export async function changeMembership(
   membershipId: string,
   input: ChangeMembershipInput,
 ): Promise<GuestProfileView> {
-  requirePermission(ctx, "loyalty:manage");
+  requireOrganizationPermission(ctx, "loyalty:manage");
   const guestId = await runInTransaction(async (tx) => {
     const m = await lockMembership(tx, ctx.organizationId, membershipId);
     if (!m) throw notFound("Membership");
@@ -433,7 +447,7 @@ export async function adjustPoints(
   membershipId: string,
   input: PointsAdjustmentInput,
 ): Promise<GuestProfileView> {
-  requirePermission(ctx, "loyalty:manage");
+  requireOrganizationPermission(ctx, "loyalty:manage");
   const points = parsePoints(input.points);
   if (points === null || points === 0n) {
     throw new AppError("VALIDATION_FAILED", "Enter whole points", {

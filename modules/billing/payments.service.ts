@@ -5,6 +5,7 @@ import { AppError, notFound } from "@/lib/http/errors";
 import { type MoneyUnits, formatMoney, isMinorUnitAligned, parseMoney } from "@/lib/utils/money";
 import type { Tx } from "@/lib/db/prisma";
 import { recordAudit } from "@/modules/audit/audit.service";
+import { recordEvent } from "@/modules/integrations/outbox.service";
 import { fromDateOnly, toDateOnly } from "@/modules/business-date/business-date.policy";
 import { requireOpenBusinessDate } from "@/modules/business-date/business-date.service";
 import { runIdempotent } from "@/modules/idempotency/idempotency.service";
@@ -215,6 +216,15 @@ export async function postPayment(
           permission: "payments:create",
         },
       );
+      await recordEvent(
+        tx,
+        { organizationId: ctx.organizationId, propertyId: ctx.propertyId },
+        "payment.posted",
+        {
+          paymentId: payment.id,
+          folioId: folio.id,
+        },
+      );
       return {
         folioId: folio.id,
         paymentId: payment.id,
@@ -326,6 +336,15 @@ export async function voidPayment(
           permission: "payments:void",
         },
       );
+      await recordEvent(
+        tx,
+        { organizationId: ctx.organizationId, propertyId: ctx.propertyId },
+        "payment.voided",
+        {
+          paymentId: payment.id,
+          folioId: folio.id,
+        },
+      );
       return {
         folioId: folio.id,
         paymentId: payment.id,
@@ -435,6 +454,16 @@ export async function refundPayment(
           reason: input.reason,
           reasonCodeId: reason.id,
           permission: "payments:refund",
+        },
+      );
+      await recordEvent(
+        tx,
+        { organizationId: ctx.organizationId, propertyId: ctx.propertyId },
+        "payment.refunded",
+        {
+          paymentId: payment.id,
+          refundId: refund.id,
+          folioId: folio.id,
         },
       );
       return {

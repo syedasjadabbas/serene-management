@@ -78,13 +78,20 @@ export function searchGuests(
 export async function findGuestIdsByConfirmation(
   tx: Tx,
   propertyIds: string[],
-  confirmationNumber: string,
+  candidates: { equals: string[]; endsWith: string | null },
 ): Promise<string[]> {
   if (propertyIds.length === 0) return [];
   const rows = await tx.reservationRoom.findMany({
     where: {
       propertyId: { in: propertyIds },
-      reservation: { confirmationNumber },
+      reservation: {
+        OR: [
+          { confirmationNumber: { in: candidates.equals } },
+          ...(candidates.endsWith
+            ? [{ confirmationNumber: { endsWith: candidates.endsWith } }]
+            : []),
+        ],
+      },
     },
     select: { primaryGuestId: true, guests: { select: { guestId: true } } },
     take: 20,
@@ -350,17 +357,21 @@ export function findPreferenceRows(tx: Tx, guestId: string) {
 
 /**
  * Replaces the preferences at the scopes the caller manages: global ones
- * (property null) and those of `propertyIds`. Preferences of other
- * properties are left untouched.
+ * (property null, only with `includeGlobal`) and those of `propertyIds`.
+ * Preferences of other scopes are left untouched.
  */
 export async function replacePreferences(
   tx: Tx,
   guestId: string,
   propertyIds: string[],
+  includeGlobal: boolean,
   rows: { preferenceCodeId: string; propertyId: string | null; note: string | null }[],
 ) {
   await tx.guestPreference.deleteMany({
-    where: { guestId, OR: [{ propertyId: null }, { propertyId: { in: propertyIds } }] },
+    where: {
+      guestId,
+      OR: [...(includeGlobal ? [{ propertyId: null }] : []), { propertyId: { in: propertyIds } }],
+    },
   });
   if (rows.length > 0) {
     await tx.guestPreference.createMany({ data: rows.map((r) => ({ ...r, guestId })) });

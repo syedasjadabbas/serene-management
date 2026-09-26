@@ -26,11 +26,14 @@ export interface PropertyView {
   };
   phone: string | null;
   email: string | null;
+  /** Prefix of new confirmation numbers ("SMR" → "SMR-100045"). */
+  confirmationPrefix: string;
 }
 
 export interface PropertyConfigurationView {
   propertyId: string;
   timezone: string;
+  confirmationPrefix: string;
   checkInTime: string;
   checkOutTime: string;
   maxFolioWindows: number;
@@ -47,4 +50,23 @@ export interface PropertyConfigurationView {
   noShowTransactionCodeId: string | null;
   noShowReasonCodeId: string | null;
   updatedAt: string | null;
+}
+
+/** One kind of reference data in a setup copy (D37). */
+export interface PropertySetupSection {
+  key: string;
+  label: string;
+  copied: number;
+  /** Already present in the target (same code), or not copyable. */
+  skipped: number;
+  /** Codes not copied or copied without amounts: they need a manual review. */
+  needsReview: string[];
+}
+
+export interface PropertySetupCopyResult {
+  sourceProperty: { id: string; code: string; currencyCode: string };
+  targetProperty: { id: string; code: string; currencyCode: string };
+  sections: PropertySetupSection[];
+  copied: number;
+  skipped: number;
 }

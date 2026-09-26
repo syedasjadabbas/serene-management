@@ -4,10 +4,12 @@ import { prisma, type Tx } from "@/lib/db/prisma";
 import { databaseErrorCode, runInTransaction } from "@/lib/db/transaction";
 import { auditActor, type IdempotencyRequest, type PropertyContext } from "@/lib/http/context";
 import { AppError, notFound } from "@/lib/http/errors";
+import { logServerError } from "@/lib/http/log";
 import { hasPermission } from "@/lib/permissions/evaluate";
 import { decodeCursor, encodeCursor } from "@/lib/utils/cursor";
 import { formatMoney, parseMoney } from "@/lib/utils/money";
 import { recordAudit, userDisplayNames } from "@/modules/audit/audit.service";
+import { recordEvent } from "@/modules/integrations/outbox.service";
 import type { AuditActor } from "@/modules/audit/audit.types";
 import { reconcileInventoryInTx } from "@/modules/availability/availability.service";
 import { postNightsInTx, postNoShowFeeInTx } from "@/modules/billing/billing.service";
@@ -793,6 +795,16 @@ async function commitNightAudit(
       permission: "nightaudit:run",
     },
   );
+  await recordEvent(
+    tx,
+    { organizationId: ctx.organizationId, propertyId: ctx.propertyId },
+    "business_date.rolled",
+    {
+      nightAuditRunId: runId,
+      closedDate: businessDate,
+      openedDate: nextDate,
+    },
+  );
 }
 
 /**
@@ -814,7 +826,7 @@ async function failRun(
       : (databaseErrorCode(error) ?? "INTERNAL_ERROR");
   const message =
     error instanceof AppError ? error.message : "The audit failed unexpectedly; nothing was posted";
-  if (!(error instanceof AppError)) console.error("Night audit failed", error);
+  if (!(error instanceof AppError)) logServerError("Night audit failed", error);
   for (const step of steps) {
     if (step.status === "RUNNING") {
       step.status = "FAILED";

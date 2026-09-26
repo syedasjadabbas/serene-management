@@ -112,8 +112,19 @@ function addDecimal(a: string, b: string): string {
   return formatMoney(parseMoney(a) + parseMoney(b));
 }
 
-export async function buildPropertyInventory(db: Db, spec: InventorySpec): Promise<BuiltInventory> {
-  const { propertyId } = spec;
+/** Reference data a property copies (D37): what `copyPropertySetup` reproduces. */
+export type ReferenceSetup = Omit<
+  BuiltInventory,
+  "roomTypes" | "ratePlans" | "taxRules" | "packages"
+>;
+
+/**
+ * Reference setup of a property: market/source/channel/reason codes,
+ * reservation types, cancellation policies, charge and payment codes,
+ * payment methods, block statuses, housekeeping task types, maintenance
+ * categories and the night audit codes. Idempotent by code.
+ */
+export async function buildReferenceSetup(db: Db, propertyId: string): Promise<ReferenceSetup> {
   const upsertByCode = <T extends { id: string }>(existing: T | null, create: () => Promise<T>) =>
     existing ? Promise.resolve(existing) : create();
 
@@ -374,6 +385,131 @@ export async function buildPropertyInventory(db: Db, spec: InventorySpec): Promi
     );
     paymentMethods[code] = row.id;
   }
+
+  // Night audit configuration (Phase 8): fee code and automatic no-show reason,
+  // unless the property already chose its own.
+  await db.propertyConfiguration.updateMany({
+    where: { propertyId, noShowTransactionCodeId: null },
+    data: { noShowTransactionCodeId: noShowCharge.id },
+  });
+  await db.propertyConfiguration.updateMany({
+    where: { propertyId, noShowReasonCodeId: null },
+    data: { noShowReasonCodeId: reasonCodes["NO_SHOW:AUTO"]! },
+  });
+  const blockStatuses: Record<string, string> = {};
+  for (const [code, name, type, allowsPickup, isDefault, sortOrder] of [
+    ["INQ", "Inquiry", "INQUIRY", false, false, 1],
+    ["TENT", "Tentative", "NON_DEDUCT", false, false, 2],
+    ["DEF", "Definite", "DEDUCT", true, true, 3],
+    ["LOST", "Lost / cancelled", "CANCEL", false, false, 4],
+  ] as const) {
+    const row = await upsertByCode(
+      await db.blockStatus.findFirst({ where: { propertyId, code }, select: { id: true } }),
+      () =>
+        db.blockStatus.create({
+          data: { propertyId, code, name, type, allowsPickup, isDefault, sortOrder },
+          select: { id: true },
+        }),
+    );
+    blockStatuses[code] = row.id;
+  }
+  // Housekeeping task types and maintenance categories (Phase 4) ---------------------
+  const taskTypes: Record<string, string> = {};
+  for (const [code, name, minutes, changesRoomStatus, requiresInspection] of [
+    ["DEP", "Departure clean", 45, true, true],
+    ["STAY", "Stayover clean", 25, true, false],
+    ["DEEP", "Deep clean", 120, true, true],
+    ["TURN", "Turndown", 10, false, false],
+    ["SPEC", "Special cleaning", 60, true, true],
+  ] as const) {
+    const row = await upsertByCode(
+      await db.housekeepingTaskType.findFirst({
+        where: { propertyId, code },
+        select: { id: true },
+      }),
+      () =>
+        db.housekeepingTaskType.create({
+          data: {
+            propertyId,
+            code,
+            name,
+            estimatedMinutes: minutes,
+            changesRoomStatus,
+            requiresInspection,
+          },
+          select: { id: true },
+        }),
+    );
+    taskTypes[code] = row.id;
+  }
+  const maintenanceCategories: Record<string, string> = {};
+  for (const [code, name] of [
+    ["PLUMB", "Plumbing"],
+    ["ELEC", "Electrical"],
+    ["HVAC", "Heating and air conditioning"],
+    ["FURN", "Furniture and fixtures"],
+    ["GEN", "General"],
+  ] as const) {
+    const row = await upsertByCode(
+      await db.maintenanceCategory.findFirst({ where: { propertyId, code }, select: { id: true } }),
+      () =>
+        db.maintenanceCategory.create({ data: { propertyId, code, name }, select: { id: true } }),
+    );
+    maintenanceCategories[code] = row.id;
+  }
+  return {
+    reservationTypes,
+    marketCodes,
+    sourceCodes,
+    channels,
+    reasonCodes,
+    cancellationPolicies,
+    taskTypes,
+    maintenanceCategories,
+    chargeCodes,
+    paymentMethods,
+    blockStatuses,
+  };
+}
+
+export async function buildPropertyInventory(db: Db, spec: InventorySpec): Promise<BuiltInventory> {
+  const { propertyId } = spec;
+  const upsertByCode = <T extends { id: string }>(existing: T | null, create: () => Promise<T>) =>
+    existing ? Promise.resolve(existing) : create();
+
+  const reference = await buildReferenceSetup(db, propertyId);
+  const {
+    reservationTypes,
+    marketCodes,
+    sourceCodes,
+    channels,
+    reasonCodes,
+    cancellationPolicies,
+    taskTypes,
+    maintenanceCategories,
+    chargeCodes,
+    paymentMethods,
+    blockStatuses,
+  } = reference;
+  const roomCharge = { id: chargeCodes["1000"]! };
+  const taxGroup = await db.transactionCodeGroup.findFirst({
+    where: { propertyId, code: "TAX" },
+    select: { id: true },
+  });
+  const groups = { TAX: taxGroup!.id };
+  const upsertCode = async (
+    code: string,
+    data: Omit<Prisma.TransactionCodeUncheckedCreateInput, "propertyId" | "code">,
+  ) => {
+    const row = await upsertByCode(
+      await db.transactionCode.findFirst({ where: { propertyId, code }, select: { id: true } }),
+      () =>
+        db.transactionCode.create({ data: { propertyId, code, ...data }, select: { id: true } }),
+    );
+    chargeCodes[code] = row.id;
+    return row.id;
+  };
+
   const taxRules: Record<string, string> = {};
   for (const [index, tax] of (spec.taxes ?? []).entries()) {
     const transactionCodeId = await upsertCode(String(8000 + index * 10), {
@@ -415,17 +551,6 @@ export async function buildPropertyInventory(db: Db, spec: InventorySpec): Promi
       });
     }
   }
-
-  // Night audit configuration (Phase 8): fee code and automatic no-show reason,
-  // unless the property already chose its own.
-  await db.propertyConfiguration.updateMany({
-    where: { propertyId, noShowTransactionCodeId: null },
-    data: { noShowTransactionCodeId: noShowCharge.id },
-  });
-  await db.propertyConfiguration.updateMany({
-    where: { propertyId, noShowReasonCodeId: null },
-    data: { noShowReasonCodeId: reasonCodes["NO_SHOW:AUTO"]! },
-  });
 
   // Floors, room types, rooms ------------------------------------------------------
   const roomsPerFloor = spec.roomsPerFloor ?? 12;
@@ -632,23 +757,6 @@ export async function buildPropertyInventory(db: Db, spec: InventorySpec): Promi
     create: { propertyId, ratePlanId: bbkId, packageId: breakfast.id },
     update: {},
   });
-  const blockStatuses: Record<string, string> = {};
-  for (const [code, name, type, allowsPickup, isDefault, sortOrder] of [
-    ["INQ", "Inquiry", "INQUIRY", false, false, 1],
-    ["TENT", "Tentative", "NON_DEDUCT", false, false, 2],
-    ["DEF", "Definite", "DEDUCT", true, true, 3],
-    ["LOST", "Lost / cancelled", "CANCEL", false, false, 4],
-  ] as const) {
-    const row = await upsertByCode(
-      await db.blockStatus.findFirst({ where: { propertyId, code }, select: { id: true } }),
-      () =>
-        db.blockStatus.create({
-          data: { propertyId, code, name, type, allowsPickup, isDefault, sortOrder },
-          select: { id: true },
-        }),
-    );
-    blockStatuses[code] = row.id;
-  }
 
   if ((await db.rateSeason.count({ where: { ratePlanId: barId } })) === 0) {
     for (const [name, daysOfWeek, priority, weekend] of [
@@ -682,51 +790,6 @@ export async function buildPropertyInventory(db: Db, spec: InventorySpec): Promi
         });
       }
     }
-  }
-
-  // Housekeeping task types and maintenance categories (Phase 4) ---------------------
-  const taskTypes: Record<string, string> = {};
-  for (const [code, name, minutes, changesRoomStatus, requiresInspection] of [
-    ["DEP", "Departure clean", 45, true, true],
-    ["STAY", "Stayover clean", 25, true, false],
-    ["DEEP", "Deep clean", 120, true, true],
-    ["TURN", "Turndown", 10, false, false],
-    ["SPEC", "Special cleaning", 60, true, true],
-  ] as const) {
-    const row = await upsertByCode(
-      await db.housekeepingTaskType.findFirst({
-        where: { propertyId, code },
-        select: { id: true },
-      }),
-      () =>
-        db.housekeepingTaskType.create({
-          data: {
-            propertyId,
-            code,
-            name,
-            estimatedMinutes: minutes,
-            changesRoomStatus,
-            requiresInspection,
-          },
-          select: { id: true },
-        }),
-    );
-    taskTypes[code] = row.id;
-  }
-  const maintenanceCategories: Record<string, string> = {};
-  for (const [code, name] of [
-    ["PLUMB", "Plumbing"],
-    ["ELEC", "Electrical"],
-    ["HVAC", "Heating and air conditioning"],
-    ["FURN", "Furniture and fixtures"],
-    ["GEN", "General"],
-  ] as const) {
-    const row = await upsertByCode(
-      await db.maintenanceCategory.findFirst({ where: { propertyId, code }, select: { id: true } }),
-      () =>
-        db.maintenanceCategory.create({ data: { propertyId, code, name }, select: { id: true } }),
-    );
-    maintenanceCategories[code] = row.id;
   }
 
   return {

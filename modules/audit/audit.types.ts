@@ -28,6 +28,11 @@ export interface AuditEntry {
   permission?: Permission;
 }
 
+/** Organization audit trail row: where it happened (null: organization level). */
+export interface OrganizationAuditLogView extends AuditLogView {
+  property: { id: string; code: string } | null;
+}
+
 /** Audit record as exposed by the API (never the raw table row). */
 export interface AuditLogView {
   id: string;

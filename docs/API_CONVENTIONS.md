@@ -237,6 +237,21 @@ PUT    /api/v1/properties/{id}/rate-plans/{planId}/accounts            { version
 
 `POST /reservations` (and walk-ins) accept `companyId` and `bookerGuestId`; `GET /availability` accepts `companyId` and then also quotes that company's negotiated plans. Error reasons: `POSSIBLE_DUPLICATE`, `CODE_TAKEN`, `ALREADY_ENROLLED`, `NUMBER_TAKEN`, `STALE_VERSION` (409); `NOT_COMPANY_CONTACT`, `COMPANY_RESTRICTED`, `RATE_REQUIRES_COMPANY`, `PLAN_NOT_NEGOTIATED`, `INVALID_MEMBERSHIP_CHANGE`, `INSUFFICIENT_POINTS`, `MEMBERSHIP_INACTIVE`, `PROGRAM_INACTIVE`, `TIER_INACTIVE`, `GUEST_INACTIVE`, `PLAN_HAS_ACTIVE_CHILDREN` (422). Profiles, companies and memberships of another organization answer 404.
 
+**Implemented in Phase 9 (multi-property operations)** — organization-level routes; each fans out over the caller's accessible properties only:
+
+```text
+GET    /api/v1/organization/overview                              one card per accessible property: business date, date status, audit state, today's figures (dashboard:read), open balance (reports:financial)
+GET    /api/v1/organization/reports/performance?from=&to=&propertyIds=a,b   rooms, movements and money per property (own currency), per-currency totals, counts across all properties, excluded properties   reports:read (+ reports:financial for money)
+GET    /api/v1/organization/reports/performance/export?from=&to=  CSV of the same, currency column on every row   reports:read + reports:export
+GET    /api/v1/availability?arrival=&departure=&adults=&children=&rooms=&propertyIds=   per property: status (AVAILABLE, UNAVAILABLE, NOT_LIVE, ARRIVAL_IN_PAST), room types, lowest bookable total in the property currency, canBook   search:global + availability:read
+GET    /api/v1/audit-logs?scope=organization|{propertyId}&risk=&resourceType=&resourceId=&action=&userId=&from=&to=&cursor=&limit=   organization audit trail (newest first, keyset cursor; from/to are UTC days)   audit:read
+POST   /api/v1/properties/{target}/setup/copy-from/{sourceId}      { reason, reasonCodeId? } → sections copied / skipped / needsReview   properties:manage (HIGH); 422 PROPERTY_LIVE after go-live
+POST   /api/v1/properties                                          { …, confirmationPrefix? } (defaults to the code; 409 when used by another property)
+PATCH  /api/v1/properties/{id}/configuration                      { confirmationPrefix?, … } (422 after go-live, 409 when taken)
+```
+
+Central availability never creates a reservation: "Book" opens `/[propertyCode]/reservations/new?arrival&departure&adults&children&rooms` of one property, which re-checks availability and price. Confirmation numbers are `PREFIX-number`; `q` on reservation and guest searches accepts `SMR-100045`, `smr-100045-2`, the digits alone and plain legacy numbers. Per-route rate limits are keyed by user on authenticated routes (D39).
+
 ## 3. Request validation
 
 - Every handler declares Zod schemas for `params`, `query` and `body`. Objects are `.strict()` (unknown fields → `VALIDATION_FAILED`).
@@ -318,6 +333,7 @@ Rules: messages are safe to show; the client localizes by `code` (+ `details`), 
 - Services receive `ctx.propertyId`; repositories **must** include it in every `where` for property-scoped tables (and composite FKs make cross-property writes fail).
 - Loading a resource checks `resource.property_id = ctx.propertyId`; mismatch → `404`.
 - Organization-scoped endpoints filter by `ctx.organizationId`.
+- Organization endpoints that take property ids in the query (`propertyIds`, `scope`) intersect them with the caller's access and answer `403` for any id outside it (Phase 9).
 
 ## 9. Authentication
 
@@ -357,6 +373,8 @@ Rules: messages are safe to show; the client localizes by `code` (+ `details`), 
 - Long-running operations (night audit, exports, rooming list import) return `202` with a job/run resource.
 
 ## 15. Real-time events
+
+**As implemented (Phase 9)**: commands write outbox events in their transaction (ARCHITECTURE D35); the SSE endpoint below is not built yet.
 
 `GET /api/v1/properties/{propertyId}/events` (Server-Sent Events): `event: room.status_changed` / `data: { roomId, … }`. Events are hints to refetch (tag invalidation), never the source of truth; payloads contain ids and changed fields, no sensitive data.
 

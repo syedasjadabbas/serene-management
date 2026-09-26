@@ -7,6 +7,6 @@ export const GET = definePropertyRoute({
   permission: "reports:export",
   params: reportParamsSchema,
   query: reportQuerySchema,
-  rateLimit: { name: "reports.export.ip", limit: 30, windowMs: 60_000 },
+  rateLimit: { name: "reports.export", limit: 30, windowMs: 60_000 },
   handler: ({ ctx, params, query }) => exportReport(ctx, params.reportKey, query),
 });

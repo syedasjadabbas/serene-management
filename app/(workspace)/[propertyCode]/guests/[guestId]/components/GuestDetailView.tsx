@@ -121,7 +121,7 @@ export function GuestDetailView({ guestId }: { guestId: string }) {
                 Add note
               </Button>
             ) : null}
-            {a.manageLoyalty && g.status === "ACTIVE" ? (
+            {a.enrollLoyalty && g.status === "ACTIVE" ? (
               <Button
                 size="sm"
                 variant="secondary"

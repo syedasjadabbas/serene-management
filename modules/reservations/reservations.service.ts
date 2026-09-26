@@ -11,6 +11,7 @@ import { decodeCursor, encodeCursor } from "@/lib/utils/cursor";
 import { formatMoney, parseMoney, sum } from "@/lib/utils/money";
 import { requireReservationCompany } from "@/modules/accounts/accounts.service";
 import { recordAudit } from "@/modules/audit/audit.service";
+import { recordEvent } from "@/modules/integrations/outbox.service";
 import type { RestrictionViolation } from "@/modules/availability/availability.policy";
 import {
   type InventoryDemand,
@@ -30,6 +31,7 @@ import { requireOpenBusinessDate } from "@/modules/business-date/business-date.s
 import { guestFullName, normalizeName } from "@/modules/guests/guests.policy";
 import { requireGuest } from "@/modules/guests/guests.service";
 import { allocateNumber } from "@/modules/properties/properties.service";
+import { parseConfirmationNumber } from "@/modules/properties/confirmation-number.policy";
 import {
   type StayRequest,
   currencyMinorUnits,
@@ -551,6 +553,15 @@ export async function createReservationInTx(
       permission: input.override ? "reservations:override_availability" : "reservations:create",
     },
   );
+  await recordEvent(
+    tx,
+    { organizationId: ctx.organizationId, propertyId: ctx.propertyId },
+    "reservation.created",
+    {
+      reservationId: reservation.id,
+      reservationRoomIds: roomIds,
+    },
+  );
   return { reservationId: reservation.id, reservationRoomIds: roomIds };
 }
 
@@ -733,6 +744,16 @@ export async function updateReservationRoom(
         },
         reason: input.reason ?? null,
         permission: input.override ? "reservations:override_availability" : "reservations:update",
+      },
+    );
+    await recordEvent(
+      tx,
+      { organizationId: ctx.organizationId, propertyId: ctx.propertyId },
+      "reservation.modified",
+      {
+        reservationId: current.reservationId,
+        reservationRoomId: current.id,
+        changedFields: changed,
       },
     );
     return current.reservationId;
@@ -928,6 +949,17 @@ export async function releaseReservationInTx(
       permission: command.permission,
     },
   );
+  if (action === "cancel") {
+    await recordEvent(
+      tx,
+      { organizationId: ctx.organizationId, propertyId: ctx.propertyId },
+      "reservation.cancelled",
+      {
+        reservationId: current.reservationId,
+        reservationRoomId: current.id,
+      },
+    );
+  }
   return { inventoryReleased: consumes, cancellationNumber };
 }
 
@@ -1608,7 +1640,7 @@ export async function listReservations(
     const nameTokens = normalizeName(raw).split(" ").filter(Boolean).slice(0, 5);
     and.push({
       OR: [
-        { reservation: { confirmationNumber: { startsWith: raw } } },
+        ...confirmationSearch(raw),
         { cancellationNumber: raw.toUpperCase() },
         { reservation: { externalReference: raw } },
         { room: { number: raw } },
@@ -1798,7 +1830,7 @@ export async function getReservation(
   const reservation = await findReservationDetail(prisma, ctx.propertyId, reservationId);
   if (!reservation) throw notFound("Reservation");
   const minorUnits = await currencyMinorUnits(prisma, ctx.currencyCode);
-  const history = await findAuditHistory(prisma, ctx.organizationId, [
+  const history = await findAuditHistory(prisma, ctx.organizationId, ctx.propertyId, [
     reservation.id,
     ...reservation.rooms.map((r) => r.id),
     ...reservation.rooms.flatMap((r) => (r.stay ? [r.stay.id] : [])),
@@ -1970,4 +2002,27 @@ export async function getReservation(
       after: h.after,
     })),
   };
+}
+
+/**
+ * Confirmation-number matches for the free-text search (D36). "SMR-10003"
+ * finds that property's prefixed numbers; bare digits find the legacy
+ * unprefixed numbers and any prefixed number with those digits.
+ */
+function confirmationSearch(raw: string): Prisma.ReservationRoomWhereInput[] {
+  const parsed = parseConfirmationNumber(raw);
+  if (!parsed) {
+    return [{ reservation: { confirmationNumber: { startsWith: raw.toUpperCase() } } }];
+  }
+  if (parsed.prefix) {
+    return [
+      {
+        reservation: { confirmationNumber: { startsWith: `${parsed.prefix}-${parsed.number}` } },
+      },
+    ];
+  }
+  return [
+    { reservation: { confirmationNumber: { startsWith: parsed.number } } },
+    { reservation: { confirmationNumber: { contains: `-${parsed.number}` } } },
+  ];
 }

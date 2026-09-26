@@ -110,7 +110,7 @@ export async function getAccount(ctx: SessionContext, accountId: string): Promis
       accountId,
       propertiesWithPermission(ctx.access, "rates:read"),
     ),
-    can(ctx, "audit:read") ? resourceHistory(prisma, ctx.organizationId, [accountId], 50) : null,
+    can(ctx, "audit:read") ? resourceHistory(prisma, ctx, [accountId], 50) : null,
   ]);
   const codes = new Map(
     (

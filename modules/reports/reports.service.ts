@@ -1376,6 +1376,82 @@ export async function exportReport(
   });
 }
 
+// --- Organization reports (Phase 9) -------------------------------------------------------------
+
+export interface PropertyPerformance {
+  businessDate: string;
+  /** Last night covered: the range end, capped at the open business date. */
+  coveredTo: string;
+  /** The open business date is in the range and read live. */
+  liveIncluded: boolean;
+  nights: number;
+  facts: RoomNightFacts;
+  movements: { arrivals: number; departures: number; noShows: number; cancellations: number };
+  roomRevenue: MoneyUnits;
+  /** Room, package and other revenue (net of tax). */
+  totalRevenue: MoneyUnits;
+  tax: MoneyUnits;
+  payments: MoneyUnits;
+  refunds: MoneyUnits;
+}
+
+/**
+ * One property's room-night facts over an inclusive business-date range, in
+ * its own currency: closed dates from the daily statistics snapshots, the
+ * open date live (D38). Dates after the open date are not covered yet.
+ * Null when the property is not live or the range starts after its open date.
+ */
+export async function propertyPerformance(
+  ctx: PropertyContext,
+  from: string,
+  to: string,
+): Promise<PropertyPerformance | null> {
+  if (!ctx.businessDate || from > ctx.businessDate) return null;
+  const config = await findAuditConfiguration(prisma, ctx.propertyId);
+  const env: ReportEnv = {
+    ctx,
+    businessDate: ctx.businessDate,
+    from,
+    to,
+    roomTypeId: null,
+    risk: null,
+    financial: false,
+    noShowCodeId: config.noShowTransactionCodeId,
+  };
+  const last = coveredTo(env);
+  const list = await nightFacts(env, from, last);
+  const total = totalFacts(list);
+  return {
+    businessDate: ctx.businessDate,
+    coveredTo: last,
+    liveIncluded: list.some((f) => f.live),
+    nights: list.length,
+    facts: total,
+    movements: {
+      arrivals: list.reduce((n, f) => n + f.arrivals, 0),
+      departures: list.reduce((n, f) => n + f.departures, 0),
+      noShows: list.reduce((n, f) => n + f.noShows, 0),
+      cancellations: list.reduce((n, f) => n + f.cancellations, 0),
+    },
+    roomRevenue: total.roomRevenue,
+    totalRevenue: list.reduce(
+      (sum, f) => sum + f.roomRevenue + f.packageRevenue + f.otherRevenue,
+      0n,
+    ),
+    tax: list.reduce((sum, f) => sum + f.tax, 0n),
+    payments: list.reduce((sum, f) => sum + f.payments, 0n),
+    refunds: list.reduce((sum, f) => sum + f.refunds, 0n),
+  };
+}
+
+/** Open folio balance of a property right now, in its currency (financial reports only). */
+export async function propertyOpenBalance(
+  ctx: PropertyContext,
+): Promise<{ balance: MoneyUnits; folios: number }> {
+  const balances = await sumOpenBalances(prisma, ctx.propertyId);
+  return { balance: units(balances.balance), folios: balances.folios };
+}
+
 // --- Dashboard ----------------------------------------------------------------------------------
 
 export async function getDashboard(ctx: PropertyContext): Promise<DashboardView> {

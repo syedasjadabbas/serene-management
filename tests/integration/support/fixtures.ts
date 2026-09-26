@@ -23,13 +23,13 @@ export interface FixtureOrg {
   organizationId: string;
   suffix: string;
   roleIds: Record<string, string>;
-  properties: Record<string, { id: string; code: string; timezone: string }>;
+  properties: Record<string, { id: string; code: string; timezone: string; currencyCode: string }>;
   adminId: string;
   adminCtx: SessionContext;
 }
 
 export async function createFixtureOrg(options: {
-  properties: { key: string; timezone: string; live?: boolean }[];
+  properties: { key: string; timezone: string; live?: boolean; currencyCode?: string }[];
 }): Promise<FixtureOrg> {
   const suffix = uniqueSuffix();
   const org = await prisma.$transaction((tx) =>
@@ -85,7 +85,7 @@ export async function createFixtureOrg(options: {
       code,
       name: `Property ${spec.key} ${suffix}`,
       timezone: spec.timezone,
-      currencyCode: "PKR",
+      currencyCode: spec.currencyCode ?? "PKR",
       countryCode: "PK",
       checkInTime: "14:00",
       checkOutTime: "12:00",
@@ -105,7 +105,12 @@ export async function createFixtureOrg(options: {
         reason: "Test fixture",
       });
     }
-    properties[spec.key] = { id: property.id, code: property.code, timezone: property.timezone };
+    properties[spec.key] = {
+      id: property.id,
+      code: property.code,
+      timezone: property.timezone,
+      currencyCode: property.currencyCode,
+    };
   }
 
   return {
@@ -180,7 +185,7 @@ export async function buildFixtureInventory(
   const businessDate = current.date.toISOString().slice(0, 10);
   const inventory = await buildPropertyInventory(prisma, {
     propertyId: property.id,
-    currencyCode: "PKR",
+    currencyCode: property.currencyCode,
     seasonStart: addDays(businessDate, -10),
     seasonEnd: addDays(businessDate, 400),
     roomTypes: roomTypes.map((rt) => ({

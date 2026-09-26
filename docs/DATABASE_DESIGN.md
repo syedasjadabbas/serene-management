@@ -275,6 +275,22 @@ Migration `20261001090000_night_audit_finance`:
 - **`daily_statistics`** gains `currency_code`, `no_show_revenue` (kept out of room revenue and ADR), `refunds_total`, `voids_total`, `adjustments_total` and the guest-ledger roll-forward `ledger_opening_balance` / `ledger_closing_balance` (sum of the ledger before / through the date); the ledger roll-forward report checks every closed date against them.
 - **Seed**: the inventory builder adds the no-show fee code `1090` (bucket ROOM), the reason `NO_SHOW:AUTO`, sets both in the property configuration when empty, and marks guaranteed reservation types to charge no-shows. Closed dates are produced only by running the real night audit (no fabricated history).
 
+### Phase 9 notes
+
+Migration `20261015090000_multi_property_foundation`:
+
+| Rule                                                                                           | Mechanism                                                                                                                                                                                                                              |
+| ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Every property prefixes its new confirmation numbers; the prefix is unique in the organization | Column `properties.confirmation_prefix` (VARCHAR(10), backfilled with `upper(code)`, NOT NULL), check `properties_confirmation_prefix_chk` (`^[A-Z][A-Z0-9]{1,9}$`), unique index `properties_organization_id_confirmation_prefix_key` |
+| Resource history and the organization trail are indexed by organization and resource           | Index `audit_logs_organization_id_resource_id_created_at_idx` (`organization_id, resource_id, created_at DESC`); `EXPLAIN` of the history query shows an index scan on it                                                              |
+| New and updated groups belong to a property                                                    | Check `groups_property_required_chk` (`property_id IS NOT NULL`) added `NOT VALID`: legacy rows are kept as they are                                                                                                                   |
+
+- **Checks made before writing the migration**: one organization, SMR (PKR) and SDX (AED); no group without a property; every confirmation number plain digits (SMR 100000–100029, SDX 100000–100015); `audit_logs` without an organization/resource index; `outbox_events` empty; no drift.
+- **Not added** (deferred with the integration phase): `integration_clients`, `integration_api_keys`, `integration_inbox`, `external_mappings`.
+- **Outbox**: `outbox_events` (Phase 0) now receives rows from `recordEvent` in the command transaction (ARCHITECTURE D35); `payload` holds `version`, `organizationId`, `propertyId` and entity ids.
+- **Existing confirmation numbers** are unchanged; the sequence rows keep their empty prefix and the property prefix is added when a number is issued.
+- **Seed**: the first demo property gets its reference codes from the builder (`buildReferenceSetup`), the second copies them with `copyPropertySetup` before its go-live; taxes, rooms, rates and bookings stay property-specific.
+
 ### Time zones (all phases)
 
 - **Instants** (`timestamptz`) are stored as real UTC instants. Every application session runs with `TimeZone=UTC` (set on the connection in `lib/db/prisma.ts`), because `@prisma/adapter-pg` sends a JavaScript `Date` as offset-less UTC wall-clock text and re-labels timestamps it reads as `+00:00`: in any other session zone both directions are shifted by the zone offset. Values written by PostgreSQL itself (`now()`, column defaults, triggers) and by the application therefore share one clock.

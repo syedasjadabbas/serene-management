@@ -20,6 +20,13 @@ export const propertyCodeSchema = z
   .regex(/^[A-Z][A-Z0-9]{1,9}$/, "2–10 letters or digits, starting with a letter")
   .refine((code) => !RESERVED_PROPERTY_CODES.includes(code), "This code is reserved");
 
+/** Prefix of new confirmation numbers (D36); defaults to the property code. */
+export const confirmationPrefixSchema = z
+  .string()
+  .trim()
+  .toUpperCase()
+  .regex(/^[A-Z][A-Z0-9]{1,9}$/, "2–10 letters or digits, starting with a letter");
+
 export const timeZoneSchema = z
   .string()
   .trim()
@@ -32,6 +39,7 @@ export const propertyParamsSchema = z.object({ propertyId: idSchema }).strict();
 export const createPropertySchema = highRiskReasonSchema
   .extend({
     code: propertyCodeSchema,
+    confirmationPrefix: confirmationPrefixSchema.optional(),
     name: z.string().trim().min(2).max(200),
     legalName: z.string().trim().max(200).optional(),
     timezone: timeZoneSchema,
@@ -51,6 +59,8 @@ export type CreatePropertyInput = z.infer<typeof createPropertySchema>;
 export const updatePropertyConfigurationSchema = highRiskReasonSchema
   .extend({
     timezone: timeZoneSchema.optional(),
+    /** Changeable only before go-live (D36). */
+    confirmationPrefix: confirmationPrefixSchema.optional(),
     checkInTime: localTimeSchema.optional(),
     checkOutTime: localTimeSchema.optional(),
     maxFolioWindows: z.number().int().min(1).max(99).optional(),
@@ -75,3 +85,11 @@ export const updatePropertyConfigurationSchema = highRiskReasonSchema
   );
 
 export type UpdatePropertyConfigurationInput = z.infer<typeof updatePropertyConfigurationSchema>;
+
+export const copySetupParamsSchema = z
+  .object({ propertyId: idSchema, sourceId: idSchema })
+  .strict();
+
+export const copySetupSchema = highRiskReasonSchema.strict();
+
+export type CopySetupInput = z.infer<typeof copySetupSchema>;

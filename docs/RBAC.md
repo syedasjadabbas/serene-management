@@ -204,3 +204,26 @@ No permission was added. Profiles are organization data: a permission held at an
 | Profile audit trail on the profile page            | + `audit:read`                                        | —                                          |
 
 Role templates: `loyalty:read` was added to the Read-only template (and so to Auditor) and to the Reservations agent template (and so to Front desk agent and Front office manager). Templates apply when an organization's roles are created; existing organizations keep their tailored roles until an administrator grants the permission.
+
+## Multi-property operations (Phase 9, as implemented)
+
+No permission was added (`integrations:manage` is deliberately not created). Organization endpoints only ever return properties the caller can access; a property id outside that scope in a query answers 403 instead of being dropped silently.
+
+| Action                                                  | Permission                                                                                                  | Scope                        |
+| ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ---------------------------- |
+| Organization workspace                                  | organization grants or more than one property (UI); each section re-checks on the server                    | —                            |
+| Organization overview                                   | any accessible property; today's figures with `dashboard:read` there, open balance with `reports:financial` | per property                 |
+| Organization performance report                         | `reports:read` per property; money with `reports:financial` there; CSV with `reports:export`                | per property                 |
+| Central availability                                    | `search:global` and `availability:read` per property; "Book" hands off to `reservations:create` there       | per property                 |
+| Organization audit trail                                | `audit:read` per property; organization-level rows with `audit:read` at organization scope                  | per property / organization  |
+| Users list                                              | `users:read` or `users:manage`; assignments shown only for scopes where the caller holds one of them        | per scope                    |
+| Create a property, copy setup (before go-live)          | `properties:manage` ★ (HIGH, reason)                                                                        | organization                 |
+| Confirmation prefix (before go-live)                    | `settings:manage` ★ (HIGH, reason)                                                                          | property                     |
+| Loyalty programs, tiers, membership tier/status, points | `loyalty:manage` ★                                                                                          | **organization** (D41)       |
+| Loyalty enrollment                                      | `loyalty:manage` ★                                                                                          | any property                 |
+| Preferences for every property                          | `guests:update`                                                                                             | **organization** (D41)       |
+| Property preferences, profile editing                   | `guests:update`                                                                                             | that property / any property |
+
+- **Organization scope** means a grant from an ORGANIZATION-scope role assignment (`hasOrganizationPermission`); a property grant of the same permission is not enough. Such grants also cover every property of the organization (§1).
+- **History** (D41): property auditors see the rows written at properties where they hold `audit:read`; organization-level rows (guests, companies, loyalty, users, properties) need `audit:read` at organization scope.
+- **Loyalty UI**: the guest profile shows _Enroll_ with a property grant and _Tier / status_ and _Points_ only with the organization grant; the preferences dialog shows preferences for every property read-only without the organization grant.

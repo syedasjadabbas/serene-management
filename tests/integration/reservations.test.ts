@@ -133,7 +133,8 @@ describe("create and retrieve", () => {
     const r = await create(agent, booking({ specialRequests: "High floor please", eta: "15:30" }));
     expect(r.status).toBe(201);
     const detail = r.body.data;
-    expect(detail.confirmationNumber).toMatch(/^\d{6,}$/);
+    // Property-prefixed (D36): the prefix defaults to the property code.
+    expect(detail.confirmationNumber).toMatch(new RegExp(`^${org.properties.A!.code}-\\d{6,}$`));
     const room = detail.rooms[0];
     expect(room).toMatchObject({
       status: "RESERVED",
@@ -210,7 +211,7 @@ describe("create and retrieve", () => {
     );
     expect(results.map((r) => r.status)).toEqual([201, 201, 201, 201, 201]);
     const numbers = results
-      .map((r) => Number(r.body.data.confirmationNumber))
+      .map((r) => Number(String(r.body.data.confirmationNumber).split("-").pop()))
       .sort((a, b) => a - b);
     expect(new Set(numbers).size).toBe(5);
     expect(numbers.at(-1)! - numbers[0]!).toBe(4);
@@ -591,6 +592,13 @@ describe("search", () => {
     expect(
       byNumber.body.data.map((r: { confirmationNumber: string }) => r.confirmationNumber),
     ).toEqual([confirmation]);
+    // The digits alone and a lower-case prefix find the prefixed number (D36).
+    for (const q of [String(confirmation).split("-").pop()!, String(confirmation).toLowerCase()]) {
+      const found = await list({ q });
+      expect(
+        found.body.data.map((r: { confirmationNumber: string }) => r.confirmationNumber),
+      ).toContain(confirmation);
+    }
     const byName = await list({ q: "hadd" });
     expect(
       byName.body.data.some((r: { guest: { name: string } }) => r.guest.name === "Haddad, Layla"),

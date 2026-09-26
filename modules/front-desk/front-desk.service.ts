@@ -6,7 +6,12 @@ import { AppError, forbidden, notFound, staleVersion } from "@/lib/http/errors";
 import type { Permission } from "@/lib/permissions/catalog";
 import { hasPermission } from "@/lib/permissions/evaluate";
 import { decodeCursor, encodeCursor } from "@/lib/utils/cursor";
-import { recordAudit, resourceHistory, userDisplayNames } from "@/modules/audit/audit.service";
+import {
+  recordAudit,
+  propertyResourceHistory,
+  userDisplayNames,
+} from "@/modules/audit/audit.service";
+import { recordEvent } from "@/modules/integrations/outbox.service";
 import { fromDateOnly, toDateOnly } from "@/modules/business-date/business-date.policy";
 import { requireOpenBusinessDate } from "@/modules/business-date/business-date.service";
 import { normalizeName } from "@/modules/guests/guests.policy";
@@ -292,6 +297,16 @@ async function checkInInTx(
       permission: notReadyAccepted ? "rooms:update_status" : "frontdesk:checkin",
     },
   );
+  await recordEvent(
+    tx,
+    { organizationId: ctx.organizationId, propertyId: ctx.propertyId },
+    "stay.checked_in",
+    {
+      stayId: stay.id,
+      reservationId: current.reservationId,
+      reservationRoomId: current.id,
+    },
+  );
   return stay.id;
 }
 
@@ -535,6 +550,16 @@ export async function checkOut(
         reason: input.reason ?? null,
         reasonCodeId: reasonCode?.id ?? null,
         permission: "frontdesk:checkout",
+      },
+    );
+    await recordEvent(
+      tx,
+      { organizationId: ctx.organizationId, propertyId: ctx.propertyId },
+      "stay.checked_out",
+      {
+        stayId: stay!.id,
+        reservationId: current.reservationId,
+        reservationRoomId: current.id,
       },
     );
   });
@@ -847,7 +872,7 @@ export async function getStay(ctx: PropertyContext, stayId: string): Promise<Sta
   const departure = toDateOnly(rr.departureDate);
   const businessDate = ctx.businessDate;
 
-  const history = await resourceHistory(prisma, ctx.organizationId, [stay.id, rr.id]);
+  const history = await propertyResourceHistory(prisma, ctx, [stay.id, rr.id]);
   // Status changes of the rooms this stay used, while the guest was in house.
   const usedRooms = [...new Set([stay.room.id, ...rr.assignments.map((a) => a.roomId)])];
   const until = stay.checkedOutAt?.toISOString() ?? null;

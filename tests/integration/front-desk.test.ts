@@ -505,7 +505,7 @@ describe("walk-in", () => {
       include: { reservation: true },
     });
     expect(rr).toMatchObject({ status: "IN_HOUSE", isWalkIn: true, roomId });
-    expect(rr.reservation.confirmationNumber).toMatch(/^\d{6,}$/);
+    expect(rr.reservation.confirmationNumber).toMatch(/^[A-Z][A-Z0-9]{1,9}-\d{6,}$/);
     const creation = await auditLogsFor(rr.reservationId);
     expect(creation[0]!.after).toMatchObject({ walkIn: true });
   });

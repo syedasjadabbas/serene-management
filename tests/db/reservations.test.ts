@@ -43,9 +43,9 @@ beforeAll(async () => {
   db = await createMigratedDatabase();
   await db.exec(`
     INSERT INTO organizations (id, code, name, base_currency, updated_at) VALUES ('${ORG}', 'ORG', 'Org', 'PKR', now());
-    INSERT INTO properties (id, organization_id, code, name, timezone, currency_code, country_code, updated_at) VALUES
-      ('${P1}', '${ORG}', 'P1', 'Property 1', 'Asia/Karachi', 'PKR', 'PK', now()),
-      ('${P2}', '${ORG}', 'P2', 'Property 2', 'Asia/Dubai', 'AED', 'AE', now());
+    INSERT INTO properties (id, organization_id, code, confirmation_prefix, name, timezone, currency_code, country_code, updated_at) VALUES
+      ('${P1}', '${ORG}', 'P1', 'P1', 'Property 1', 'Asia/Karachi', 'PKR', 'PK', now()),
+      ('${P2}', '${ORG}', 'P2', 'P2', 'Property 2', 'Asia/Dubai', 'AED', 'AE', now());
     INSERT INTO room_types (id, property_id, code, name, max_occupancy, max_adults, updated_at) VALUES
       ('${RT_P1}', '${P1}', 'DLX', 'Deluxe', 3, 3, now()),
       ('${RT_P2}', '${P2}', 'DLX', 'Deluxe', 3, 3, now());

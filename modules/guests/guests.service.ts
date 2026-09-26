@@ -7,6 +7,7 @@ import { AppError, forbidden, notFound, staleVersion } from "@/lib/http/errors";
 import type { Permission } from "@/lib/permissions/catalog";
 import {
   canAccessProperty,
+  hasOrganizationPermission,
   hasPermission,
   hasPermissionAnywhere,
   propertiesWithPermission,
@@ -16,6 +17,10 @@ import { formatMoney, parseMoney } from "@/lib/utils/money";
 import { recordAudit, resourceHistory } from "@/modules/audit/audit.service";
 import { fromDateOnly, toDateOnly } from "@/modules/business-date/business-date.policy";
 import { displayConfirmation } from "@/modules/reservations/reservations.policy";
+import {
+  confirmationCandidates,
+  parseConfirmationNumber,
+} from "@/modules/properties/confirmation-number.policy";
 import {
   dateOfBirthProblem,
   duplicateContactValue,
@@ -111,11 +116,14 @@ export async function searchGuests(
     const raw = query.q.trim();
     // A confirmation number finds its guests, but only in properties whose
     // reservations the caller may read.
-    const confirmationGuestIds = /^[A-Z0-9-]{4,20}$/i.test(raw)
+    // "SMR-100045", "SMR-100045-2", legacy "100029" and bare digits of a
+    // prefixed number are all understood (D36).
+    const confirmation = parseConfirmationNumber(raw);
+    const confirmationGuestIds = confirmation
       ? await findGuestIdsByConfirmation(
           prisma,
           propertiesWithPermission(ctx.access, "reservations:read"),
-          raw.toUpperCase().replace(/-\d+$/, ""),
+          confirmationCandidates(confirmation),
         )
       : [];
     terms = {
@@ -251,10 +259,7 @@ export async function getGuest(ctx: SessionContext, guestId: string): Promise<Gu
     (await findUserNames(prisma, ctx.organizationId, userIds)).map((u) => [u.id, u.displayName]),
   );
   const history = can(ctx, "audit:read")
-    ? await resourceHistory(prisma, ctx.organizationId, [
-        guestId,
-        ...row.loyaltyMemberships.map((m) => m.id),
-      ])
+    ? await resourceHistory(prisma, ctx, [guestId, ...row.loyaltyMemberships.map((m) => m.id)])
     : null;
   return { ...toProfile(ctx, row, statistics, names), history };
 }
@@ -416,6 +421,10 @@ export async function setGuestPreferences(
 ): Promise<GuestProfileView> {
   requirePermission(ctx, "guests:update");
   const managed = propertiesWithPermission(ctx.access, "guests:update");
+  // Preferences for every property are organization data (D3): only an
+  // organization-scope grant may change them. Property staff resend them
+  // unchanged and manage their own property's preferences.
+  const manageGlobal = hasOrganizationPermission(ctx.access, "guests:update");
   for (const p of input.preferences) {
     if (p.propertyId && !managed.includes(p.propertyId)) throw forbidden("guests:update");
   }
@@ -437,15 +446,36 @@ export async function setGuestPreferences(
     const before = (await findPreferenceRows(tx, guestId)).filter(
       (p) => p.propertyId === null || managed.includes(p.propertyId),
     );
+    if (!manageGlobal) {
+      const globalKey = (id: string, note: string | null) => `${id}:${note ?? ""}`;
+      const existing = before
+        .filter((p) => p.propertyId === null)
+        .map((p) => globalKey(p.preferenceCode.id, p.note))
+        .sort();
+      const requested = input.preferences
+        .filter((p) => p.propertyId === null)
+        .map((p) => globalKey(p.preferenceCodeId, p.note ?? null))
+        .sort();
+      if (existing.join("|") !== requested.join("|")) {
+        throw new AppError(
+          "FORBIDDEN",
+          "Preferences for every property need an organization-level grant",
+          { permission: "guests:update", reason: "ORGANIZATION_SCOPE_REQUIRED" },
+        );
+      }
+    }
     await replacePreferences(
       tx,
       guestId,
       managed,
-      input.preferences.map((p) => ({
-        preferenceCodeId: p.preferenceCodeId,
-        propertyId: p.propertyId,
-        note: p.note ?? null,
-      })),
+      manageGlobal,
+      input.preferences
+        .filter((p) => manageGlobal || p.propertyId !== null)
+        .map((p) => ({
+          preferenceCodeId: p.preferenceCodeId,
+          propertyId: p.propertyId,
+          note: p.note ?? null,
+        })),
     );
     const describe = (code: string, propertyId: string | null, note: string | null) =>
       `${code}${propertyId ? `@${propertyId}` : ""}${note ? ` (${note})` : ""}`;
@@ -732,7 +762,9 @@ function toProfile(
       readSensitive,
       addNote: update,
       manageCompanies: can(ctx, "accounts:manage"),
-      manageLoyalty: can(ctx, "loyalty:manage"),
+      manageGlobalPreferences: hasOrganizationPermission(ctx.access, "guests:update"),
+      enrollLoyalty: can(ctx, "loyalty:manage"),
+      manageLoyalty: hasOrganizationPermission(ctx.access, "loyalty:manage"),
       readHistory: propertiesWithPermission(ctx.access, "reservations:read").length > 0,
     },
   };

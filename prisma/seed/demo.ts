@@ -32,6 +32,7 @@ import { assignTask, queueCleaningInTx } from "../../modules/housekeeping/housek
 import { createRequest } from "../../modules/maintenance/maintenance.service";
 import { createBlock, createGroup } from "../../modules/groups/groups.service";
 import { createProperty } from "../../modules/properties/properties.service";
+import { copyPropertySetup } from "../../modules/properties/property-setup.service";
 import { stayNights } from "../../modules/reservations/reservations.policy";
 import type { CreateReservationInput } from "../../modules/reservations/reservations.schema";
 import {
@@ -39,7 +40,11 @@ import {
   createReservation,
   listAvailableRooms,
 } from "../../modules/reservations/reservations.service";
-import { type InventorySpec, buildPropertyInventory } from "./inventory-builder";
+import {
+  type InventorySpec,
+  buildPropertyInventory,
+  buildReferenceSetup,
+} from "./inventory-builder";
 
 const ORG_CODE = "SERENE";
 
@@ -773,6 +778,26 @@ async function ensureOrganization(): Promise<{ id: string; adminCtx: SessionCont
       reason: "Demo data seed",
     });
     propertyIds[spec.code] = property.id;
+    // Reference setup (D37): the first property gets the demo codes, every
+    // further one copies them through the same service as the API, before
+    // its go-live. Taxes, rooms and rates are property-specific (below).
+    if (spec.code === PROPERTIES[0]!.code) {
+      await buildReferenceSetup(prisma, property.id);
+    } else {
+      const sourceId = propertyIds[PROPERTIES[0]!.code]!;
+      await copyPropertySetup(
+        {
+          ...adminCtx,
+          access: {
+            ...adminCtx.access,
+            byProperty: { [property.id]: ALL_PERMISSIONS, [sourceId]: ALL_PERMISSIONS },
+          },
+        },
+        property.id,
+        sourceId,
+        { reason: "Demo data seed: copy setup" },
+      );
+    }
     await initializeBusinessDate(
       {
         ...adminCtx,

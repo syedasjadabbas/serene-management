@@ -27,7 +27,7 @@ export const POST = definePropertyRoute({
   params: nightAuditParamsSchema,
   body: startNightAuditSchema,
   idempotent: true,
-  rateLimit: { name: "nightaudit.start.ip", limit: 10, windowMs: 60_000 },
+  rateLimit: { name: "nightaudit.start", limit: 10, windowMs: 60_000 },
   status: 201,
   handler: ({ ctx, body, idempotency }) => startNightAudit(ctx, body, idempotency),
 });

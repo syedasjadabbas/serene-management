@@ -5,6 +5,7 @@ import { Prisma } from "@/generated/prisma/client";
 import { databaseErrorCode } from "@/lib/db/transaction";
 import type { ApiErrorBody, ApiSuccess } from "@/types/api";
 import { AppError } from "./errors";
+import { logServerError } from "./log";
 
 export function ok<T, M = undefined>(data: T, meta?: M, init?: ResponseInit) {
   const body: ApiSuccess<T, M> = meta === undefined ? { data } : { data, meta };
@@ -23,7 +24,7 @@ export function created<T>(data: T) {
 export function toErrorResponse(err: unknown, requestId: string, headers?: HeadersInit) {
   const appError = normalizeError(err);
   if (appError.code === "INTERNAL_ERROR") {
-    console.error(`[${requestId}]`, err);
+    logServerError("Unhandled error", err, requestId);
   }
   const body: ApiErrorBody = {
     error: {

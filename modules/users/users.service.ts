@@ -9,6 +9,7 @@ import {
   hasPermission,
   hasPermissionAnywhere,
   permissionsInScope,
+  propertiesWithPermission,
 } from "@/lib/permissions/evaluate";
 import { recordAudit } from "@/modules/audit/audit.service";
 import { revokeAllSessionsForUser } from "@/modules/identity/identity.service";
@@ -28,7 +29,13 @@ import {
 import type { GrantRoleInput, ListUsersQuery, ReasonOnlyInput } from "./users.schema";
 import type { RoleAssignmentView, RoleView, UserView } from "./users.types";
 
-/** Users are organization data: any holder of `users:read` (org or property grant) may list them. */
+/**
+ * Users are organization data: any holder of `users:read` (org or property
+ * grant) may list them, but each user's role assignments are shown only for
+ * the scopes the caller may inspect (D3): organization-scope grants need
+ * `users:read`/`users:manage` at organization level, a property's grants
+ * need them at that property.
+ */
 export async function listUsers(
   ctx: SessionContext,
   query: ListUsersQuery,
@@ -41,7 +48,7 @@ export async function listUsers(
   }
   const { rows, total } = await findUsersPage(prisma, ctx.organizationId, query);
   return {
-    items: rows.map(toUserView),
+    items: rows.map((row) => toUserView(row, inspectableScopes(ctx))),
     meta: { page: query.page, pageSize: query.pageSize, total },
   };
 }
@@ -117,7 +124,7 @@ export async function grantRole(
         permission: "users:manage",
       },
     );
-    return reloadUser(tx, ctx.organizationId, userId);
+    return reloadUser(tx, ctx, userId);
   });
 }
 
@@ -159,7 +166,7 @@ export async function revokeRole(
         permission: "users:manage",
       },
     );
-    return reloadUser(tx, ctx.organizationId, userId);
+    return reloadUser(tx, ctx, userId);
   });
 }
 
@@ -175,7 +182,7 @@ export async function disableUser(
   return runInTransaction(async (tx) => {
     const user = await findUserInOrganization(tx, ctx.organizationId, userId);
     if (!user) throw notFound("User");
-    if (user.status === "DISABLED") return toUserView(user);
+    if (user.status === "DISABLED") return toUserView(user, inspectableScopes(ctx));
     const now = new Date();
     const updated = await updateUserStatus(tx, userId, { status: "DISABLED" });
     const count = await revokeAllSessionsForUser(tx, userId, "USER_DISABLED", now);
@@ -189,7 +196,7 @@ export async function disableUser(
       reason: input.reason,
       permission: "users:manage",
     });
-    return toUserView(updated);
+    return toUserView(updated, inspectableScopes(ctx));
   });
 }
 
@@ -225,7 +232,7 @@ export async function unlockUser(
       reason: input.reason,
       permission: "users:manage",
     });
-    return toUserView(updated);
+    return toUserView(updated, inspectableScopes(ctx));
   });
 }
 
@@ -264,15 +271,34 @@ function assertNoEscalation(
 
 async function reloadUser(
   tx: Parameters<typeof findUserInOrganization>[0],
-  organizationId: string,
+  ctx: SessionContext,
   userId: string,
 ) {
-  const user = await findUserInOrganization(tx, organizationId, userId);
+  const user = await findUserInOrganization(tx, ctx.organizationId, userId);
   if (!user) throw notFound("User");
-  return toUserView(user);
+  return toUserView(user, inspectableScopes(ctx));
 }
 
-function toUserView(row: UserRow): UserView {
+interface InspectableScopes {
+  organization: boolean;
+  propertyIds: ReadonlySet<string>;
+}
+
+/** Scopes whose role assignments the caller may see (`users:read` or `users:manage` there). */
+function inspectableScopes(ctx: SessionContext): InspectableScopes {
+  const organization =
+    hasOrganizationPermission(ctx.access, "users:read") ||
+    hasOrganizationPermission(ctx.access, "users:manage");
+  return {
+    organization,
+    propertyIds: new Set([
+      ...propertiesWithPermission(ctx.access, "users:read"),
+      ...propertiesWithPermission(ctx.access, "users:manage"),
+    ]),
+  };
+}
+
+function toUserView(row: UserRow, visible: InspectableScopes): UserView {
   return {
     id: row.id,
     email: row.email,
@@ -280,12 +306,18 @@ function toUserView(row: UserRow): UserView {
     status: row.status,
     lockedUntil: row.lockedUntil?.toISOString() ?? null,
     lastLoginAt: row.lastLoginAt?.toISOString() ?? null,
-    assignments: row.roleAssignments.map((a): RoleAssignmentView => ({
-      id: a.id,
-      scope: a.scope,
-      role: a.role,
-      property: a.property,
-      createdAt: a.createdAt.toISOString(),
-    })),
+    assignments: row.roleAssignments
+      .filter((a) =>
+        a.scope === "ORGANIZATION"
+          ? visible.organization
+          : visible.organization || (a.property !== null && visible.propertyIds.has(a.property.id)),
+      )
+      .map((a): RoleAssignmentView => ({
+        id: a.id,
+        scope: a.scope,
+        role: a.role,
+        property: a.property,
+        createdAt: a.createdAt.toISOString(),
+      })),
   };
 }

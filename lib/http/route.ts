@@ -15,7 +15,7 @@ import { type ResolvedSession, resolveSession } from "@/modules/access/access.se
 import { getCurrentBusinessDate } from "@/modules/business-date/business-date.service";
 import type { IdempotencyRequest, PropertyContext, RequestMeta, SessionContext } from "./context";
 import { AppError, forbidden } from "./errors";
-import { consumeRateLimit, type RateLimitRule } from "./rate-limit";
+import { consumeRateLimit, type RateLimitRule, rateLimitKey } from "./rate-limit";
 import { ok, toErrorResponse } from "./response";
 
 /**
@@ -42,7 +42,10 @@ interface Parsed<P, Q, B> {
 }
 
 interface CommonOptions<P, Q, B> extends Schemas<P, Q, B> {
-  /** Extra per-route limit; its key is the client IP. */
+  /**
+   * Extra per-route limit. Keyed per user on authenticated routes and per
+   * client IP on public ones (G11).
+   */
   rateLimit?: RateLimitRule;
   /** HTTP status for a successful non-Response result (default 200). */
   status?: number;
@@ -67,6 +70,7 @@ export function definePublicRoute<P = undefined, Q = undefined, B = undefined>(
 ): RouteFn {
   return (request, context) =>
     run(request, options, async (meta) => {
+      if (options.rateLimit) await enforceRateLimit(options.rateLimit, rateLimitKey(meta));
       const parsed = await parse(request, context, options);
       return options.handler({ ...parsed, meta });
     });
@@ -90,6 +94,7 @@ export function defineSessionRoute<P = undefined, Q = undefined, B = undefined>(
   return (request, context) =>
     run(request, options, async (meta) => {
       const { ctx, session } = await authenticate(request, meta);
+      if (options.rateLimit) await enforceRateLimit(options.rateLimit, rateLimitKey(ctx));
       if (options.permission && !hasOrganizationPermission(ctx.access, options.permission)) {
         throw forbidden(options.permission);
       }
@@ -122,6 +127,9 @@ export function definePropertyRoute<P extends { propertyId: string }, Q = undefi
   return (request, context) =>
     run(request, options, async (meta) => {
       const session = await authenticate(request, meta);
+      if (options.rateLimit) {
+        await enforceRateLimit(options.rateLimit, rateLimitKey(session.ctx));
+      }
       const rawParams = await context.params;
       const propertyId = z.uuid().safeParse(rawParams.propertyId);
       if (!propertyId.success || !canAccessProperty(session.ctx.access, propertyId.data)) {
@@ -178,20 +186,20 @@ function idempotencyOf(request: NextRequest, body: unknown): IdempotencyRequest 
 }
 
 const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+/** Coarse flood guard before authentication; per-route limits follow per user. */
 const GLOBAL_WRITE_LIMIT: RateLimitRule = { name: "api.write.ip", limit: 300, windowMs: 60_000 };
 
 async function run(
   request: NextRequest,
-  options: { rateLimit?: RateLimitRule; status?: number },
+  options: { status?: number },
   execute: (meta: RequestMeta) => Promise<unknown>,
 ): Promise<Response> {
   const meta = requestMeta(request);
   try {
     if (MUTATING.has(request.method)) {
       assertSameOrigin(request);
-      enforceRateLimit(GLOBAL_WRITE_LIMIT, meta);
+      await enforceRateLimit(GLOBAL_WRITE_LIMIT, rateLimitKey(meta));
     }
-    if (options.rateLimit) enforceRateLimit(options.rateLimit, meta);
 
     const result = await execute(meta);
     const response =
@@ -239,8 +247,8 @@ function assertSameOrigin(request: NextRequest) {
   }
 }
 
-function enforceRateLimit(rule: RateLimitRule, meta: RequestMeta) {
-  const result = consumeRateLimit(rule, meta.ipAddress ?? "unknown");
+async function enforceRateLimit(rule: RateLimitRule, key: string) {
+  const result = await consumeRateLimit(rule, key);
   if (!result.allowed) {
     throw new AppError("RATE_LIMITED", "Too many requests. Please wait and try again.", {
       retryAfterSeconds: result.retryAfterSeconds,

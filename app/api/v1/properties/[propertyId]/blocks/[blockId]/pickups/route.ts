@@ -8,7 +8,7 @@ export const POST = definePropertyRoute({
   params: blockParamsSchema,
   body: pickupSchema,
   idempotent: true,
-  rateLimit: { name: "groups.pickup.ip", limit: 120, windowMs: 60_000 },
+  rateLimit: { name: "groups.pickup", limit: 120, windowMs: 60_000 },
   status: 201,
   handler: ({ ctx, params, body, idempotency }) => pickup(ctx, params.blockId, body, idempotency),
 });

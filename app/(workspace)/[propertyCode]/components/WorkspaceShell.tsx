@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { BusinessDateBadge } from "./BusinessDateBadge";
 import { PropertySwitcher } from "./PropertySwitcher";
-import { UserMenu } from "./UserMenu";
+import { UserMenu } from "@/components/workspace/UserMenu";
 import { WorkspaceNav } from "./WorkspaceNav";
 
 /**

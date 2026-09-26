@@ -20,6 +20,7 @@ export const propertySelect = {
   postalCode: true,
   phone: true,
   email: true,
+  confirmationPrefix: true,
 } as const satisfies Prisma.PropertySelect;
 
 export type PropertyRow = Prisma.PropertyGetPayload<{ select: typeof propertySelect }>;
@@ -106,9 +107,40 @@ export function upsertConfiguration(
 export function updatePropertyTimes(
   tx: Tx,
   propertyId: string,
-  data: { timezone?: string; checkInTime?: string; checkOutTime?: string },
+  data: {
+    timezone?: string;
+    checkInTime?: string;
+    checkOutTime?: string;
+    confirmationPrefix?: string;
+  },
 ) {
   return tx.property.update({ where: { id: propertyId }, data, select: propertySelect });
+}
+
+/** Whether another property of the organization already uses the confirmation prefix. */
+export function confirmationPrefixTaken(
+  tx: Tx,
+  organizationId: string,
+  prefix: string,
+  exceptPropertyId: string | null,
+) {
+  return tx.property.count({
+    where: {
+      organizationId,
+      confirmationPrefix: prefix,
+      ...(exceptPropertyId ? { id: { not: exceptPropertyId } } : {}),
+    },
+  });
+}
+
+/** The server-authoritative confirmation prefix of a property (D36). */
+export async function findConfirmationPrefix(tx: Tx, propertyId: string): Promise<string> {
+  const row = await tx.property.findUnique({
+    where: { id: propertyId },
+    select: { confirmationPrefix: true },
+  });
+  if (!row) throw new Error(`Property ${propertyId} not found`);
+  return row.confirmationPrefix;
 }
 
 /**

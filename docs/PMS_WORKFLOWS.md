@@ -403,6 +403,15 @@ Only via §26 step 6. Effects visible to all modules: new postings dated D+1; ar
 - **Reporting**: organization-level reports aggregate `daily_statistics` across accessible properties with currency conversion to the organization base currency.
 - **Isolation guarantee**: composite FKs + `ctx.propertyId` filters + 404 for other properties' records.
 
+**Status (Phase 9, as implemented)**:
+
+- **Organization workspace** (`/organization`): Overview (per-property business date, night-audit state, today's figures), Reports (organization performance), Availability (central search), Audit trail, Users & roles, Properties. Offered to users with organization grants or several properties; everything shown is limited to accessible properties.
+- **Switching**: the workspace switcher lists the organization workspace and the accessible properties; switching keeps the section (`/SMR/reports` → `/SDX/reports`) when the user may use it at the target, otherwise opens the target's overview; record ids are never carried over. The booking draft belongs to one property and is cleared when the property changes.
+- **Central availability**: search + hand-off only. Each property answers with its own business date, restrictions, inventory, rates and currency; _Book_ continues in that property's booking workflow. No cross-property reservation, itinerary, split stay, transfer or cross-property group.
+- **Reporting**: per property in its own currency, subtotals per currency, room counts and movements across properties; no currency conversion and no organization base-currency total (the bullet above describes a future option).
+- **Confirmation numbers**: `PREFIX-number` per property (default prefix = property code), unique across the organization; earlier plain numbers keep working in every search.
+- **New property**: create it (code, name, zone, currency, optional prefix), copy reference setup from an existing property before go-live, then set up rooms, room types and rates, then initialize the business date.
+
 ## 31. Profile merge and duplicate detection
 
 **Status (Phase 7)**: duplicate _detection_ at creation is implemented (same e-mail or phone digits → `409 POSSIBLE_DUPLICATE` with the matches; the clerk uses the existing profile or confirms a new one). Merge itself is deferred.

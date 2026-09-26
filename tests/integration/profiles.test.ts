@@ -51,7 +51,8 @@ let A: string;
 let B: string;
 let inv: Inventory;
 let D: string;
-let gm: CookieJar; // general manager @ A: everything
+let gm: CookieJar; // general manager @ A: everything at A
+let orgGm: CookieJar; // general manager at organization scope: organization data (D3)
 let fom: CookieJar; // front office manager @ A: guests (sensitive), accounts:manage, no loyalty:manage
 let agent: CookieJar; // front desk @ A: guests read/create/update, accounts:read, loyalty:read
 let cashier: CookieJar; // cashier @ A: guests:read, accounts:read, no loyalty
@@ -124,6 +125,7 @@ beforeAll(async () => {
   D = inv.businessDate;
   const users = {
     gm: await createUser(org, "gm", [{ role: "GENERAL_MANAGER", property: "A" }]),
+    orgGm: await createUser(org, "orggm", [{ role: "GENERAL_MANAGER" }]),
     fom: await createUser(org, "fom", [{ role: "FRONT_OFFICE_MANAGER", property: "A" }]),
     agent: await createUser(org, "agent", [{ role: "FRONT_DESK_AGENT", property: "A" }]),
     cashier: await createUser(org, "cashier", [{ role: "CASHIER", property: "A" }]),
@@ -132,6 +134,7 @@ beforeAll(async () => {
     outsider: await createUser(other, "gmx", [{ role: "GENERAL_MANAGER", property: "X" }]),
   };
   gm = await loginAs(users.gm.email, TEST_PASSWORD);
+  orgGm = await loginAs(users.orgGm.email, TEST_PASSWORD);
   fom = await loginAs(users.fom.email, TEST_PASSWORD);
   agent = await loginAs(users.agent.email, TEST_PASSWORD);
   cashier = await loginAs(users.cashier.email, TEST_PASSWORD);
@@ -312,6 +315,9 @@ describe("guest profiles", () => {
     const booking = await book({ guestId: id, arrival: addDays(D, 5), departure: addDays(D, 6) });
     const confirmation = booking.body.data.confirmationNumber as string;
     expect(await find(confirmation)).toContain(id);
+    // Prefixed numbers (D36) are found by their digits and case-insensitively.
+    expect(await find(confirmation.split("-").pop()!)).toContain(id);
+    expect(await find(confirmation.toLowerCase())).toContain(id);
     // Property B users cannot find guests through A's confirmation numbers.
     expect(await find(confirmation, gmB)).not.toContain(id);
     // Another organization never sees the profile.
@@ -358,8 +364,22 @@ describe("guest profiles", () => {
         jar,
       });
     const v = (await profile(agent, guest)).body.data.version;
-    const set = await put({
+    // Preferences for every property need an organization-scope grant (D3).
+    const globalByAgent = await put({
       version: v,
+      preferences: [{ preferenceCodeId: highFloor.id, propertyId: null }],
+    });
+    expect(globalByAgent.status).toBe(403);
+    expect(globalByAgent.body.error.details.reason).toBe("ORGANIZATION_SCOPE_REQUIRED");
+    const global = await put(
+      { version: v, preferences: [{ preferenceCodeId: highFloor.id, propertyId: null }] },
+      orgGm,
+    );
+    expect(global.status).toBe(200);
+    expect((await profile(agent, guest)).body.data.access.manageGlobalPreferences).toBe(false);
+    // Property staff resend the global preference unchanged and set their own.
+    const set = await put({
+      version: global.body.data.version,
       preferences: [
         { preferenceCodeId: highFloor.id, propertyId: null },
         { preferenceCodeId: vegan.id, propertyId: A, note: "Strict" },
@@ -787,11 +807,20 @@ describe("loyalty", () => {
       jar: gm,
     });
     expect(noReason.status).toBe(400);
-    const created = await call(createProgramRoute, {
+    // Programs are organization data (D3): a property-scoped grant is not enough.
+    const byPropertyGm = await call(createProgramRoute, {
       method: "POST",
       path: "/api/v1/loyalty/programs",
       body: { code: "RWD", name: "Rewards", reason: "Launch" },
       jar: gm,
+    });
+    expect(byPropertyGm.status).toBe(403);
+    expect(byPropertyGm.body.error.details.reason).toBe("ORGANIZATION_SCOPE_REQUIRED");
+    const created = await call(createProgramRoute, {
+      method: "POST",
+      path: "/api/v1/loyalty/programs",
+      body: { code: "RWD", name: "Rewards", reason: "Launch" },
+      jar: orgGm,
     });
     expect(created.status).toBe(201);
     programId = created.body.data.programs.find((p: { code: string }) => p.code === "RWD").id;
@@ -804,7 +833,7 @@ describe("loyalty", () => {
         path: `/api/v1/loyalty/programs/${programId}/tiers`,
         params: { programId },
         body: { code, name: code, rank, qualifyingNights: rank * 10, reason: "Launch" },
-        jar: gm,
+        jar: orgGm,
       });
       expect(r.status).toBe(201);
     }
@@ -852,14 +881,16 @@ describe("loyalty", () => {
     const guest = (await createGuestRow(org, "Max", "Member")).id;
     const enrolled = await enroll(guest, { tierId: tiers.SILVER });
     const m = enrolled.body.data.loyalty[0];
-    const change = (body: Record<string, unknown>) =>
+    const change = (body: Record<string, unknown>, jar = orgGm) =>
       call(membershipRoute, {
         method: "PATCH",
         path: `/api/v1/loyalty/memberships/${m.id}`,
         params: { membershipId: m.id },
         body: { reason: "Status review", ...body },
-        jar: gm,
+        jar,
       });
+    // Tier/status changes and points need organization scope (D3).
+    expect((await change({ version: m.version, tierId: tiers.GOLD }, gm)).status).toBe(403);
     const upgraded = await change({ version: m.version, tierId: tiers.GOLD });
     expect(upgraded.status).toBe(200);
     const after = upgraded.body.data.loyalty[0];
@@ -890,7 +921,7 @@ describe("loyalty", () => {
       prisma.loyaltyMembership.update({ where: { id: m.id }, data: { tierId: foreignTier.id } }),
     ).rejects.toThrow();
 
-    const adjust = (body: Record<string, unknown>, jar = gm) =>
+    const adjust = (body: Record<string, unknown>, jar = orgGm) =>
       call(adjustRoute, {
         method: "POST",
         path: `/api/v1/loyalty/memberships/${m.id}/adjustments`,
@@ -898,6 +929,7 @@ describe("loyalty", () => {
         body: { description: "Goodwill", reason: "Service recovery", ...body },
         jar,
       });
+    expect((await adjust({ version: after.version, points: "500" }, gm)).status).toBe(403);
     const plus = await adjust({ version: after.version, points: "500" });
     expect(plus.status).toBe(201);
     const afterPlus = plus.body.data.loyalty[0];
