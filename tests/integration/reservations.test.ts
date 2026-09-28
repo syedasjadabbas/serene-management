@@ -58,6 +58,17 @@ function booking(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/**
+ * First date on or after `from` falling on `weekday` (0 = Sunday … 6 =
+ * Saturday). Pins stays to known weekdays: the fixture rates add a weekend
+ * (Fri/Sat) uplift, so totals must not depend on the day the suite runs.
+ */
+function onOrAfter(from: string, weekday: number): string {
+  let date = from;
+  while (new Date(`${date}T00:00:00.000Z`).getUTCDay() !== weekday) date = addDays(date, 1);
+  return date;
+}
+
 async function create(jar: CookieJar, body: Record<string, unknown>, propertyId = A) {
   return call(createRoute, {
     method: "POST",
@@ -130,7 +141,17 @@ beforeAll(async () => {
 
 describe("create and retrieve", () => {
   it("creates a reservation with nights, a confirmation number, inventory and an audit record", async () => {
-    const r = await create(agent, booking({ specialRequests: "High floor please", eta: "15:30" }));
+    // Monday and Tuesday nights: weekday rate only (2 × 12000).
+    const arrival = onOrAfter(addDays(D, 10), 1);
+    const r = await create(
+      agent,
+      booking({
+        arrival,
+        departure: addDays(arrival, 2),
+        specialRequests: "High floor please",
+        eta: "15:30",
+      }),
+    );
     expect(r.status).toBe(201);
     const detail = r.body.data;
     // Property-prefixed (D36): the prefix defaults to the property code.
@@ -142,7 +163,7 @@ describe("create and retrieve", () => {
       nights: 2,
       eta: "15:30",
     });
-    expect(room.totalAmount).toBe("24000.00"); // weekday/weekend aware: verified against nights below
+    expect(room.totalAmount).toBe("24000.00");
 
     const rows = await prisma.reservationRoomNight.findMany({
       where: { reservationRoomId: room.id },
@@ -150,13 +171,14 @@ describe("create and retrieve", () => {
       select: { stayDate: true, rateAmount: true },
     });
     expect(rows.map((n) => n.stayDate.toISOString().slice(0, 10))).toEqual([
-      addDays(D, 10),
-      addDays(D, 11),
+      arrival,
+      addDays(arrival, 1),
     ]);
+    expect(rows.map((n) => n.rateAmount.toFixed(2))).toEqual(["12000.00", "12000.00"]);
     const total = rows.reduce((acc, n) => acc + Number(n.rateAmount.toFixed(2)), 0);
     expect(room.totalAmount).toBe(total.toFixed(2));
 
-    expect((await counter(invA.roomTypes.KNG!.id, addDays(D, 10)))?.sold).toBeGreaterThanOrEqual(1);
+    expect((await counter(invA.roomTypes.KNG!.id, arrival))?.sold).toBeGreaterThanOrEqual(1);
     expect(await prisma.reservationNote.count({ where: { reservationId: detail.id } })).toBe(1);
 
     const audit = await auditLogsFor(detail.id);
@@ -177,6 +199,25 @@ describe("create and retrieve", () => {
     expect(fetched.status).toBe(200);
     expect(fetched.body.data.rooms[0].nightly).toHaveLength(2);
     expect(fetched.body.data.history[0].action).toBe("reservation.create");
+  });
+
+  it("prices Friday and Saturday nights with the weekend uplift", async () => {
+    // Thursday → Sunday: one weekday night, then two weekend nights (12000 + 2 × 15000).
+    const arrival = onOrAfter(addDays(D, 130), 4);
+    const r = await create(agent, booking({ arrival, departure: addDays(arrival, 3) }));
+    expect(r.status).toBe(201);
+    const room = r.body.data.rooms[0];
+    const nights = await prisma.reservationRoomNight.findMany({
+      where: { reservationRoomId: room.id },
+      orderBy: { stayDate: "asc" },
+      select: { rateAmount: true },
+    });
+    expect(nights.map((n) => n.rateAmount.toFixed(2))).toEqual([
+      "12000.00",
+      "15000.00",
+      "15000.00",
+    ]);
+    expect(room.totalAmount).toBe("42000.00");
   });
 
   it("never accepts client-supplied confirmation numbers, statuses or prices", async () => {

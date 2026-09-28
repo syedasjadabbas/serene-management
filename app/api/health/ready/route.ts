@@ -3,9 +3,9 @@ import { definePublicRoute } from "@/lib/http/route";
 import { isDatabaseReady } from "@/modules/access/access.service";
 
 /**
- * Kept for existing probes: the same check as /api/health/ready (it always
- * included the database). New deployments should probe /api/health/live for
- * liveness and /api/health/ready for readiness.
+ * Readiness (L28): the app can serve requests (PostgreSQL answers within 2 s).
+ * 503 while the database is unavailable, so traffic is held back without the
+ * process being restarted. Never reveals the underlying error.
  */
 export const GET = definePublicRoute({
   handler: async () =>

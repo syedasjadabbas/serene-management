@@ -1,5 +1,6 @@
 import "server-only";
 import { prisma, type Tx } from "@/lib/db/prisma";
+import { logServerError } from "@/lib/http/log";
 import { type Permission, isPermission } from "@/lib/permissions/catalog";
 import type { AccessProfile } from "@/lib/permissions/evaluate";
 import type { AccessTokenClaims } from "@/lib/auth/tokens";
@@ -175,9 +176,27 @@ export async function bootstrapOrganization(
   return { id: organization.id, roleIdsByCode };
 }
 
-/** Health check: one trivial round trip to PostgreSQL. */
-export async function checkDatabase(): Promise<void> {
-  await prisma.$queryRaw`SELECT 1`;
+/**
+ * Readiness (L28): one trivial round trip to PostgreSQL, bounded by
+ * `timeoutMs` so a hung connection cannot stall the probe. Returns false on
+ * any failure; the cause is logged by code only (never shown to the caller).
+ */
+export async function isDatabaseReady(timeoutMs = 2_000): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      prisma.$queryRaw`SELECT 1`,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error("Readiness check timed out")), timeoutMs);
+      }),
+    ]);
+    return true;
+  } catch (error) {
+    logServerError("Readiness check failed", error);
+    return false;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 /**

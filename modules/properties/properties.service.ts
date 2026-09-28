@@ -8,6 +8,7 @@ import { hasBusinessDateHistory } from "@/modules/business-date/business-date.se
 import {
   type ConfigurationRow,
   confirmationPrefixTaken,
+  countOrganizationProperties,
   currencyExists,
   findConfiguration,
   findConfirmationPrefix,
@@ -22,6 +23,7 @@ import {
   upsertConfiguration,
 } from "./properties.repository";
 import { formatConfirmationNumber } from "./confirmation-number.policy";
+import { applyStarterSetup } from "./starter-setup.repository";
 import type { CreatePropertyInput, UpdatePropertyConfigurationInput } from "./properties.schema";
 import type { OrganizationView, PropertyConfigurationView, PropertyView } from "./properties.types";
 
@@ -64,7 +66,13 @@ export async function getProperty(ctx: PropertyContext): Promise<PropertyView> {
   return toPropertyView(row);
 }
 
-/** Creates a property with its configuration row. Organization-level, high-risk. */
+/**
+ * Creates a property with its configuration row. Organization-level,
+ * high-risk. An organization's first property also receives the standard
+ * starter reference setup (D49): with no sibling to copy from (D37), a
+ * freshly bootstrapped installation could otherwise never post a charge,
+ * take a payment or cancel a booking.
+ */
 export async function createProperty(
   ctx: SessionContext,
   input: CreatePropertyInput,
@@ -75,6 +83,7 @@ export async function createProperty(
         fields: { currencyCode: ["Unknown currency"] },
       });
     }
+    const isFirstProperty = (await countOrganizationProperties(tx, ctx.organizationId)) === 0;
     const confirmationPrefix = input.confirmationPrefix ?? input.code;
     await assertConfirmationPrefixFree(tx, ctx.organizationId, confirmationPrefix, null);
     const row = await insertProperty(tx, {
@@ -94,6 +103,7 @@ export async function createProperty(
       email: input.email ?? null,
     });
     await insertConfiguration(tx, row.id);
+    if (isFirstProperty) await applyStarterSetup(tx, row.id);
     const view = toPropertyView(row);
     await recordAudit(
       tx,
@@ -103,7 +113,7 @@ export async function createProperty(
         resourceType: "Property",
         resourceId: row.id,
         risk: "HIGH",
-        after: view,
+        after: { ...view, starterSetup: isFirstProperty },
         reason: input.reason,
         permission: "properties:manage",
       },

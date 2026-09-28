@@ -73,6 +73,11 @@ export function currencyExists(tx: Tx, code: string) {
   return tx.currency.count({ where: { code, status: "ACTIVE" } });
 }
 
+/** Properties of the organization in any status (an inactive one still counts). */
+export function countOrganizationProperties(tx: Tx, organizationId: string) {
+  return tx.property.count({ where: { organizationId } });
+}
+
 export function insertProperty(tx: Tx, data: Prisma.PropertyUncheckedCreateInput) {
   return tx.property.create({ data, select: propertySelect });
 }

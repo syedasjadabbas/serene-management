@@ -2,7 +2,7 @@
 
 Web-based hotel property management system (PMS) for single- and multi-property hotel organizations.
 
-**Status: Phase 0 (architecture foundation).** No PMS modules are implemented yet. See [`docs/IMPLEMENTATION_ROADMAP.md`](docs/IMPLEMENTATION_ROADMAP.md).
+**Status: Phase 10 (hardening).** Phases 1–9 are implemented; see [`docs/IMPLEMENTATION_ROADMAP.md`](docs/IMPLEMENTATION_ROADMAP.md). Production installation: [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
 
 ## Documentation
 
@@ -16,6 +16,7 @@ Web-based hotel property management system (PMS) for single- and multi-property 
 | [API conventions](docs/API_CONVENTIONS.md)                       | HTTP contract                                                     |
 | [RBAC](docs/RBAC.md)                                             | Permissions and roles                                             |
 | [Roadmap](docs/IMPLEMENTATION_ROADMAP.md)                        | Phases and exit criteria                                          |
+| [Deployment](docs/DEPLOYMENT.md)                                 | Production install, environment, migrations, bootstrap, health    |
 
 ## Stack
 
@@ -47,23 +48,28 @@ npm run db:deploy
 npm run db:seed
 ```
 
+`db:seed` loads reference data only. For the demo organization set `SEED_DEMO=true` and a strong `SEED_DEMO_PASSWORD` (16+ characters, never printed) in `.env` first; the demo seed is refused when `NODE_ENV=production`.
+
 ```bash
 npm run dev
 ```
 
 ## Scripts
 
-| Script                            | Does                                                                           |
-| --------------------------------- | ------------------------------------------------------------------------------ |
-| `npm run dev` / `build` / `start` | Next.js                                                                        |
-| `npm run typecheck`               | Route type generation + `tsc --noEmit`                                         |
-| `npm run lint`                    | ESLint (includes architectural import boundaries)                              |
-| `npm run test`                    | All Vitest suites (unit + database rules on PGlite, no database server needed) |
-| `npm run verify`                  | typecheck → lint → test → production build                                     |
-| `npm run db:setup`                | Create/update the app role and databases on native PostgreSQL (run once)       |
-| `npm run db:migrate`              | Create/apply a development migration                                           |
-| `npm run db:deploy`               | Apply migrations                                                               |
-| `npm run db:seed`                 | Reference data (currencies, permissions, role templates)                       |
-| `npm run db:validate`             | Validate the Prisma schema                                                     |
+| Script                  | Does                                                                           |
+| ----------------------- | ------------------------------------------------------------------------------ |
+| `npm run dev` / `start` | Next.js                                                                        |
+| `npm run build`         | `next build` + compile the operational commands to `dist/ops`                  |
+| `npm run typecheck`     | Route type generation + `tsc --noEmit`                                         |
+| `npm run lint`          | ESLint (includes architectural import boundaries)                              |
+| `npm run test`          | All Vitest suites (unit, database rules on PGlite, integration on the test DB) |
+| `npm run verify`        | typecheck → lint → test → production build                                     |
+| `npm run db:setup`      | Create/update the app role and databases on native PostgreSQL (run once)       |
+| `npm run db:migrate`    | Create/apply a development migration                                           |
+| `npm run db:deploy`     | Apply migrations                                                               |
+| `npm run db:seed`       | Development seed: reference data, plus demo data with `SEED_DEMO=true`         |
+| `npm run ops:seed`      | Production reference data (compiled; no dev dependencies)                      |
+| `npm run ops:bootstrap` | Production first organization + administrator (see docs/DEPLOYMENT.md)         |
+| `npm run db:validate`   | Validate the Prisma schema                                                     |
 
 Scripts invoke tools through `node node_modules/...` on purpose: npm's Windows command shims fail when the project path contains `&`.

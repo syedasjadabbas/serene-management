@@ -239,8 +239,9 @@ const GUESTS: [string, string, string, string | null, string | null][] = [
   ["Ms", "Aisha", "Rahman", "BD", "aisha.rahman@example.com"],
 ];
 
-export async function seedDemo(): Promise<void> {
-  const organization = await ensureOrganization();
+/** `password` is the operator-chosen SEED_DEMO_PASSWORD (checked by demo-guard.ts). */
+export async function seedDemo(password: string): Promise<void> {
+  const organization = await ensureOrganization(password);
   const ratePlansByProperty: { propertyId: string; corpId: string }[] = [];
 
   for (const spec of PROPERTIES) {
@@ -723,7 +724,9 @@ async function seedStay(
   });
 }
 
-async function ensureOrganization(): Promise<{ id: string; adminCtx: SessionContext }> {
+async function ensureOrganization(
+  password: string,
+): Promise<{ id: string; adminCtx: SessionContext }> {
   const existing = await prisma.organization.findUnique({
     where: { code: ORG_CODE },
     select: { id: true },
@@ -737,8 +740,6 @@ async function ensureOrganization(): Promise<{ id: string; adminCtx: SessionCont
     return { id: existing.id, adminCtx: systemContext(existing.id, admin.id) };
   }
 
-  const password =
-    process.env.SEED_DEMO_PASSWORD ?? `Serene-${randomBytes(9).toString("base64url")}`;
   const passwordHash = await hashPassword(password);
   const organization = await prisma.$transaction((tx) =>
     bootstrapOrganization(tx, {
@@ -778,9 +779,11 @@ async function ensureOrganization(): Promise<{ id: string; adminCtx: SessionCont
       reason: "Demo data seed",
     });
     propertyIds[spec.code] = property.id;
-    // Reference setup (D37): the first property gets the demo codes, every
-    // further one copies them through the same service as the API, before
-    // its go-live. Taxes, rooms and rates are property-specific (below).
+    // Reference setup: the first property received the starter setup in
+    // createProperty (D49; re-applied here, idempotent, for existing demo
+    // databases); every further one copies it through the same service as
+    // the API, before its go-live (D37). Taxes, rooms and rates are
+    // property-specific (below).
     if (spec.code === PROPERTIES[0]!.code) {
       await buildReferenceSetup(prisma, property.id);
     } else {
@@ -844,9 +847,7 @@ async function ensureOrganization(): Promise<{ id: string; adminCtx: SessionCont
       "",
       "Demo organization SERENE created with properties SMR (Asia/Karachi) and SDX (Asia/Dubai).",
       `Users (all share one password): ${USERS.map(([local]) => `${local}@serene.test`).join(", ")}`,
-      process.env.SEED_DEMO_PASSWORD
-        ? "Password: the value of SEED_DEMO_PASSWORD."
-        : `Generated demo password (shown once, store it now): ${password}`,
+      "Password: the value of SEED_DEMO_PASSWORD (never printed).",
       "",
     ].join("\n"),
   );

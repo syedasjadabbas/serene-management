@@ -638,9 +638,14 @@ describe("H. transactional outbox", () => {
     const paymentEvents = await events(paymentId);
     expect(paymentEvents.map((e) => e.eventType)).toEqual(["payment.posted", "payment.voided"]);
     expect(paymentEvents[0]!.payload).toMatchObject({ paymentId, folioId: w.id });
-    // No amounts or guest data in any payload.
+    // No amounts or guest data in any payload. Ids are masked first: a random
+    // UUID can contain "200" and must not fail the amount check.
     for (const e of paymentEvents) {
-      expect(JSON.stringify(e.payload)).not.toMatch(/amount|200|Mira|guest/i);
+      const text = JSON.stringify(e.payload).replace(
+        /[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}/gi,
+        "<id>",
+      );
+      expect(text).not.toMatch(/amount|200|Mira|guest/i);
     }
   });
 

@@ -1,6 +1,6 @@
 # SERENE MANAGEMENT — API Conventions
 
-Applies to every route handler under `app/api/v1/`. Implemented foundations: `types/api.ts` (envelope, error codes), `lib/http/errors.ts`, `lib/http/response.ts`, `lib/validation/common.ts`. Route pipeline: `lib/http/route.ts` with three variants: `definePublicRoute` (login, refresh, logout, health), `defineSessionRoute` (authenticated; optional organization-level permission), `definePropertyRoute` (authenticated; property id from the path, property-level permission). "defineRoute" below refers to these.
+Applies to every route handler under `app/api/v1/`. Implemented foundations: `types/api.ts` (envelope, error codes), `lib/http/errors.ts`, `lib/http/response.ts`, `lib/validation/common.ts`. Route pipeline: `lib/http/route.ts` with three variants: `definePublicRoute` (login, refresh, logout, health: `/api/health/live`, `/api/health/ready`, alias `/api/health`, see DEPLOYMENT.md §6), `defineSessionRoute` (authenticated; optional organization-level permission), `definePropertyRoute` (authenticated; property id from the path, property-level permission). "defineRoute" below refers to these.
 
 ---
 

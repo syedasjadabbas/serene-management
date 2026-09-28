@@ -19,6 +19,8 @@
 
 # production
 /build
+# compiled operational commands (npm run build:ops)
+/dist
 
 # misc
 .DS_Store

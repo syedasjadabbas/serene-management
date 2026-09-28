@@ -85,7 +85,11 @@ The product owner re-sequenced Phase 2 to **Reservations + Availability**. It de
 
 Moved to later phases: configuration screens for rooms, rate plans and restrictions; full guest profiles (documents, preferences, merge); room holds and auto-assign; deposits and cancellation penalties (billing); negotiated, member and day-use rates; block pickup (groups); turnaway capture.
 
-## Phase 10 batch 1 (as executed) — Account security hardening (pending commit)
+## Phase 10 batch 2 (as executed) — Deployment foundation (pending commit)
+
+No migration. Production first-administrator bootstrap as an operator command `npm run ops:bootstrap` (no HTTP route; refuses once any organization exists; advisory-locked, single transaction, HIGH audit), production reference seed `npm run ops:seed`, operational commands compiled to `dist/ops` so a `npm ci --omit=dev` install can migrate, seed, bootstrap and start (the `prisma` CLI is a runtime dependency; `prisma.config.ts` no longer needs dotenv or a database URL to generate), fail-fast production environment validation at server start (`instrumentation.ts`), demo seed refused in production and requiring an explicit strong `SEED_DEMO_PASSWORD`, and liveness `/api/health/live` / readiness `/api/health/ready` (with `/api/health` kept as a readiness alias). An organization's first property now receives the standard starter reference setup (D49), so a bootstrapped installation can operate without a sibling to copy from. See [DEPLOYMENT.md](DEPLOYMENT.md), D48 and D49.
+
+## Phase 10 batch 1 (as executed) — Account security hardening (tag `phase-10-batch-1`)
 
 No migration (`password_reset_tokens` and `users.password_changed_at` already existed). Trusted client IP behind configured proxy hops (D44), per-account login budget and row-locked lockout with a 1 h cap (D45), outranking and last-administrator guards plus the missing `enable` path for disabled users (D46), password change and administrator-issued one-time reset links with session revocation (D47). UI: _Change password_ in the user menu, _Reset password_ / _Enable_ on Users & roles, public `/reset-password` page.
 
