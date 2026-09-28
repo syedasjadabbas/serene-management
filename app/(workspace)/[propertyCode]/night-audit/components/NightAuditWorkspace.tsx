@@ -265,14 +265,27 @@ export function RunHistory({ runs, loading }: { runs: RunListItem[]; loading: bo
       ) : (
         <div className="overflow-x-auto rounded-lg border border-border-subtle">
           <table className="w-full text-sm">
+            <caption className="sr-only">Night audit runs, newest first</caption>
             <thead className="bg-surface-sunken text-left text-xs text-fg-muted">
               <tr>
-                <th className="px-3 py-2 font-medium">Business date</th>
-                <th className="px-3 py-2 font-medium">Attempt</th>
-                <th className="px-3 py-2 font-medium">Outcome</th>
-                <th className="px-3 py-2 font-medium">Started</th>
-                <th className="px-3 py-2 font-medium">By</th>
-                <th className="px-3 py-2 font-medium">Error</th>
+                <th scope="col" className="px-3 py-2 font-medium">
+                  Business date
+                </th>
+                <th scope="col" className="px-3 py-2 font-medium">
+                  Attempt
+                </th>
+                <th scope="col" className="px-3 py-2 font-medium">
+                  Outcome
+                </th>
+                <th scope="col" className="px-3 py-2 font-medium">
+                  Started
+                </th>
+                <th scope="col" className="px-3 py-2 font-medium">
+                  By
+                </th>
+                <th scope="col" className="px-3 py-2 font-medium">
+                  Error
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border-subtle">

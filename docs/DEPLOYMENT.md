@@ -207,6 +207,7 @@ Also forward `Host` and `X-Forwarded-Proto`. Serve only HTTPS, because cookies a
 - Restrict who can run `ops:bootstrap` to the server operator; it needs the production environment and database access.
 - Never run the application as the schema owner or a superuser in production. The owner can disable the ledger triggers (OPERATIONS.md §4).
 - There is no Docker configuration, and none should be added. PostgreSQL runs natively.
+- The first deploy of Phase 10's final pass renames the auth cookies (`__Host-`/`__Secure-` prefixes, ARCHITECTURE.md D56): every user signs in once more. Old cookies expire on their own.
 
 ## 9. Production deployment runbook
 

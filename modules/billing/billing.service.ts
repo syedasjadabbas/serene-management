@@ -457,9 +457,8 @@ export async function previewCharge(
     businessDate,
   );
   const balance = units(
-    (await findWindows(prisma, ctx.propertyId, ref.reservationRoomId!)).find(
-      (w) => w.id === ref.id,
-    )!.balance,
+    (await findWindows(prisma, ctx.propertyId, ref.reservationRoomId)).find((w) => w.id === ref.id)!
+      .balance,
   );
   return {
     currencyCode: ctx.currencyCode,
@@ -493,7 +492,7 @@ export async function postCharge(
         input,
         businessDate,
       );
-      const header = await findAccountHeader(tx, ctx.propertyId, ref.reservationRoomId!);
+      const header = await findAccountHeader(tx, ctx.propertyId, ref.reservationRoomId);
       const folio = await folioState(tx, ctx.propertyId, folioId);
       assertOpenForPosting(folio);
       const before = await verifiedBalance(tx, folio);
@@ -1656,7 +1655,7 @@ export async function settleFolio(
         permission: "payments:create",
       },
     );
-    return ref.reservationRoomId!;
+    return ref.reservationRoomId;
   });
   return getFolioAccount(ctx, reservationRoomId);
 }
@@ -1837,7 +1836,7 @@ export async function listLedger(
     }
     after = { postedAt, id: decoded.i };
   }
-  const windows = await findWindows(prisma, ctx.propertyId, ref.reservationRoomId!);
+  const windows = await findWindows(prisma, ctx.propertyId, ref.reservationRoomId);
   const folioStatus = windows.find((w) => w.id === folioId)?.status ?? "OPEN";
   const rows = await findLedgerPage(prisma, ctx.propertyId, folioId, after, query.limit);
   const page = rows.slice(0, query.limit);

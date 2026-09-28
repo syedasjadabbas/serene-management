@@ -99,6 +99,7 @@
   --sm-row-height: 2rem; /* 32px table rows */
   --sm-control-height: 2rem; /* inputs, selects, buttons */
   --sm-control-height-touch: 2.75rem; /* housekeeping / tablet workflows */
+  --sm-control-height-sm: 1.75rem; /* compact secondary actions */
 
   color-scheme: light;
 }
@@ -124,6 +125,12 @@
   --sm-accent: #c79c5a;
   --sm-accent-subtle: #2b2416;
   --sm-focus: #5b9cf0;
+  /* Status foregrounds lightened for dark surfaces (>= 5.7:1 on surface,
+     raised and *-subtle; also the text colour on the danger button). */
+  --sm-success: #4cc38a;
+  --sm-warning: #f5b54a;
+  --sm-danger: #f97066;
+  --sm-info: #7cb4f5;
   --sm-success-subtle: #10281c;
   --sm-warning-subtle: #2c1f0b;
   --sm-danger-subtle: #2e1310;
@@ -152,6 +159,12 @@
     --sm-accent: #c79c5a;
     --sm-accent-subtle: #2b2416;
     --sm-focus: #5b9cf0;
+    /* Status foregrounds lightened for dark surfaces (>= 5.7:1 on surface,
+       raised and *-subtle; also the text colour on the danger button). */
+    --sm-success: #4cc38a;
+    --sm-warning: #f5b54a;
+    --sm-danger: #f97066;
+    --sm-info: #7cb4f5;
     --sm-success-subtle: #10281c;
     --sm-warning-subtle: #2c1f0b;
     --sm-danger-subtle: #2e1310;
@@ -163,6 +176,15 @@
 :root[data-density="touch"] {
   --sm-row-height: 2.75rem;
   --sm-control-height: 2.75rem;
+}
+
+/* Touch screens get finger-sized controls (44px, 36px for small buttons)
+   without changing table density. */
+@media (pointer: coarse) {
+  :root {
+    --sm-control-height: 2.75rem;
+    --sm-control-height-sm: 2.25rem;
+  }
 }
 
 /* --- Tailwind mapping ---------------------------------------------------- */
@@ -243,6 +265,7 @@
   --spacing-row: var(--sm-row-height);
   --spacing-control: var(--sm-control-height);
   --spacing-control-touch: var(--sm-control-height-touch);
+  --spacing-control-sm: var(--sm-control-height-sm);
 }
 
 /* --- Base ---------------------------------------------------------------- */

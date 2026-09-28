@@ -87,13 +87,12 @@ export function BillingWorkspace() {
         </form>
       </div>
 
-      <div role="tablist" aria-label="Folio views" className="flex flex-wrap gap-1">
+      <div role="group" aria-label="Folio views" className="flex flex-wrap gap-1">
         {FOLIO_VIEWS.map((v) => (
           <button
             key={v}
             type="button"
-            role="tab"
-            aria-selected={view === v}
+            aria-pressed={view === v}
             onClick={() => setParam({ view: v === "in_house" ? "" : v })}
             className={cn(
               "min-h-11 rounded-md px-3 text-sm",

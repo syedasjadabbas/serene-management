@@ -4,6 +4,7 @@ import type { Route } from "next";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { StatusPanel } from "@/components/ui/StatusPanel";
 import { cn } from "@/components/ui/cn";
+import { useTabs } from "@/components/ui/tabs";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useProperty } from "@/hooks/useProperty";
 import { PackagesView } from "./PackagesView";
@@ -30,6 +31,11 @@ export function RatesWorkspace() {
   const router = useRouter();
   const pathname = usePathname();
   const tab: Tab = (TABS.find(([id]) => id === params.get("tab"))?.[0] ?? "plans") as Tab;
+  const tabs = useTabs(
+    TABS.map(([id]) => id),
+    tab,
+    (id) => router.replace(`${pathname}?tab=${id}` as Route),
+  );
 
   if (isLoading) return <StatusPanel kind="loading" title="Loading rates" />;
   if (!can("rates:read")) {
@@ -55,8 +61,7 @@ export function RatesWorkspace() {
           <button
             key={id}
             type="button"
-            role="tab"
-            aria-selected={tab === id}
+            {...tabs.tab(id)}
             onClick={() => router.replace(`${pathname}?tab=${id}` as Route)}
             className={cn(
               "min-h-11 rounded-md px-3 text-sm",
@@ -69,10 +74,12 @@ export function RatesWorkspace() {
           </button>
         ))}
       </div>
-      {tab === "plans" ? <RatePlansView /> : null}
-      {tab === "calendar" ? <RateCalendarPanel /> : null}
-      {tab === "restrictions" ? <RestrictionsView /> : null}
-      {tab === "packages" ? <PackagesView /> : null}
+      <div {...tabs.panel}>
+        {tab === "plans" ? <RatePlansView /> : null}
+        {tab === "calendar" ? <RateCalendarPanel /> : null}
+        {tab === "restrictions" ? <RestrictionsView /> : null}
+        {tab === "packages" ? <PackagesView /> : null}
+      </div>
     </div>
   );
 }

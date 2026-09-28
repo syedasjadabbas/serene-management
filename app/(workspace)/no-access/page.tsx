@@ -7,6 +7,7 @@ export const metadata: Metadata = { title: "No property access" };
 export default function NoAccessPage() {
   return (
     <StatusPanel
+      level={1}
       kind="forbidden"
       title="No property access"
       description="Your account is active but has not been given access to any property. Ask an administrator to assign you a role."

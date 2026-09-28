@@ -1,5 +1,5 @@
 import { definePropertyRoute, withMeta } from "@/lib/http/route";
-import { hasPermission } from "@/lib/permissions/evaluate";
+import { hasPermission, hasPermissionAnywhere } from "@/lib/permissions/evaluate";
 import { auditLogQuerySchema } from "@/modules/audit/audit.schema";
 import { listPropertyAuditLogs } from "@/modules/audit/audit.service";
 import { propertyParamsSchema } from "@/modules/properties/properties.schema";
@@ -14,6 +14,7 @@ export const GET = definePropertyRoute({
       ctx.propertyId,
       query,
       hasPermission(ctx.access, ctx.propertyId, "billing:read"),
+      hasPermissionAnywhere(ctx.access, "guests:read"),
     );
     return withMeta(items, meta);
   },

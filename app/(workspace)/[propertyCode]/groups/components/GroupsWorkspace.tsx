@@ -59,13 +59,12 @@ export function GroupsWorkspace() {
           </Button>
         ) : null}
       </div>
-      <div role="tablist" aria-label="Group status" className="flex flex-wrap gap-1">
+      <div role="group" aria-label="Group status" className="flex flex-wrap gap-1">
         {STATUSES.map(([id, label]) => (
           <button
             key={id}
             type="button"
-            role="tab"
-            aria-selected={status === id}
+            aria-pressed={status === id}
             onClick={() => setStatus(id)}
             className={cn(
               "min-h-11 rounded-md px-3 text-sm",

@@ -7,6 +7,7 @@ import {
   type AccessProfile,
   hasOrganizationPermission,
   hasPermission,
+  hasPermissionAnywhere,
   propertiesWithPermission,
 } from "@/lib/permissions/evaluate";
 import { decodeCursor, encodeCursor } from "@/lib/utils/cursor";
@@ -91,6 +92,8 @@ export async function listPropertyAuditLogs(
   query: AuditLogQuery,
   /** Whether the caller holds billing:read at the property (M1: redaction otherwise). */
   financialVisible: boolean,
+  /** Whether the caller may read guest profiles (L9: guest contact details otherwise hidden). */
+  personalVisible = true,
 ): Promise<{ items: AuditLogView[]; meta: CursorPageMeta }> {
   let after: { createdAt: Date; id: string } | null = null;
   if (query.cursor) {
@@ -135,7 +138,7 @@ export async function listPropertyAuditLogs(
       businessDate: row.businessDate ? toDateOnly(row.businessDate) : null,
       reason: row.reason,
       requestId: row.requestId,
-      ...auditSnapshots(row, financialVisible),
+      ...auditSnapshots(row, financialVisible, personalVisible),
     })),
     meta: { nextCursor, limit: query.limit },
   };
@@ -215,6 +218,7 @@ export async function listOrganizationAuditLogs(
     ).map((p) => [p.id, p.code]),
   );
   const financialVisible = financialVisibleFor(ctx.access);
+  const personalVisible = hasPermissionAnywhere(ctx.access, "guests:read");
   return {
     items: page.map((row) => ({
       id: row.id,
@@ -228,7 +232,7 @@ export async function listOrganizationAuditLogs(
       businessDate: row.businessDate ? toDateOnly(row.businessDate) : null,
       reason: row.reason,
       requestId: row.requestId,
-      ...auditSnapshots(row, financialVisible(row.propertyId)),
+      ...auditSnapshots(row, financialVisible(row.propertyId), personalVisible),
       property: row.propertyId
         ? { id: row.propertyId, code: codes.get(row.propertyId) ?? "" }
         : null,

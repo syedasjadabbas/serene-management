@@ -16,12 +16,21 @@ export interface SelectProps extends Omit<SelectHTMLAttributes<HTMLSelectElement
 
 /** Native select (keyboard and screen-reader friendly) with label, hint and error. */
 export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select(
-  { label, options, placeholder, errors, hint, className, ...props },
+  {
+    label,
+    options,
+    placeholder,
+    errors,
+    hint,
+    className,
+    "aria-describedby": describedByProp,
+    ...props
+  },
   ref,
 ) {
   const id = useId();
   const error = errors?.[0];
-  const describedBy = [hint ? `${id}-hint` : null, error ? `${id}-error` : null]
+  const describedBy = [describedByProp, hint ? `${id}-hint` : null, error ? `${id}-error` : null]
     .filter(Boolean)
     .join(" ");
   return (
@@ -31,6 +40,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select
       </label>
       <select
         ref={ref}
+        {...props}
         id={id}
         aria-invalid={error ? true : undefined}
         aria-describedby={describedBy || undefined}
@@ -38,7 +48,6 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select
           "h-control rounded-md border bg-surface px-2 text-sm text-fg",
           error ? "border-danger" : "border-border hover:border-border-strong",
         )}
-        {...props}
       >
         {placeholder !== undefined ? <option value="">{placeholder}</option> : null}
         {options.map((option) => (

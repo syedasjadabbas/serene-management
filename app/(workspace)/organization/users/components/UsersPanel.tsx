@@ -127,7 +127,7 @@ export function UsersPanel() {
                         {canManage(a) && !isSelf(user) ? (
                           <button
                             type="button"
-                            className="ms-1 inline-flex min-h-8 min-w-8 items-center justify-center rounded text-fg-muted hover:bg-surface-sunken hover:text-danger md:min-h-0 md:min-w-0"
+                            className="ms-1 inline-flex min-h-8 min-w-8 items-center justify-center rounded text-fg-muted hover:bg-surface-sunken hover:text-danger md:min-h-6 md:min-w-6"
                             aria-label={`Revoke ${a.role.name} from ${user.displayName}`}
                             onClick={() => setDialog({ kind: "revoke", user, assignment: a })}
                           >

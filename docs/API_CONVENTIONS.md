@@ -341,7 +341,8 @@ Rules: messages are safe to show; the client localizes by `code` (+ `details`), 
 
 ## 9. Authentication
 
-- Cookies: `sm_at` (access JWT, 15 min, `httpOnly; Secure; SameSite=Lax; Path=/`), `sm_rt` (refresh, 14 days, `httpOnly; Secure; SameSite=Strict; Path=/api/v1/auth`).
+- Cookies (production names; development over http drops the prefixes, `lib/auth/cookies.ts`): `__Host-sm_at` (access JWT, 15 min, `httpOnly; Secure; SameSite=Lax; Path=/`), `__Secure-sm_rt` (refresh, 14 days, `httpOnly; Secure; SameSite=Strict; Path=/api/v1/auth`), `__Host-sm_s` (session marker, D56).
+- State-changing requests must carry an `Origin` equal to the origin of `APP_URL`. In production no other origin is accepted, not even the request's own `Host` (DNS rebinding, D56).
 - Endpoints: `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, `POST /auth/password/forgot`, `POST /auth/password/reset`, `GET /auth/sessions`, `DELETE /auth/sessions/{id}`.
 - **As implemented (Phase 10, batch 1)**: `POST /auth/password/forgot` (e-mail) is deferred. Implemented:
 

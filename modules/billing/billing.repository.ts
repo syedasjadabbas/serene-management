@@ -65,11 +65,17 @@ export function folioBalancesWithLedger(tx: Tx, folioIds: string[]) {
     WHERE f."id" = ANY(${folioIds}::uuid[])`;
 }
 
-export function findFolioRef(tx: Tx, propertyId: string, id: string) {
-  return tx.folio.findFirst({
-    where: { id, propertyId },
+/**
+ * A guest folio (a billing window of a reservation room) of the property.
+ * Folios without a reservation room (group/block masters, not yet used) are
+ * not found here, so no command can mistake one for a stay's window (L15).
+ */
+export async function findFolioRef(tx: Tx, propertyId: string, id: string) {
+  const ref = await tx.folio.findFirst({
+    where: { id, propertyId, reservationRoomId: { not: null } },
     select: { id: true, reservationRoomId: true, window: true },
   });
+  return ref ? { ...ref, reservationRoomId: ref.reservationRoomId! } : null;
 }
 
 export function findWindows(tx: Tx, propertyId: string, reservationRoomId: string) {

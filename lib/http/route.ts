@@ -238,10 +238,24 @@ function requestMeta(request: NextRequest): RequestMeta {
   };
 }
 
-/** CSRF defence for cookie-authenticated writes: the Origin must be our own. */
+/**
+ * CSRF defence for cookie-authenticated writes: the Origin must be our own.
+ * In production that is APP_URL only (L3): the request's own Host-derived
+ * origin is not trusted there, since a rebinding hostname would match itself.
+ * Development and tests also accept the Host origin (any local port).
+ */
+export function allowedOrigins(
+  env: { APP_URL: string; NODE_ENV: string },
+  requestOrigin: string,
+): Set<string> {
+  const allowed = new Set([new URL(env.APP_URL).origin]);
+  if (env.NODE_ENV !== "production") allowed.add(requestOrigin);
+  return allowed;
+}
+
 function assertSameOrigin(request: NextRequest) {
   const origin = request.headers.get("origin");
-  const allowed = new Set([request.nextUrl.origin, new URL(serverEnv().APP_URL).origin]);
+  const allowed = allowedOrigins(serverEnv(), request.nextUrl.origin);
   if (!origin || !allowed.has(origin)) {
     throw new AppError("FORBIDDEN", "Cross-origin request rejected");
   }

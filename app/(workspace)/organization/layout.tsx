@@ -17,6 +17,7 @@ export default async function OrganizationLayout({ children }: { children: React
   if (!canUseOrganizationWorkspace(me)) {
     return (
       <StatusPanel
+        level={1}
         kind="forbidden"
         title="Access denied"
         description="The organization workspace is for users who work across properties."

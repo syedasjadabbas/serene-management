@@ -206,6 +206,7 @@ export function ReportView({ reportKey }: { reportKey: string }) {
       ) : (
         <div className="overflow-x-auto rounded-lg border border-border-subtle">
           <table className="w-full text-sm">
+            <caption className="sr-only">{data.title}</caption>
             <thead className="bg-surface-sunken text-xs text-fg-muted">
               <tr>
                 {data.columns.map((column) => (

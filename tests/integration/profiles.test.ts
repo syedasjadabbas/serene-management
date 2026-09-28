@@ -1,3 +1,4 @@
+import { GET as orgAuditRoute } from "@/app/api/v1/audit-logs/route";
 import { randomUUID } from "node:crypto";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
@@ -600,6 +601,35 @@ describe("guest profiles", () => {
     // Profile statistics use the same scoping.
     expect((await profile(gm, guest)).body.data.statistics.upcoming).toBe(2);
     expect((await profile(gmB, guest)).body.data.statistics.upcoming).toBe(0);
+  });
+});
+
+describe("personal data in the audit trail (L9)", () => {
+  it("shows guest contact details only to callers who may read guest profiles", async () => {
+    const guest = (await createGuestRow(org, "Xenia", "Private")).id;
+    const v = (await profile(agent, guest)).body.data.version;
+    expect(
+      (await patchGuest(agent, guest, { version: v, email: "priya.private@example.com" })).status,
+    ).toBe(200);
+    // Organization audit readers without guests:read see the change, not the address.
+    const auditOnly = await createCustomUser(org, "auditnoguest", [
+      { permissions: ["audit:read"] },
+    ]);
+    const trail = async (jar: CookieJar) => {
+      const r = await call(orgAuditRoute, {
+        path: `/api/v1/audit-logs?resourceId=${guest}`,
+        jar,
+      });
+      expect(r.status).toBe(200);
+      return (r.body.data as { action: string; after: Record<string, unknown> }[]).find(
+        (row) => row.action === "guest.update",
+      )!;
+    };
+    const hidden = await trail(await loginAs(auditOnly.email, TEST_PASSWORD));
+    expect(hidden.after.email).toBe("(restricted)");
+    expect(JSON.stringify(hidden)).not.toContain("priya.private@example.com");
+    // With guests:read (the organization general manager) the value is shown.
+    expect((await trail(orgGm)).after.email).toBe("priya.private@example.com");
   });
 });
 

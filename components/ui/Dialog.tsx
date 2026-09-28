@@ -5,7 +5,9 @@ import { cn } from "./cn";
 
 /**
  * Modal dialog on the native <dialog> element: focus is trapped and Escape
- * closes it (browser behaviour); focus returns to the opener on close.
+ * closes it (browser behaviour); focus returns to the opener on close —
+ * also when the dialog is unmounted instead of closed ({open ? <X/> : null}),
+ * which is how most forms use it.
  */
 export function Dialog({
   open,
@@ -39,6 +41,16 @@ export function Dialog({
       if (opener.current instanceof HTMLElement) opener.current.focus();
     }
   }, [open]);
+
+  // Unmount: close and give focus back to the opener if it is still on the page.
+  useEffect(() => {
+    const dialog = ref.current;
+    return () => {
+      if (dialog?.open) dialog.close();
+      const target = opener.current;
+      if (target instanceof HTMLElement && target.isConnected) target.focus();
+    };
+  }, []);
 
   return (
     <dialog

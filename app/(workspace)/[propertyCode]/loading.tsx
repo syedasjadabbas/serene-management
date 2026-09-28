@@ -1,5 +1,5 @@
 import { StatusPanel } from "@/components/ui/StatusPanel";
 
 export default function Loading() {
-  return <StatusPanel kind="loading" title="Loading workspace" />;
+  return <StatusPanel level={1} kind="loading" title="Loading workspace" />;
 }

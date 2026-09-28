@@ -4,6 +4,7 @@ import type { Route } from "next";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { StatusPanel } from "@/components/ui/StatusPanel";
 import { cn } from "@/components/ui/cn";
+import { useTabs } from "@/components/ui/tabs";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useProperty } from "@/hooks/useProperty";
 import { CompaniesPanel } from "./CompaniesPanel";
@@ -21,13 +22,18 @@ export function GuestsWorkspace() {
   const params = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
-  const tabs = [
+  const profileTabs = [
     ["guests", "Guests", can("guests:read")],
     ["companies", "Companies", can("accounts:read")],
     ["loyalty", "Loyalty", can("loyalty:read")],
   ] as const;
-  const visible = tabs.filter(([, , allowed]) => allowed);
+  const visible = profileTabs.filter(([, , allowed]) => allowed);
   const tab = visible.find(([id]) => id === params.get("tab"))?.[0] ?? visible[0]?.[0];
+  const tabs = useTabs(
+    visible.map(([id]) => id),
+    tab,
+    (id) => router.replace(`${pathname}?tab=${id}` as Route),
+  );
 
   if (isLoading) return <StatusPanel kind="loading" title="Loading guests" />;
   if (!tab) {
@@ -52,8 +58,7 @@ export function GuestsWorkspace() {
           <button
             key={id}
             type="button"
-            role="tab"
-            aria-selected={tab === id}
+            {...tabs.tab(id)}
             onClick={() => router.replace(`${pathname}?tab=${id}` as Route)}
             className={cn(
               "min-h-11 rounded-md px-3 text-sm",
@@ -66,9 +71,11 @@ export function GuestsWorkspace() {
           </button>
         ))}
       </div>
-      {tab === "guests" ? <GuestsPanel /> : null}
-      {tab === "companies" ? <CompaniesPanel /> : null}
-      {tab === "loyalty" ? <LoyaltyPanel /> : null}
+      <div {...tabs.panel}>
+        {tab === "guests" ? <GuestsPanel /> : null}
+        {tab === "companies" ? <CompaniesPanel /> : null}
+        {tab === "loyalty" ? <LoyaltyPanel /> : null}
+      </div>
     </div>
   );
 }

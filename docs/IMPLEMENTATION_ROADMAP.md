@@ -85,6 +85,32 @@ The product owner re-sequenced Phase 2 to **Reservations + Availability**. It de
 
 Moved to later phases: configuration screens for rooms, rate plans and restrictions; full guest profiles (documents, preferences, merge); room holds and auto-assign; deposits and cancellation penalties (billing); negotiated, member and day-use rates; block pickup (groups); turnaway capture.
 
+## Phase 10 final pass (as executed) — production readiness (pending commit)
+
+No migrations. Decisions in ARCHITECTURE.md D56.
+
+**Security:**
+
+- L3: CSRF `Origin` limited to `APP_URL` in production.
+- L4: `__Host-`/`__Secure-` cookie prefixes (one-time re-login on deploy).
+- L9: guest contact data redacted in audit trails without `guests:read`.
+- L15: stay-only folio references.
+- Structural guard test: every API handler uses a route wrapper; every property route uses `definePropertyRoute`; only health and sign-in routes are public.
+
+**Accessibility:**
+
+- Dialog focus return on unmount.
+- `StatusPanel` heading level and alert role.
+- ARIA tabs with keyboard navigation (profiles, rates, folio windows); filters as `aria-pressed` buttons.
+- Table captions and `scope`; radio group name.
+- Root, organization and global error boundaries; not-found page.
+- Dark-theme status colours ≥ 5.7:1.
+- 44 px controls on touch screens; 24 px minimum for the role-remove button.
+- Field `aria-describedby` merged instead of overwritten.
+- `jsx-a11y` recommended lint rules.
+
+**Performance follow-up (verified, unchanged):** confirmation search on 200 046 reservations uses `reservations_confirmation_number_trgm_idx` (prefix 21 ms, contains 11 ms vs 102 ms sequential, suffix 6 ms). Report paging (20 000-row limit) and room-board paging stay as in D55.
+
 ## Phase 10 batches 4+5 (as executed) — RBAC hardening and performance (pending commit)
 
 Nine concurrent index migrations `20261110090000`–`0800` (D55).

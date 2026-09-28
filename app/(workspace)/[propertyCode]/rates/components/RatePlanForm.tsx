@@ -189,11 +189,21 @@ export function RatePlanFormDialog({
         <legend className="px-1 text-xs text-fg-secondary">Pricing</legend>
         <div className="flex flex-wrap gap-4 text-sm">
           <label className="flex min-h-11 items-center gap-2">
-            <input type="radio" checked={!derived} onChange={() => setDerived(false)} />
+            <input
+              type="radio"
+              name="pricing-mode"
+              checked={!derived}
+              onChange={() => setDerived(false)}
+            />
             Own seasons (base plan)
           </label>
           <label className="flex min-h-11 items-center gap-2">
-            <input type="radio" checked={derived} onChange={() => setDerived(true)} />
+            <input
+              type="radio"
+              name="pricing-mode"
+              checked={derived}
+              onChange={() => setDerived(true)}
+            />
             Derived from another plan
           </label>
         </div>

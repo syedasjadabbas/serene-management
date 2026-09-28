@@ -5,17 +5,23 @@ import type { NextResponse } from "next/server";
  * No `server-only` guard: proxy.ts and route handlers both use it, and it
  * contains no secrets.
  */
-export const ACCESS_COOKIE = "sm_at";
-export const REFRESH_COOKIE = "sm_rt";
+const secure = process.env.NODE_ENV === "production";
+
+/**
+ * In production the names carry browser-enforced prefixes (L4): `__Host-`
+ * (Secure, Path=/, no Domain: the cookie cannot be set by a sibling
+ * subdomain or over plain HTTP) and `__Secure-` for the path-scoped refresh
+ * cookie. Development over http://localhost keeps plain names.
+ */
+export const ACCESS_COOKIE = secure ? "__Host-sm_at" : "sm_at";
+export const REFRESH_COOKIE = secure ? "__Secure-sm_rt" : "sm_rt";
 export const REFRESH_COOKIE_PATH = "/api/v1/auth";
 /**
  * Secret-free marker ("1") with the refresh token's lifetime, visible on page
  * paths. The refresh cookie itself is scoped to /api/v1/auth, so proxy.ts uses
  * this marker to choose between a silent refresh and the login page.
  */
-export const SESSION_MARKER_COOKIE = "sm_s";
-
-const secure = process.env.NODE_ENV === "production";
+export const SESSION_MARKER_COOKIE = secure ? "__Host-sm_s" : "sm_s";
 
 export function setAuthCookies(
   response: NextResponse,

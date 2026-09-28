@@ -10,12 +10,12 @@ export interface TextFieldProps extends Omit<InputHTMLAttributes<HTMLInputElemen
 
 /** Labelled input with hint and error wired through aria-describedby. */
 export const TextField = forwardRef<HTMLInputElement, TextFieldProps>(function TextField(
-  { label, errors, hint, className, ...props },
+  { label, errors, hint, className, "aria-describedby": describedByProp, ...props },
   ref,
 ) {
   const id = useId();
   const error = errors?.[0];
-  const describedBy = [hint ? `${id}-hint` : null, error ? `${id}-error` : null]
+  const describedBy = [describedByProp, hint ? `${id}-hint` : null, error ? `${id}-error` : null]
     .filter(Boolean)
     .join(" ");
   return (
@@ -25,6 +25,7 @@ export const TextField = forwardRef<HTMLInputElement, TextFieldProps>(function T
       </label>
       <input
         ref={ref}
+        {...props}
         id={id}
         aria-invalid={error ? true : undefined}
         aria-describedby={describedBy || undefined}
@@ -32,7 +33,6 @@ export const TextField = forwardRef<HTMLInputElement, TextFieldProps>(function T
           "h-control rounded-md border bg-surface px-2.5 text-sm text-fg placeholder:text-fg-muted",
           error ? "border-danger" : "border-border hover:border-border-strong",
         )}
-        {...props}
       />
       {hint ? (
         <p id={`${id}-hint`} className="text-xs text-fg-muted">

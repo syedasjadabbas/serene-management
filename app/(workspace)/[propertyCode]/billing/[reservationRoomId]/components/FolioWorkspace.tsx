@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { StatusPanel } from "@/components/ui/StatusPanel";
 import { cn } from "@/components/ui/cn";
+import { useTabs } from "@/components/ui/tabs";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useProperty } from "@/hooks/useProperty";
 import { useFolioAccountQuery, useOpenWindowMutation } from "@/lib/api/endpoints/billing.api";
@@ -36,6 +37,8 @@ export function FolioWorkspace({ reservationRoomId }: { reservationRoomId: strin
   );
   const error = toClientApiError(query.error);
   const [selected, setSelected] = useState<number>(1);
+  const windowNumbers = query.data?.windows.map((w) => w.window) ?? [];
+  const windowTabs = useTabs(windowNumbers, selected, setSelected);
   const [dialog, setDialog] = useState<DialogKind>(null);
   const [openWindow, openState] = useOpenWindowMutation();
   const openError = toClientApiError(openState.error);
@@ -145,6 +148,7 @@ export function FolioWorkspace({ reservationRoomId }: { reservationRoomId: strin
                     currency={account.currencyCode}
                     minorUnits={account.minorUnits}
                     onSelect={() => setSelected(w.window)}
+                    tabProps={windowTabs.tab(w.window)}
                   />
                 ))}
               </div>
@@ -166,7 +170,7 @@ export function FolioWorkspace({ reservationRoomId }: { reservationRoomId: strin
             </div>
 
             {win ? (
-              <>
+              <div {...windowTabs.panel}>
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 pt-3">
                   <p className="text-sm">
                     Window {win.window}
@@ -213,7 +217,7 @@ export function FolioWorkspace({ reservationRoomId }: { reservationRoomId: strin
                 ) : null}
                 {/* Keyed by window: switching windows starts from the first page. */}
                 <LedgerView key={win.id} account={account} win={win} />
-              </>
+              </div>
             ) : null}
           </section>
 
@@ -298,18 +302,19 @@ function WindowTab({
   currency,
   minorUnits,
   onSelect,
+  tabProps,
 }: {
   win: FolioWindowView;
   active: boolean;
   currency: string;
   minorUnits: number;
   onSelect: () => void;
+  tabProps: ReturnType<ReturnType<typeof useTabs<number>>["tab"]>;
 }) {
   return (
     <button
       type="button"
-      role="tab"
-      aria-selected={active}
+      {...tabProps}
       onClick={onSelect}
       className={cn(
         "flex min-h-11 flex-col items-start rounded-md px-3 py-1 text-left text-sm",

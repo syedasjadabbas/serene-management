@@ -3,7 +3,7 @@
 import { Button } from "@/components/ui/Button";
 import { StatusPanel } from "@/components/ui/StatusPanel";
 
-export default function WorkspaceError({
+export default function OrganizationError({
   error,
   reset,
 }: {
@@ -15,7 +15,7 @@ export default function WorkspaceError({
       level={1}
       kind="error"
       title="Something went wrong"
-      description="The page could not be loaded. You can try again."
+      description="The organization workspace could not be loaded. You can try again."
       requestId={error.digest ?? null}
       action={
         <Button variant="secondary" onClick={reset}>

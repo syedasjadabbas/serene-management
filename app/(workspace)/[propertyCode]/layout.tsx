@@ -28,6 +28,7 @@ export default async function PropertyLayout({
   if (!property) {
     return (
       <StatusPanel
+        level={1}
         kind="forbidden"
         title="Access denied"
         description="You do not have access to this property, or it does not exist."
