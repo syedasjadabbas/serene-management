@@ -43,10 +43,25 @@ jobs:
           sudo apt-get install -y -q postgresql-common
           sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
           sudo apt-get install -y -q "postgresql-${PG_VERSION}" "postgresql-client-${PG_VERSION}"
-          sudo pg_ctlcluster "${PG_VERSION}" main start
-          port=$(pg_lsclusters -h | awk -v v="${PG_VERSION}" '$1 == v { print $3 }')
+          # The runner image disables automatic cluster creation, so installing the
+          # server package may leave no "main" cluster: create it when missing
+          # (pg_createcluster picks a free port if another cluster holds 5432).
+          cluster() { pg_lsclusters -h | awk -v v="${PG_VERSION}" '$1 == v && $2 == "main"'; }
+          if [ -z "$(cluster)" ]; then
+            sudo pg_createcluster "${PG_VERSION}" main
+          fi
+          if [ "$(cluster | awk '{ print $4 }')" != "online" ]; then
+            sudo pg_ctlcluster "${PG_VERSION}" main start
+          fi
+          pg_lsclusters
+          port=$(cluster | awk '{ print $3 }')
+          status=$(cluster | awk '{ print $4 }')
+          if [ -z "${port}" ] || [ "${status}" != "online" ]; then
+            echo "PostgreSQL ${PG_VERSION}/main is not running (port='${port}', status='${status}')" >&2
+            exit 1
+          fi
           echo "PGPORT_CI=${port}" >> "$GITHUB_ENV"
-          sudo -u postgres psql -p "${port}" -X -c "SELECT version()"
+          sudo -u postgres psql -p "${port}" -X -v ON_ERROR_STOP=1 -c "SELECT version()"
 
       - name: Create database role, databases and .env (throwaway credentials)
         run: |
