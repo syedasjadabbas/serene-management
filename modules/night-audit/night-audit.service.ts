@@ -484,7 +484,7 @@ export async function startNightAudit(
   try {
     await runInTransaction(
       (tx) => commitNightAudit(tx, ctx, runId, businessDate, steps, input.reason, options.hooks),
-      { timeoutMs: COMMIT_TIMEOUT_MS, retry: false },
+      { timeoutMs: COMMIT_TIMEOUT_MS, statementTimeoutMs: COMMIT_TIMEOUT_MS, retry: false },
     );
   } catch (error) {
     await failRun(ctx, runId, businessDate, steps, error, input.reason);

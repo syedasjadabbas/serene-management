@@ -2,30 +2,36 @@
 
 How to install, configure, start and verify SERENE MANAGEMENT on a server. The target is a single Node.js process behind a reverse proxy (for example nginx) with a **native PostgreSQL** installation. **Docker is not used.** There is no Redis, no background worker and no SSE. Everything runs in the one Next.js process and the database.
 
-Related: [ARCHITECTURE.md](ARCHITECTURE.md) (D44 client IP, D48 deployment), [DATABASE_DESIGN.md](DATABASE_DESIGN.md), [RBAC.md](RBAC.md).
+Related: [OPERATIONS.md](OPERATIONS.md) (backups, restore drill, migration policy, database roles, retention, pool settings, scheduling, CI), [ARCHITECTURE.md](ARCHITECTURE.md) (D44 client IP, D48 deployment, D50–D53 operations), [DATABASE_DESIGN.md](DATABASE_DESIGN.md), [RBAC.md](RBAC.md).
 
 ## 1. Requirements
 
 - Node.js ≥ 22.12.
 - PostgreSQL 17+ as a native service on the host or a reachable server, with `psql`.
-- An application role that owns the database (not a superuser). On Windows, `npm run db:setup` creates the role and the databases from `DATABASE_URL`. On Linux, create them with `createuser` / `createdb`.
+- Two database roles, neither a superuser (OPERATIONS.md §4). The **schema owner** owns the database and runs migrations and backups. The **runtime role** is created by `scripts/db/runtime-role.sql` and is what the application connects as. On Windows, `npm run db:setup` creates the owner role and the databases from `DATABASE_URL` (a single-role setup, fine for development). On Linux, create them with `createuser` / `createdb`.
+- The PostgreSQL client tools `psql`, `pg_dump` and `pg_restore`, in the server's major version or newer, for the role script and the backups.
 - TLS termination on the reverse proxy. The application only accepts an `https://` `APP_URL` in production.
 
 ## 2. Environment variables
 
 Set these in the process environment (systemd unit, Windows service, process manager) or in a `.env` file next to `package.json`. Real environment variables win over `.env`. Never commit `.env`. `.env.example` lists every variable.
 
-| Variable                         | Production | Rule                                                                                                                                                                                   |
-| -------------------------------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `NODE_ENV`                       | required   | `production`. `next start` sets it itself; the ops commands read it from the environment.                                                                                              |
-| `DATABASE_URL`                   | required   | `postgresql://user:password@host:5432/db`. The password must be real (no `change-me`, not empty).                                                                                      |
-| `AUTH_ACCESS_TOKEN_SECRET`       | required   | ≥ 32 characters, random (`openssl rand -base64 48`). No placeholder text.                                                                                                              |
-| `AUTH_REFRESH_TOKEN_SECRET`      | required   | Same rules, and **different** from the access secret. It also peppers refresh and password-reset token hashes: changing it signs everyone out and invalidates outstanding reset links. |
-| `AUTH_ACCESS_TOKEN_TTL_SECONDS`  | optional   | 60–3600, default 900.                                                                                                                                                                  |
-| `AUTH_REFRESH_TOKEN_TTL_SECONDS` | optional   | 3600–7776000 (90 days), default 1209600 (14 days). Must be longer than the access TTL.                                                                                                 |
-| `FIELD_ENCRYPTION_KEY`           | optional   | When set, 32 random bytes in base64 (`openssl rand -base64 32`). Reserved for encrypting sensitive guest fields.                                                                       |
-| `APP_URL`                        | required   | The public URL users open, `https://…`. Must not be `localhost`, `127.0.0.1`, `0.0.0.0` or `::1`. Used for the same-origin check on writes and for links in operator output.           |
-| `TRUSTED_PROXY_HOPS`             | required   | Number of reverse proxies in front of the app that append to `X-Forwarded-For` (0–5). See §7. Must be set explicitly in production, even when it is `0`.                               |
+| Variable                                  | Production  | Rule                                                                                                                                                                                                                 |
+| ----------------------------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NODE_ENV`                                | required    | `production`. `next start` sets it itself; the ops commands read it from the environment.                                                                                                                            |
+| `DATABASE_URL`                            | required    | The **runtime role's** `postgresql://user:password@host:5432/db`. The password must be real (no `change-me`, not empty).                                                                                             |
+| `AUTH_ACCESS_TOKEN_SECRET`                | required    | ≥ 32 characters, random (`openssl rand -base64 48`). No placeholder text.                                                                                                                                            |
+| `AUTH_REFRESH_TOKEN_SECRET`               | required    | Same rules, and **different** from the access secret. It also peppers refresh and password-reset token hashes: changing it signs everyone out and invalidates outstanding reset links.                               |
+| `AUTH_ACCESS_TOKEN_TTL_SECONDS`           | optional    | 60–3600, default 900.                                                                                                                                                                                                |
+| `AUTH_REFRESH_TOKEN_TTL_SECONDS`          | optional    | 3600–7776000 (90 days), default 1209600 (14 days). Must be longer than the access TTL.                                                                                                                               |
+| `FIELD_ENCRYPTION_KEY`                    | optional    | When set, 32 random bytes in base64 (`openssl rand -base64 32`). Reserved for encrypting sensitive guest fields.                                                                                                     |
+| `APP_URL`                                 | required    | The public URL users open, `https://…`. Must not be `localhost`, `127.0.0.1`, `0.0.0.0` or `::1`. Used for the same-origin check on writes and for links in operator output.                                         |
+| `MIGRATION_DATABASE_URL`                  | recommended | The schema owner's connection, used only by `db:deploy`, `migrate status` and `ops:backup`. When unset, `DATABASE_URL` is used for everything; `ops:db-check` then warns, because the application runs as the owner. |
+| `DATABASE_POOL_MAX`                       | optional    | Connections per process, 1–50, default 10. Do not raise it to fix slowness (OPERATIONS.md §6).                                                                                                                       |
+| `DATABASE_CONNECT_TIMEOUT_MS`             | optional    | 500–60000, default 5000.                                                                                                                                                                                             |
+| `DATABASE_STATEMENT_TIMEOUT_MS`           | optional    | 1000–600000, default 30000. The night audit commit raises its own limit.                                                                                                                                             |
+| `DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_MS` | optional    | 1000–3600000, default 60000.                                                                                                                                                                                         |
+| `TRUSTED_PROXY_HOPS`                      | required    | Number of reverse proxies in front of the app that append to `X-Forwarded-For` (0–5). See §7. Must be set explicitly in production, even when it is `0`.                                                             |
 
 **Validation (fail fast).** The server validates the environment when it starts (`instrumentation.ts`), before it serves any request. `npm run ops:seed` and `npm run ops:bootstrap` validate it too. Any problem stops the process with exit code 1 and a list naming each variable and rule, for example:
 
@@ -85,7 +91,9 @@ This runs `prisma migrate deploy`. It applies pending migrations from `prisma/mi
 node node_modules/prisma/build/index.js migrate status
 ```
 
-`db:migrate` (`migrate dev`) and `db:reset` are development-only and must never point at production. Back up the database (`pg_dump`) before deploying a release that contains migrations.
+`db:migrate` (`migrate dev`) and `db:reset` are development-only and must never point at production.
+
+Migrations connect as the schema owner (`MIGRATION_DATABASE_URL`). They are **not** transactional per file, and they are never rolled back automatically: the policy is to back up first and fix forward. For the safety checklist (explicit `BEGIN`/`COMMIT`, `CREATE INDEX CONCURRENTLY`, batched backfills, `lock_timeout`) and for what to do when a migration fails, see [OPERATIONS.md §3](OPERATIONS.md#3-migrations).
 
 ## 5. Reference data and first administrator
 
@@ -197,14 +205,49 @@ Also forward `Host` and `X-Forwarded-Proto`. Serve only HTTPS, because cookies a
 - Keep the two auth secrets distinct and private. Rotating `AUTH_ACCESS_TOKEN_SECRET` signs everyone out within the access TTL. Rotating `AUTH_REFRESH_TOKEN_SECRET` signs everyone out immediately and voids reset links.
 - Never run `db:migrate`, `db:reset` or `db:seed` against production.
 - Restrict who can run `ops:bootstrap` to the server operator; it needs the production environment and database access.
+- Never run the application as the schema owner or a superuser in production. The owner can disable the ledger triggers (OPERATIONS.md §4).
 - There is no Docker configuration, and none should be added. PostgreSQL runs natively.
 
-## 9. Release checklist
+## 9. Production deployment runbook
 
-1. Back up the database.
-2. Install the new release: layout A or B in §3.
-3. `npm run db:deploy`.
-4. `npm run ops:seed`.
-5. Restart the process. It exits immediately with a clear message if the environment is invalid.
-6. Wait for `/api/health/ready` to return 200 before sending traffic.
-7. On a first installation only, run `npm run ops:bootstrap -- --confirm …`, then sign in and create the first property.
+Use this for every release; the first installation follows the same steps plus step 8. Commands run in the application directory, with the production environment loaded.
+
+1. **Preconditions**
+   - The release passed CI (OPERATIONS.md §8) and was tested on staging against a restored copy of production (OPERATIONS.md §3.2).
+   - Read the release's migrations (`prisma/migrations/*/migration.sql`): note long-running or locking steps, and schedule them off-peak and away from the night audit.
+   - Confirm last night's backup exists and verifies (`npm run ops:backup -- list --dir …`).
+2. **Environment validation**
+   - Set the environment (§2): `DATABASE_URL` for the runtime role and `MIGRATION_DATABASE_URL` for the owner.
+   - The server refuses to start on an invalid environment, and so do `ops:seed`, `ops:db-check` and `ops:maintenance`. Nothing needs to be checked by hand beyond reading their output.
+3. **Database backup** — only if the release contains migrations, but it is cheap enough to do every time:
+   ```bash
+   npm run ops:backup -- create --out-dir /var/backups/serene
+   npm run ops:backup -- verify --file <the file just created>
+   ```
+   Note the file name. It is the fallback in step 10.
+4. **Install the release**
+   - Layout A: `npm ci` → `npm run build` → `npm prune --omit=dev`.
+   - Layout B: copy the artifacts, then `npm ci --omit=dev` (§3).
+5. **Prisma client generation.** `postinstall` runs `prisma generate` during `npm ci`. It needs no database access and no credentials, and it must finish without errors. There is no separate step.
+6. **Migrations**
+   ```bash
+   npm run db:deploy
+   npm run ops:seed
+   ```
+   - `db:deploy` must end with `All migrations have been successfully applied` (or report nothing to apply).
+   - If it fails, stop and follow OPERATIONS.md §3.4. Do not start the new release against a half-migrated database.
+7. **Start.** Restart the service, for example `systemctl restart serene` running `npm start`. The process exits immediately, with the list of problems, if the environment is invalid.
+8. **First installation only.** Create the runtime role (OPERATIONS.md §4), run `npm run ops:bootstrap -- --confirm …` (§5.2), then sign in and create the first property. Schedule backups and maintenance (OPERATIONS.md §7).
+9. **Health and smoke checks**
+   - Wait for `/api/health/ready` to return 200 before routing traffic (§6). `/api/health/live` must return 200 throughout.
+   - `npm run ops:db-check -- --strict`: no `FAIL` or `WARN` lines (guards enabled, UTC session, no failed migrations, runtime role is not the owner).
+   - Sign in. Open the room rack for today's business date. Open one in-house folio. Run one report for the last closed date. Sign out.
+10. **Rollback and recovery.** Migrations are never rolled back automatically (OPERATIONS.md §3.2).
+    - **The application misbehaves and the schema is unchanged or backward compatible** (expand/contract): redeploy the previous release's artifacts and restart.
+    - **A migration failed or corrupted data:** keep the application stopped and follow OPERATIONS.md §3.4. If data is damaged, restore the step-3 backup into a new database and switch over (OPERATIONS.md §2.4), then redeploy the previous release.
+    - **Otherwise,** fix forward with a corrective migration in a new release.
+11. **Post-deployment verification**
+    - Watch the logs and `/api/health/ready` for the first hour.
+    - Confirm the next scheduled backup and maintenance runs succeed.
+    - After the next night audit, check that the business date rolled and that `ops:db-check` is still clean.
+    - Record the release, the backup file name and any issues.

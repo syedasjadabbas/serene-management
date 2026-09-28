@@ -13,6 +13,12 @@ export interface TransactionOptions {
   maxWaitMs?: number;
   /** Retry serialization failures and deadlocks (default true). */
   retry?: boolean;
+  /**
+   * Raises this transaction's statement timeout above the session default
+   * (DATABASE_STATEMENT_TIMEOUT_MS) for work with known-long statements,
+   * such as the night audit commit. Scoped with SET LOCAL semantics.
+   */
+  statementTimeoutMs?: number;
 }
 
 /**
@@ -27,11 +33,20 @@ export async function runInTransaction<T>(
   const attempts = options.retry === false ? 1 : MAX_ATTEMPTS;
   for (let attempt = 1; ; attempt++) {
     try {
-      return await prisma.$transaction(work, {
-        isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
-        maxWait: options.maxWaitMs ?? 5_000,
-        timeout: options.timeoutMs ?? 15_000,
-      });
+      return await prisma.$transaction(
+        async (tx) => {
+          if (options.statementTimeoutMs !== undefined) {
+            const ms = Math.trunc(options.statementTimeoutMs);
+            await tx.$queryRaw`SELECT set_config('statement_timeout', ${String(ms)}, true)`;
+          }
+          return work(tx);
+        },
+        {
+          isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
+          maxWait: options.maxWaitMs ?? 5_000,
+          timeout: options.timeoutMs ?? 15_000,
+        },
+      );
     } catch (error) {
       if (attempt >= attempts || !isRetryable(error)) throw error;
       await new Promise((resolve) => setTimeout(resolve, 20 * attempt + Math.random() * 30));

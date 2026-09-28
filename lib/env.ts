@@ -47,6 +47,28 @@ const baseSchema = z.object({
    * the client IP is unknown. Set it to the real proxy count in production.
    */
   TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(0),
+  /**
+   * Schema owner connection used only by migrations and the backup commands
+   * (docs/OPERATIONS.md §4). When unset, DATABASE_URL is used for both.
+   */
+  MIGRATION_DATABASE_URL: z
+    .url()
+    .refine((value) => /^postgres(ql)?:\/\//.test(value), "Must be a postgresql:// URL")
+    .optional(),
+  /**
+   * Connection pool and session limits (lib/db/pool-config.ts, D52). The
+   * defaults suit one application process on a small hotel server; tune
+   * against the PostgreSQL max_connections budget, never blindly upwards.
+   */
+  DATABASE_POOL_MAX: z.coerce.number().int().min(1).max(50).default(10),
+  DATABASE_CONNECT_TIMEOUT_MS: z.coerce.number().int().min(500).max(60_000).default(5_000),
+  DATABASE_STATEMENT_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(600_000).default(30_000),
+  DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .min(1_000)
+    .max(3_600_000)
+    .default(60_000),
 });
 
 export type ServerEnv = z.infer<typeof baseSchema>;

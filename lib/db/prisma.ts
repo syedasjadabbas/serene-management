@@ -2,22 +2,15 @@ import "server-only";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient, type Prisma } from "@/generated/prisma/client";
 import { serverEnv } from "@/lib/env";
+import { pgPoolConfig } from "./pool-config";
 
 /**
  * Single PrismaClient per server process. In development the instance is
  * cached on globalThis so hot reload does not exhaust database connections.
  */
 function createPrismaClient() {
-  const adapter = new PrismaPg({
-    connectionString: serverEnv().DATABASE_URL,
-    // Every session runs in UTC (ARCHITECTURE D29). @prisma/adapter-pg sends
-    // Dates as offset-less UTC wall-clock text and re-labels timestamptz read
-    // back as +00:00, so any other session zone (a server default such as
-    // Asia/Karachi) stores instants shifted by the zone offset and makes
-    // app-written values disagree with SQL now(). Property-local dates and
-    // times are computed from the property's own time zone, never the session's.
-    options: "-c TimeZone=UTC",
-  });
+  // Pool size, timeouts and the UTC session zone (D29, D52): lib/db/pool-config.ts.
+  const adapter = new PrismaPg(pgPoolConfig(serverEnv()));
   return new PrismaClient({ adapter });
 }
 

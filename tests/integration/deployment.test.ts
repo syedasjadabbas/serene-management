@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { builtinModules } from "node:module";
 import { PrismaPg } from "@prisma/adapter-pg";
 import pg from "pg";
@@ -81,7 +81,11 @@ beforeAll(async () => {
   execFileSync(process.execPath, ["scripts/ops/build.mjs"], { stdio: "pipe" });
   await admin(`CREATE DATABASE "${TEMPLATE_DB}" TEMPLATE template0 ENCODING 'UTF8'`);
   execFileSync(process.execPath, ["node_modules/prisma/build/index.js", "migrate", "deploy"], {
-    env: { ...process.env, DATABASE_URL: urlFor(TEMPLATE_DB) },
+    env: {
+      ...process.env,
+      DATABASE_URL: urlFor(TEMPLATE_DB),
+      MIGRATION_DATABASE_URL: urlFor(TEMPLATE_DB),
+    },
     stdio: "pipe",
   });
   db = clientFor(TEMPLATE_DB);
@@ -361,7 +365,17 @@ describe("H11 production dependencies", () => {
 
   it("compiled operational commands import only production dependencies", () => {
     const builtins = new Set(builtinModules.flatMap((m) => [m, `node:${m}`]));
-    for (const file of ["dist/ops/seed.mjs", "dist/ops/bootstrap.mjs"]) {
+    const bundles = readdirSync("dist/ops").filter((name) => name.endsWith(".mjs"));
+    expect(bundles).toEqual(
+      expect.arrayContaining([
+        "seed.mjs",
+        "bootstrap.mjs",
+        "maintenance.mjs",
+        "backup.mjs",
+        "db-check.mjs",
+      ]),
+    );
+    for (const file of bundles.map((name) => `dist/ops/${name}`)) {
       const source = readFileSync(file, "utf8");
       const specifiers = new Set<string>();
       // Static imports start a line in esbuild output; dynamic ones are import("…").
@@ -394,7 +408,10 @@ describe("H11 production dependencies", () => {
     expect(readFileSync("prisma.config.ts", "utf8")).not.toMatch(
       /from ["']dotenv|import ["']dotenv/,
     );
-    for (const script of ["start", "ops:seed", "ops:bootstrap", "db:deploy", "postinstall"]) {
+    const deployPath = ["start", "db:deploy", "postinstall"].concat(
+      Object.keys(pkg.scripts).filter((name) => name.startsWith("ops:")),
+    );
+    for (const script of deployPath) {
       expect(pkg.scripts[script]).not.toMatch(/tsx|vitest|esbuild/);
     }
   });

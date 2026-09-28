@@ -1,0 +1,100 @@
+# SERENE MANAGEMENT — continuous integration (Phase 10, H7; docs/OPERATIONS.md §8).
+#
+# Verifies every push and pull request: formatting, types, lint, all tests
+# (unit, PGlite database rules, integration against a real PostgreSQL) and
+# the production build, then checks the owner/runtime role split (D53).
+#
+# PostgreSQL is installed natively on the runner from the official PGDG apt
+# repository: no Docker, no service containers. Credentials are generated
+# per run and exist only on the runner; no repository secrets are used.
+# This workflow never deploys, never pushes and never creates tags.
+
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      PG_VERSION: "18"
+      PG_BIN: /usr/lib/postgresql/18/bin
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install PostgreSQL (native, PGDG)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y -q "postgresql-${PG_VERSION}" "postgresql-client-${PG_VERSION}"
+          sudo pg_ctlcluster "${PG_VERSION}" main start
+          port=$(pg_lsclusters -h | awk -v v="${PG_VERSION}" '$1 == v { print $3 }')
+          echo "PGPORT_CI=${port}" >> "$GITHUB_ENV"
+          sudo -u postgres psql -p "${port}" -X -c "SELECT version()"
+
+      - name: Create database role, databases and .env (throwaway credentials)
+        run: |
+          db_password=$(openssl rand -hex 24)
+          echo "::add-mask::${db_password}"
+          sudo -u postgres psql -p "${PGPORT_CI}" -X -v ON_ERROR_STOP=1 \
+            -c "CREATE ROLE serene LOGIN CREATEDB PASSWORD '${db_password}'" \
+            -c "CREATE DATABASE serene_management OWNER serene TEMPLATE template0 ENCODING 'UTF8'" \
+            -c "CREATE DATABASE serene_management_test OWNER serene TEMPLATE template0 ENCODING 'UTF8'"
+          {
+            echo "DATABASE_URL=\"postgresql://serene:${db_password}@localhost:${PGPORT_CI}/serene_management\""
+            echo "AUTH_ACCESS_TOKEN_SECRET=\"$(openssl rand -base64 48)\""
+            echo "AUTH_REFRESH_TOKEN_SECRET=\"$(openssl rand -base64 48)\""
+            echo "FIELD_ENCRYPTION_KEY=\"$(openssl rand -base64 32)\""
+            echo "APP_URL=\"http://localhost:3000\""
+            echo "TRUSTED_PROXY_HOPS=0"
+          } > .env
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Format
+        run: npm run format:check
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm run test
+
+      - name: Build
+        run: npm run build
+
+      - name: Migrations and role separation
+        run: |
+          npm run db:deploy
+          npm run ops:seed
+          runtime_password=$(openssl rand -hex 24)
+          echo "::add-mask::${runtime_password}"
+          # The postgres OS user cannot read the workspace; run the scripts from /tmp.
+          cp scripts/db/runtime-role.sql scripts/db/runtime-grants.sql /tmp/
+          sudo -u postgres env SERENE_RUNTIME_PASSWORD="${runtime_password}" \
+            psql -p "${PGPORT_CI}" -d postgres -X -q \
+            -v owner_role=serene -v runtime_role=serene_app -v app_db=serene_management \
+            -f /tmp/runtime-role.sql
+          DATABASE_URL="postgresql://serene_app:${runtime_password}@localhost:${PGPORT_CI}/serene_management" \
+            npm run ops:db-check -- --strict
+          npm run ops:maintenance -- --dry-run

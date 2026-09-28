@@ -23,6 +23,9 @@
     "db:seed": "node node_modules/prisma/build/index.js db seed",
     "ops:seed": "node --conditions=react-server dist/ops/seed.mjs",
     "ops:bootstrap": "node --conditions=react-server dist/ops/bootstrap.mjs",
+    "ops:maintenance": "node --conditions=react-server dist/ops/maintenance.mjs",
+    "ops:backup": "node --conditions=react-server dist/ops/backup.mjs",
+    "ops:db-check": "node --conditions=react-server dist/ops/db-check.mjs",
     "postinstall": "node node_modules/prisma/build/index.js generate",
     "verify": "npm run typecheck && npm run lint && npm run test && npm run build"
   },

@@ -18,7 +18,8 @@ export default function setup() {
     );
   }
 
-  const env = { ...process.env, DATABASE_URL: url };
+  // Both variables: prisma.config.ts prefers MIGRATION_DATABASE_URL when set.
+  const env = { ...process.env, DATABASE_URL: url, MIGRATION_DATABASE_URL: url };
   const run = (args: string[]) =>
     execFileSync(process.execPath, args, { env, stdio: "pipe", cwd: process.cwd() });
 

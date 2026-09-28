@@ -9,7 +9,13 @@
 import { build } from "esbuild";
 
 await build({
-  entryPoints: ["scripts/ops/seed.ts", "scripts/ops/bootstrap.ts"],
+  entryPoints: [
+    "scripts/ops/seed.ts",
+    "scripts/ops/bootstrap.ts",
+    "scripts/ops/maintenance.ts",
+    "scripts/ops/backup.ts",
+    "scripts/ops/db-check.ts",
+  ],
   outdir: "dist/ops",
   outExtension: { ".js": ".mjs" },
   bundle: true,
@@ -25,4 +31,4 @@ await build({
     js: 'import { createRequire as __createRequire } from "node:module"; const require = __createRequire(import.meta.url);',
   },
 });
-console.log("Built dist/ops/seed.mjs and dist/ops/bootstrap.mjs");
+console.log("Built dist/ops: seed, bootstrap, maintenance, backup, db-check");

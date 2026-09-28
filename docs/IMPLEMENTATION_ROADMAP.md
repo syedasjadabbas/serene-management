@@ -85,7 +85,11 @@ The product owner re-sequenced Phase 2 to **Reservations + Availability**. It de
 
 Moved to later phases: configuration screens for rooms, rate plans and restrictions; full guest profiles (documents, preferences, merge); room holds and auto-assign; deposits and cancellation penalties (billing); negotiated, member and day-use rates; block pickup (groups); turnaway capture.
 
-## Phase 10 batch 2 (as executed) — Deployment foundation (pending commit)
+## Phase 10 batch 3 (as executed) — Operations and reliability (pending commit)
+
+One migration `20261101090000_truncate_guards` (statement-level TRUNCATE guards on the 15 append-only/delete-guarded tables, D51). Operator commands `ops:backup` (create/verify/list/restore — checksummed `pg_dump -Fc`, restore only into a new or empty confirmed database), `ops:maintenance` (batched retention of transient data; pending outbox events kept, D50) and `ops:db-check` (role, guard, session and migration posture). Explicit pool/connect/statement/idle-transaction settings from the environment with UTC sessions (D52); owner/runtime role split through `MIGRATION_DATABASE_URL` and `scripts/db/runtime-role.sql` (D53). GitHub Actions CI with natively installed PostgreSQL (no Docker). Runbooks: [OPERATIONS.md](OPERATIONS.md) (backups, restore drill, RPO/RTO targets, migration policy, retention, roles, scheduling) and DEPLOYMENT.md §9.
+
+## Phase 10 batch 2 (as executed) — Deployment foundation (tag `phase-10-batch-2`)
 
 No migration. Production first-administrator bootstrap as an operator command `npm run ops:bootstrap` (no HTTP route; refuses once any organization exists; advisory-locked, single transaction, HIGH audit), production reference seed `npm run ops:seed`, operational commands compiled to `dist/ops` so a `npm ci --omit=dev` install can migrate, seed, bootstrap and start (the `prisma` CLI is a runtime dependency; `prisma.config.ts` no longer needs dotenv or a database URL to generate), fail-fast production environment validation at server start (`instrumentation.ts`), demo seed refused in production and requiring an explicit strong `SEED_DEMO_PASSWORD`, and liveness `/api/health/live` / readiness `/api/health/ready` (with `/api/health` kept as a readiness alias). An organization's first property now receives the standard starter reference setup (D49), so a bootstrapped installation can operate without a sibling to copy from. See [DEPLOYMENT.md](DEPLOYMENT.md), D48 and D49.
 
