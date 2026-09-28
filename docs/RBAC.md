@@ -233,3 +233,21 @@ No permission was added (`integrations:manage` is deliberately not created). Org
 - **Outranking** (ARCHITECTURE D46): disabling, enabling, unlocking and resetting the password of another user need `users:manage` at organization scope AND every permission the target holds, in every scope the target holds it (an organization grant covers all properties). A General Manager therefore cannot disable, enable or reset an Organization Admin. Only a platform super admin manages a super admin. Nobody disables or resets themselves (use _Change password_).
 - **Last administrator**: a disable or an organization-scope role revoke that would leave the organization without an ACTIVE user holding `users:manage`, `roles:manage` and `properties:manage` at organization scope (or a super admin) is refused. All user administration is serialized per organization and re-reads the caller inside the lock, so concurrent administrators cannot remove each other.
 - **Locked vs disabled vs revoked**: _locked_ = too many failed sign-ins (clears by itself, or `unlock`); _disabled_ = switched off by an administrator (only `enable` restores it); _revoked_ = one session ended (logout, password change, disable, reset).
+
+## Organization data and financial visibility (Phase 10 batches 4+5, as implemented)
+
+Organization-wide data follows the Phase 9 rule (ARCHITECTURE D41): a grant at one property never changes or reveals what other properties see (D54).
+
+- **Guest restriction and status** (M3): do-not-rent (`isRestricted`, its reason) and active/inactive apply at every property, so they need `guests:update` at **organization** scope. Property staff keep every ordinary profile edit. The profile reports `access.manageRestrictions`, and the edit form shows these controls only then.
+- **Guest notes** (M4, L10):
+  - A note for every property (`propertyId` null) is added or deleted only with organization-scope `guests:update` (`access.addGlobalNote`).
+  - A property note is managed with `guests:update` at that property.
+  - Management and internal notes of a property are read with `guests:read_sensitive` **at that property**, not at any other.
+  - Organization-wide sensitive notes are profile data, readable like the date of birth.
+- **Date of birth** (L12): changing it needs `guests:read_sensitive` and a reason. It is audited HIGH, and the value itself never enters the audit trail.
+- **Loyalty tier at enrolment** (M2): enrolment stays open to property staff with `loyalty:manage`, but the member then starts without a tier. Choosing a tier needs organization-scope `loyalty:manage`, and a tier of another program or organization is not found.
+- **Company data** (L14): choosing a company needs `accounts:read` (held anywhere, like every account permission). That covers a company quote in availability, a reservation's company at creation or later, and a rate plan's negotiated companies (listed and set). The API enforces it, not only the UI. A group pickup still inherits its group's company.
+- **Setup copy source** (M5): copying a property's setup needs `properties:manage` at the target **and** `settings:read` or `properties:manage` at the source. A visible but insufficient source is refused like a missing one.
+- **Financial data in history and audit** (M1): stay and reservation history, the property and organization audit trails, and resource history keep their existing permissions. Ledger values inside the before/after snapshots — folio balance and settlement, amounts, totals, taxes, revenue — show as `(restricted)` unless the caller holds `billing:read` for that row's property (organization scope for organization rows). Reservation pricing stays visible with the reservation.
+- **Structured reason codes** (L7): a `reasonCodeId` recorded in the audit trail must be a code of the audited property, or of a property of the organization for organization-level rows. Otherwise the command is refused with `VALIDATION_FAILED` on `reasonCodeId`. Reason codes stay optional.
+- **Maintenance notes** (L13): the route and the service both require `maintenance:update`, the same as start, hold and resolve.

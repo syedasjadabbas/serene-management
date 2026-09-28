@@ -23,6 +23,10 @@ export function RoomBoardPanel({ filter }: { filter: string }) {
   const [floorId, setFloorId] = useState("");
   const [roomTypeId, setRoomTypeId] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
+  // Very large properties get the board in pages (M11); a filter change starts over.
+  const pageKey = `${filter}|${floorId}|${roomTypeId}`;
+  const [paging, setPaging] = useState({ key: pageKey, offset: 0 });
+  const offset = paging.key === pageKey ? paging.offset : 0;
   const allowed = can("rooms:read");
   const options = useRoomBoardOptionsQuery(property.id, { skip: !allowed });
   const board = useRoomBoardViewQuery(
@@ -31,9 +35,11 @@ export function RoomBoardPanel({ filter }: { filter: string }) {
       filter,
       floorId: floorId || undefined,
       roomTypeId: roomTypeId || undefined,
+      offset: offset > 0 ? String(offset) : undefined,
     },
     { skip: !allowed, pollingInterval: POLL_MS, skipPollingIfUnfocused: true },
   );
+  const page = board.data?.page;
   const error = toClientApiError(board.error);
 
   if (!allowed) {
@@ -70,9 +76,9 @@ export function RoomBoardPanel({ filter }: { filter: string }) {
         />
         {board.data ? (
           <p className="pb-2 text-xs text-fg-muted">
-            {board.data.items.length} of {board.data.counts.total} rooms ·{" "}
-            {board.data.counts.urgent} urgent · {board.data.counts.dirty} dirty ·{" "}
-            {board.data.counts.maintenance} with open maintenance
+            {board.data.page.total} of {board.data.counts.total} rooms · {board.data.counts.urgent}{" "}
+            urgent · {board.data.counts.dirty} dirty · {board.data.counts.maintenance} with open
+            maintenance
           </p>
         ) : null}
       </div>
@@ -95,6 +101,31 @@ export function RoomBoardPanel({ filter }: { filter: string }) {
       ) : (
         <RoomBoardGrid rooms={board.data.items} onSelect={(room) => setSelected(room.id)} />
       )}
+      {page && page.total > page.limit ? (
+        <nav aria-label="Room pages" className="flex flex-wrap items-center gap-2 text-sm">
+          <span className="me-auto text-fg-secondary">
+            Rooms {page.offset + 1}–{Math.min(page.offset + page.limit, page.total)} of {page.total}
+          </span>
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={page.offset === 0 || board.isFetching}
+            onClick={() =>
+              setPaging({ key: pageKey, offset: Math.max(0, page.offset - page.limit) })
+            }
+          >
+            Previous rooms
+          </Button>
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={page.offset + page.limit >= page.total || board.isFetching}
+            onClick={() => setPaging({ key: pageKey, offset: page.offset + page.limit })}
+          >
+            Next rooms
+          </Button>
+        </nav>
+      ) : null}
       {selected && board.data ? (
         <RoomDetailDialog
           key={selected}

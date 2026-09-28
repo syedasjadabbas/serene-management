@@ -26,6 +26,7 @@ import {
 } from "@/app/api/v1/loyalty/programs/route";
 import { GET as availabilityRoute } from "@/app/api/v1/properties/[propertyId]/availability/route";
 import { PUT as planAccountsRoute } from "@/app/api/v1/properties/[propertyId]/rate-plans/[ratePlanId]/accounts/route";
+import { GET as ratePlanRoute } from "@/app/api/v1/properties/[propertyId]/rate-plans/[ratePlanId]/route";
 import { POST as createPlanRoute } from "@/app/api/v1/properties/[propertyId]/rate-plans/route";
 import { PUT as reservationCompanyRoute } from "@/app/api/v1/properties/[propertyId]/reservations/[reservationId]/company/route";
 import { GET as reservationRoute } from "@/app/api/v1/properties/[propertyId]/reservations/[reservationId]/route";
@@ -38,6 +39,7 @@ import {
   auditLogsFor,
   buildFixtureInventory,
   createFixtureOrg,
+  createCustomUser,
   createGuestRow,
   createUser,
 } from "./support/fixtures";
@@ -255,33 +257,75 @@ describe("guest profiles", () => {
       (await patchGuest(agent, guest, { version: current.version, dateOfBirth: "1990-05-01" }))
         .status,
     ).toBe(403);
-    const dob = await patchGuest(fom, guest, {
+    // L12: a date-of-birth change is HIGH risk and needs a reason.
+    const dobNoReason = await patchGuest(fom, guest, {
       version: current.version,
       dateOfBirth: "1990-05-01",
     });
+    expect(dobNoReason.status).toBe(400);
+    expect(dobNoReason.body.error.details.fields.reason).toBeDefined();
+    const dob = await patchGuest(fom, guest, {
+      version: current.version,
+      dateOfBirth: "1990-05-01",
+      reason: "Passport checked at check-in",
+    });
     expect(dob.status).toBe(200);
+    const dobAudit = (await auditLogsFor(guest)).find(
+      (e) => e.action === "guest.update" && e.reason === "Passport checked at check-in",
+    );
+    expect(dobAudit).toMatchObject({
+      risk: "HIGH",
+      before: { dateOfBirth: "(sensitive)" },
+      after: expect.objectContaining({ dateOfBirth: "(changed)" }),
+    });
     expect(dob.body.data.dateOfBirth).toBe("1990-05-01");
     expect((await profile(agent, guest)).body.data.dateOfBirth).toBeNull();
     const future = await patchGuest(fom, guest, {
       version: dob.body.data.version,
       dateOfBirth: "2999-01-01",
+      reason: "Correction",
     });
     expect(future.status).toBe(400);
 
+    // M3 (D54): do-not-rent and deactivation apply at every property, so a
+    // property-scoped grant cannot change them — even a manager's.
+    for (const body of [
+      { isRestricted: true, restrictionReason: "Unpaid balance", reason: "Finance request" },
+      { status: "INACTIVE", reason: "Duplicate profile" },
+      { restrictionReason: "Edited text", reason: "Wording" },
+    ]) {
+      const denied = await patchGuest(fom, guest, { version: dob.body.data.version, ...body });
+      expect(denied.status).toBe(403);
+      expect(denied.body.error.details.reason).toBe("ORGANIZATION_SCOPE_REQUIRED");
+    }
+    expect((await profile(fom, guest)).body.data.access).toMatchObject({
+      update: true,
+      manageRestrictions: false,
+      addGlobalNote: false,
+    });
+    expect((await profile(orgGm, guest)).body.data.access.manageRestrictions).toBe(true);
+
     // Restriction: reason required, HIGH audit, and the guest can no longer book.
-    const noReason = await patchGuest(fom, guest, {
+    const noReason = await patchGuest(orgGm, guest, {
       version: dob.body.data.version,
       isRestricted: true,
       restrictionReason: "Unpaid balance",
     });
     expect(noReason.status).toBe(400);
-    const restricted = await patchGuest(fom, guest, {
+    const restricted = await patchGuest(orgGm, guest, {
       version: dob.body.data.version,
       isRestricted: true,
       restrictionReason: "Unpaid balance",
       reason: "Finance request",
     });
     expect(restricted.status).toBe(200);
+    // Ordinary edits by property staff keep working on the restricted profile.
+    const ordinary = await patchGuest(agent, guest, {
+      version: restricted.body.data.version,
+      preferredName: "Petra P.",
+    });
+    expect(ordinary.status).toBe(200);
+    expect(ordinary.body.data.isRestricted).toBe(true);
     const audit = await auditLogsFor(guest);
     const high = audit.find((e) => e.action === "guest.update" && e.risk === "HIGH");
     expect(high).toBeTruthy();
@@ -428,9 +472,17 @@ describe("guest profiles", () => {
         body,
         jar,
       });
-    expect((await note({ body: "Prefers early check-in", isAlert: true })).status).toBe(201);
-    expect((await note({ body: "Credit watch", visibility: "MANAGEMENT" })).status).toBe(403);
-    const mgmt = await note({ body: "Credit watch", visibility: "MANAGEMENT" }, fom);
+    // M4 (D54): a note for every property needs organization scope.
+    const global = await note({ body: "Allergic to nuts", isAlert: true });
+    expect(global.status).toBe(403);
+    expect(global.body.error.details.reason).toBe("ORGANIZATION_SCOPE_REQUIRED");
+    expect(
+      (await note({ body: "Prefers early check-in", isAlert: true, propertyId: A })).status,
+    ).toBe(201);
+    expect(
+      (await note({ body: "Credit watch", visibility: "MANAGEMENT", propertyId: A })).status,
+    ).toBe(403);
+    const mgmt = await note({ body: "Credit watch", visibility: "MANAGEMENT", propertyId: A }, fom);
     expect(mgmt.status).toBe(201);
     const byAgent = (await profile(agent, guest)).body.data;
     expect(byAgent.notes.map((n: { body: string }) => n.body)).toEqual(["Prefers early check-in"]);
@@ -448,7 +500,74 @@ describe("guest profiles", () => {
     });
     expect(del.status).toBe(200);
     expect(del.body.data.alerts).toEqual([]);
-    expect((await note({ body: "x" }, auditor)).status).toBe(403);
+    expect((await note({ body: "x", propertyId: A }, auditor)).status).toBe(403);
+  });
+
+  it("keeps organization-wide notes to organization scope and sensitive notes to their property", async () => {
+    const guest = (await createGuestRow(org, "Greta", "Global")).id;
+    const note = (body: Record<string, unknown>, jar: CookieJar) =>
+      call(addNoteRoute, {
+        method: "POST",
+        path: `${G}/${guest}/notes`,
+        params: { guestId: guest },
+        body,
+        jar,
+      });
+    const remove = (noteId: string, jar: CookieJar) =>
+      call(deleteNoteRoute, {
+        method: "DELETE",
+        path: `${G}/${guest}/notes/${noteId}`,
+        params: { guestId: guest, noteId },
+        jar,
+      });
+    const globalAlert = await note({ body: "Allergic to nuts", isAlert: true }, orgGm);
+    expect(globalAlert.status).toBe(201);
+    const globalId = globalAlert.body.data.notes.find(
+      (n: { body: string }) => n.body === "Allergic to nuts",
+    ).id as string;
+    // Property staff read it (profile data) but cannot delete it, even as a manager.
+    const byFom = (await profile(fom, guest)).body.data;
+    expect(byFom.alerts).toContain("Allergic to nuts");
+    expect(byFom.notes.find((n: { id: string }) => n.id === globalId).canDelete).toBe(false);
+    for (const jar of [agent, fom, gm]) {
+      const denied = await remove(globalId, jar);
+      expect(denied.status).toBe(403);
+    }
+    // A property note of property A is managed at A; B's manager cannot touch it.
+    const local = await note(
+      { body: "Room 101 key card issue", propertyId: A, visibility: "MANAGEMENT" },
+      fom,
+    );
+    expect(local.status).toBe(201);
+    const localId = local.body.data.notes.find(
+      (n: { body: string }) => n.body === "Room 101 key card issue",
+    ).id as string;
+    // A note for a property the caller cannot act on is refused, not silently moved.
+    expect((await note({ body: "At B", propertyId: org.properties.B!.id }, fom)).status).toBe(403);
+    // L10: guests:read_sensitive at property B does not reveal A's management notes to a
+    // user who is only front desk at A; organization-wide ones stay readable.
+    const split = await createUser(org, "split", [
+      { role: "FRONT_DESK_AGENT", property: "A" },
+      { role: "GENERAL_MANAGER", property: "B" },
+    ]);
+    const splitJar = await loginAs(split.email, TEST_PASSWORD);
+    const orgMgmt = await note(
+      { body: "Org-wide management note", visibility: "MANAGEMENT" },
+      orgGm,
+    );
+    expect(orgMgmt.status).toBe(201);
+    const seen = (await profile(splitJar, guest)).body.data.notes.map(
+      (n: { body: string }) => n.body,
+    );
+    expect(seen).not.toContain("Room 101 key card issue");
+    expect(seen).toContain("Org-wide management note");
+    expect(seen).toContain("Allergic to nuts");
+    // It cannot delete A's sensitive note by id either (not readable there: 404).
+    expect((await remove(localId, splitJar)).status).toBe(404);
+    // Organization scope manages organization-wide notes.
+    expect((await remove(globalId, orgGm)).status).toBe(200);
+    // Another organization never sees the profile.
+    expect((await profile(outsider, guest)).status).toBe(404);
   });
 
   it("derives history from reservations, limited to readable properties and billing", async () => {
@@ -743,6 +862,120 @@ describe("companies", () => {
     expect(foreignTry.status).toBe(404);
   });
 
+  it("enforces accounts:read on company data through the API, not only the UI (L14)", async () => {
+    const company = await newCompany(`L${randomUUID().slice(0, 5).toUpperCase()}`);
+    const corp = inv.ratePlans.CORP!;
+    const plan = await prisma.ratePlan.findUniqueOrThrow({
+      where: { id: corp },
+      select: { version: true },
+    });
+    // Keep the links earlier tests made; add this company.
+    const current = await prisma.negotiatedRate.findMany({
+      where: { ratePlanId: corp },
+      select: { accountProfileId: true, validFrom: true, validTo: true },
+    });
+    const day = (d: Date | null) => (d ? d.toISOString().slice(0, 10) : null);
+    const linked = await call(planAccountsRoute, {
+      method: "PUT",
+      path: `${P(A)}/rate-plans/${corp}/accounts`,
+      params: { propertyId: A, ratePlanId: corp },
+      body: {
+        version: plan.version,
+        accounts: [
+          ...current.map((c) => ({
+            accountProfileId: c.accountProfileId,
+            validFrom: day(c.validFrom),
+            validTo: day(c.validTo),
+          })),
+          { accountProfileId: company.id },
+        ],
+        reason: "Corporate contract",
+      },
+      jar: gm,
+    });
+    expect(linked.status).toBe(200);
+    // Books and manages rates at A, but may not read companies anywhere.
+    const noAccounts = await createCustomUser(org, "noacct", [
+      {
+        permissions: [
+          "reservations:read",
+          "reservations:create",
+          "reservations:update",
+          "availability:read",
+          "rates:read",
+          "rates:manage",
+          "guests:read",
+        ],
+        property: "A",
+      },
+    ]);
+    const jar = await loginAs(noAccounts.email, TEST_PASSWORD);
+    const arrival = addDays(D, 40);
+    const departure = addDays(D, 41);
+    const availability = (companyId?: string) =>
+      call(availabilityRoute, {
+        path: `${P(A)}/availability?arrival=${arrival}&departure=${departure}&adults=1${companyId ? `&companyId=${companyId}` : ""}`,
+        params: { propertyId: A },
+        jar,
+      });
+    expect((await availability()).status).toBe(200);
+    const companyQuote = await availability(company.id);
+    expect(companyQuote.status).toBe(403);
+    expect(companyQuote.body.error.details.permission).toBe("accounts:read");
+    const traveller = (await createGuestRow(org, "Vera", "Visitor")).id;
+    expect(
+      (await book({ guestId: traveller, arrival, departure, companyId: company.id }, jar)).status,
+    ).toBe(403);
+    const plain = await book({ guestId: traveller, arrival, departure }, jar);
+    expect(plain.status).toBe(201);
+    const reservationId = plain.body.data.id as string;
+    const setCompany = await call(reservationCompanyRoute, {
+      method: "PUT",
+      path: `${P(A)}/reservations/${reservationId}/company`,
+      params: { propertyId: A, reservationId },
+      body: { version: plain.body.data.version, companyId: company.id },
+      jar,
+    });
+    expect(setCompany.status).toBe(403);
+    // Which companies a plan is negotiated for is hidden, and cannot be changed.
+    const detail = await call(ratePlanRoute, {
+      path: `${P(A)}/rate-plans/${corp}`,
+      params: { propertyId: A, ratePlanId: corp },
+      jar,
+    });
+    expect(detail.status).toBe(200);
+    expect(detail.body.data.negotiated).toEqual([]);
+    expect(
+      (
+        await call(planAccountsRoute, {
+          method: "PUT",
+          path: `${P(A)}/rate-plans/${corp}/accounts`,
+          params: { propertyId: A, ratePlanId: corp },
+          body: { version: detail.body.data.version, accounts: [], reason: "Cleanup" },
+          jar,
+        })
+      ).status,
+    ).toBe(403);
+    // With accounts:read (the general manager) all of it keeps working.
+    const byGm = await call(ratePlanRoute, {
+      path: `${P(A)}/rate-plans/${corp}`,
+      params: { propertyId: A, ratePlanId: corp },
+      jar: gm,
+    });
+    expect(
+      byGm.body.data.negotiated.map((n: { account: { id: string } }) => n.account.id),
+    ).toContain(company.id);
+    expect(
+      (
+        await call(availabilityRoute, {
+          path: `${P(A)}/availability?arrival=${arrival}&departure=${departure}&adults=1&companyId=${company.id}`,
+          params: { propertyId: A },
+          jar: gm,
+        })
+      ).status,
+    ).toBe(200);
+  });
+
   it("keeps negotiated plans private by construction", async () => {
     const created = await call(createPlanRoute, {
       method: "POST",
@@ -858,8 +1091,8 @@ describe("loyalty", () => {
   it("enrolls once, even when two requests race", async () => {
     const guest = (await createGuestRow(org, "Lou", "Loyal")).id;
     const [a, b] = await Promise.all([
-      enroll(guest, { tierId: tiers.SILVER }),
-      enroll(guest, { tierId: tiers.SILVER }),
+      enroll(guest, { tierId: tiers.SILVER }, orgGm),
+      enroll(guest, { tierId: tiers.SILVER }, orgGm),
     ]);
     expect([a.status, b.status].sort()).toEqual([201, 409]);
     const loser = a.status === 409 ? a : b;
@@ -877,9 +1110,35 @@ describe("loyalty", () => {
     expect((await enroll(guest, {}, agent)).status).toBe(403);
   });
 
+  it("lets property staff enrol without a tier but never choose one (M2)", async () => {
+    const guest = (await createGuestRow(org, "Tia", "Tierless")).id;
+    // A property-scoped loyalty:manage grant cannot place a member in a tier.
+    const withTier = await enroll(guest, { tierId: tiers.GOLD });
+    expect(withTier.status).toBe(403);
+    expect(withTier.body.error.details.reason).toBe("ORGANIZATION_SCOPE_REQUIRED");
+    expect(await prisma.loyaltyMembership.count({ where: { guestId: guest } })).toBe(0);
+    // Enrolment itself stays open to property staff; the member starts without a tier.
+    const plain = await enroll(guest, {});
+    expect(plain.status).toBe(201);
+    expect(plain.body.data.loyalty[0].tier).toBeNull();
+    expect(plain.body.data.access.manageLoyalty).toBe(false);
+    // Organization scope may enrol into a tier; a foreign or mismatched tier is not found.
+    const other = (await createGuestRow(org, "Wendell", "Orgtier")).id;
+    const foreignTier = await prisma.loyaltyTier.findFirst({
+      where: { program: { organizationId: { not: org.organizationId } } },
+      select: { id: true },
+    });
+    if (foreignTier) {
+      expect((await enroll(other, { tierId: foreignTier.id }, orgGm)).status).toBe(404);
+    }
+    const byOrg = await enroll(other, { tierId: tiers.GOLD }, orgGm);
+    expect(byOrg.status).toBe(201);
+    expect(byOrg.body.data.loyalty[0].tier.code).toBe("GOLD");
+  });
+
   it("changes tier and status with history, and adjusts whole points only", async () => {
     const guest = (await createGuestRow(org, "Max", "Member")).id;
-    const enrolled = await enroll(guest, { tierId: tiers.SILVER });
+    const enrolled = await enroll(guest, { tierId: tiers.SILVER }, orgGm);
     const m = enrolled.body.data.loyalty[0];
     const change = (body: Record<string, unknown>, jar = orgGm) =>
       call(membershipRoute, {

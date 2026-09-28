@@ -8,6 +8,14 @@ export function findCurrentBusinessDate(tx: Tx, propertyId: string) {
   });
 }
 
+/** Current business dates of many properties in one read (organization overview, M9). */
+export function findCurrentBusinessDates(tx: Tx, propertyIds: string[]) {
+  return tx.businessDate.findMany({
+    where: { propertyId: { in: propertyIds }, isCurrent: true },
+    select: { propertyId: true, id: true, date: true, status: true },
+  });
+}
+
 export function countBusinessDates(tx: Tx, propertyId: string) {
   return tx.businessDate.count({ where: { propertyId } });
 }

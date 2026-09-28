@@ -15,6 +15,7 @@ import {
 import {
   countBusinessDates,
   findCurrentBusinessDate,
+  findCurrentBusinessDates,
   insertBusinessDate,
   lockCurrentBusinessDateForShare,
 } from "./business-date.repository";
@@ -27,6 +28,27 @@ export async function getBusinessDateView(
 ): Promise<BusinessDateView> {
   const current = await findCurrentBusinessDate(prisma, property.propertyId);
   return buildView(property, current, now);
+}
+
+/** Views of many properties from one read (organization overview, M9). */
+export async function getBusinessDateViews(
+  properties: { propertyId: string; timezone: string }[],
+  now: Date = new Date(),
+): Promise<Map<string, BusinessDateView>> {
+  const rows = new Map(
+    (
+      await findCurrentBusinessDates(
+        prisma,
+        properties.map((p) => p.propertyId),
+      )
+    ).map((row) => [row.propertyId, row]),
+  );
+  return new Map(
+    properties.map((property) => [
+      property.propertyId,
+      buildView(property, rows.get(property.propertyId) ?? null, now),
+    ]),
+  );
 }
 
 /** Current business date as "YYYY-MM-DD" (null before go-live); used to build request contexts. */

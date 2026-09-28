@@ -38,7 +38,13 @@ export interface HistoryEntry {
   after: unknown;
 }
 
-type Idempotent<T> = { propertyId: string; idempotencyKey: string; body: T };
+type Idempotent<T> = {
+  propertyId: string;
+  /** The folio account the command runs from: cache scope only, never sent (B11). */
+  reservationRoomId: string;
+  idempotencyKey: string;
+  body: T;
+};
 
 const idempotent = (url: string, key: string, body: unknown) => ({
   url,
@@ -47,8 +53,31 @@ const idempotent = (url: string, key: string, body: unknown) => ({
   headers: { "Idempotency-Key": key },
 });
 
-/** Any financial change can alter balances, ledgers, lists and the stay's folio summary. */
-const FINANCIAL = ["Folio", "Payment", "Stay"] as const;
+/**
+ * What a financial command can change (B11): this reservation room's folio
+ * account and history, the ledger of the window(s) it touched, the
+ * property's folio and front-desk lists (balances), and the stay's folio
+ * summary — nothing of other stays or other properties.
+ */
+export function afterFinancial(
+  result: unknown,
+  _error: unknown,
+  arg: { propertyId: string; reservationRoomId: string; folioId?: string },
+) {
+  const touched =
+    typeof result === "object" && result !== null && "folioId" in result
+      ? String((result as { folioId: unknown }).folioId)
+      : undefined;
+  const folios = [...new Set([arg.folioId, touched].filter((id): id is string => !!id))];
+  return [
+    { type: "Folio" as const, id: arg.reservationRoomId },
+    { type: "Folio" as const, id: `HISTORY-${arg.reservationRoomId}` },
+    { type: "Folio" as const, id: `LIST-${arg.propertyId}` },
+    ...folios.map((id) => ({ type: "Folio" as const, id: `LEDGER-${id}` })),
+    { type: "Stay" as const, id: `RR-${arg.reservationRoomId}` },
+    { type: "Stay" as const, id: `FD-${arg.propertyId}` },
+  ];
+}
 
 export const billingApi = baseApi.injectEndpoints({
   endpoints: (build) => ({
@@ -104,7 +133,7 @@ export const billingApi = baseApi.injectEndpoints({
           body: {},
         }),
         transformResponse: (response: ApiSuccess<FolioAccountView>) => response.data,
-        invalidatesTags: [...FINANCIAL],
+        invalidatesTags: afterFinancial,
       },
     ),
     previewCharge: build.mutation<
@@ -122,7 +151,7 @@ export const billingApi = baseApi.injectEndpoints({
       query: ({ propertyId, folioId, idempotencyKey, body }) =>
         idempotent(`/properties/${propertyId}/folios/${folioId}/charges`, idempotencyKey, body),
       transformResponse: (response: ApiSuccess<PostingResult>) => response.data,
-      invalidatesTags: [...FINANCIAL],
+      invalidatesTags: afterFinancial,
     }),
     postRoomCharges: build.mutation<
       RoomChargesResult,
@@ -135,25 +164,25 @@ export const billingApi = baseApi.injectEndpoints({
           body,
         ),
       transformResponse: (response: ApiSuccess<RoomChargesResult>) => response.data,
-      invalidatesTags: [...FINANCIAL],
+      invalidatesTags: afterFinancial,
     }),
     postPayment: build.mutation<PaymentResult, Idempotent<PaymentInput> & { folioId: string }>({
       query: ({ propertyId, folioId, idempotencyKey, body }) =>
         idempotent(`/properties/${propertyId}/folios/${folioId}/payments`, idempotencyKey, body),
       transformResponse: (response: ApiSuccess<PaymentResult>) => response.data,
-      invalidatesTags: [...FINANCIAL],
+      invalidatesTags: afterFinancial,
     }),
     reverseItem: build.mutation<PostingResult, Idempotent<ReverseInput> & { itemId: string }>({
       query: ({ propertyId, itemId, idempotencyKey, body }) =>
         idempotent(`/properties/${propertyId}/folio-items/${itemId}/reverse`, idempotencyKey, body),
       transformResponse: (response: ApiSuccess<PostingResult>) => response.data,
-      invalidatesTags: [...FINANCIAL],
+      invalidatesTags: afterFinancial,
     }),
     adjustItem: build.mutation<PostingResult, Idempotent<AdjustInput> & { itemId: string }>({
       query: ({ propertyId, itemId, idempotencyKey, body }) =>
         idempotent(`/properties/${propertyId}/folio-items/${itemId}/adjust`, idempotencyKey, body),
       transformResponse: (response: ApiSuccess<PostingResult>) => response.data,
-      invalidatesTags: [...FINANCIAL],
+      invalidatesTags: afterFinancial,
     }),
     voidPayment: build.mutation<
       PaymentResult,
@@ -162,17 +191,17 @@ export const billingApi = baseApi.injectEndpoints({
       query: ({ propertyId, paymentId, idempotencyKey, body }) =>
         idempotent(`/properties/${propertyId}/payments/${paymentId}/void`, idempotencyKey, body),
       transformResponse: (response: ApiSuccess<PaymentResult>) => response.data,
-      invalidatesTags: [...FINANCIAL],
+      invalidatesTags: afterFinancial,
     }),
     refundPayment: build.mutation<PaymentResult, Idempotent<RefundInput> & { paymentId: string }>({
       query: ({ propertyId, paymentId, idempotencyKey, body }) =>
         idempotent(`/properties/${propertyId}/payments/${paymentId}/refund`, idempotencyKey, body),
       transformResponse: (response: ApiSuccess<PaymentResult>) => response.data,
-      invalidatesTags: [...FINANCIAL],
+      invalidatesTags: afterFinancial,
     }),
     settleFolio: build.mutation<
       FolioAccountView,
-      { propertyId: string; folioId: string; version: number }
+      { propertyId: string; reservationRoomId: string; folioId: string; version: number }
     >({
       query: ({ propertyId, folioId, version }) => ({
         url: `/properties/${propertyId}/folios/${folioId}/settle`,
@@ -180,7 +209,7 @@ export const billingApi = baseApi.injectEndpoints({
         body: { version },
       }),
       transformResponse: (response: ApiSuccess<FolioAccountView>) => response.data,
-      invalidatesTags: [...FINANCIAL],
+      invalidatesTags: afterFinancial,
     }),
   }),
 });

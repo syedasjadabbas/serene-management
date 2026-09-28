@@ -82,7 +82,13 @@ export async function call<T = any>(
   const response = await handler(request, { params: Promise.resolve(options.params ?? {}) });
   options.jar?.absorb(response);
   const text = await response.text();
-  return { status: response.status, body: (text ? JSON.parse(text) : null) as T, response };
+  // JSON bodies are parsed; anything else (CSV exports) is returned as text.
+  const json = (response.headers.get("content-type") ?? "").includes("json");
+  return {
+    status: response.status,
+    body: (text ? (json ? JSON.parse(text) : text) : null) as T,
+    response,
+  };
 }
 
 let ipCounter = 0;

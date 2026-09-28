@@ -801,20 +801,37 @@ export async function rollTasksInTx(
         AND rr."departure_date" > ${nextDate}::date
       ORDER BY s."room_id"`;
     const date = fromDateOnly(nextDate);
-    for (const row of staying) {
-      if (await findLiveTask(tx, ctx.propertyId, row.room_id, date, type.id)) continue;
-      await insertTask(tx, {
-        propertyId: ctx.propertyId,
-        roomId: row.room_id,
-        taskTypeId: type.id,
-        businessDate: date,
-        priority: PRIORITY_VALUES.NORMAL,
-        credits: type.credits,
-        stayId: row.stay_id,
-        notes: "Stayover",
+    // Set-based (M8): one read of the live stayover tasks, one insert for the rest.
+    const live = new Set(
+      (
+        await tx.housekeepingTask.findMany({
+          where: {
+            propertyId: ctx.propertyId,
+            roomId: { in: staying.map((row) => row.room_id) },
+            businessDate: date,
+            taskTypeId: type.id,
+            status: { not: "CANCELLED" },
+          },
+          select: { roomId: true },
+        })
+      ).map((task) => task.roomId),
+    );
+    const missing = staying.filter((row) => !live.has(row.room_id));
+    if (missing.length > 0) {
+      await tx.housekeepingTask.createMany({
+        data: missing.map((row) => ({
+          propertyId: ctx.propertyId,
+          roomId: row.room_id,
+          taskTypeId: type.id,
+          businessDate: date,
+          priority: PRIORITY_VALUES.NORMAL,
+          credits: type.credits,
+          stayId: row.stay_id,
+          notes: "Stayover",
+        })),
       });
-      stayovers += 1;
     }
+    stayovers = missing.length;
   }
   return { cancelled, cleaning, stayovers };
 }

@@ -10,5 +10,10 @@ import { useProperty } from "./useProperty";
  */
 export function useBusinessDate() {
   const property = useProperty();
-  return useBusinessDateQuery(property.id, { pollingInterval: 60_000, refetchOnFocus: true });
+  // Paused while the tab is hidden or unfocused, refreshed on return (B10).
+  return useBusinessDateQuery(property.id, {
+    pollingInterval: 60_000,
+    skipPollingIfUnfocused: true,
+    refetchOnFocus: true,
+  });
 }

@@ -29,8 +29,11 @@ export interface ReportResult extends ReportCatalogItem {
   businessDate: string;
   currencyCode: string;
   columns: ReportColumn[];
+  /** One page of rows (see `page`); totals always cover every row. */
   rows: ReportRow[];
   totals: ReportRow | null;
+  /** Paging of `rows` (H10): the rows returned are [offset, offset + limit) of totalRows. */
+  page: { offset: number; limit: number; totalRows: number };
   /** How the figures were obtained, limits, and hidden columns. */
   notes: string[];
   generatedAt: string;

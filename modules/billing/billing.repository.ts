@@ -54,6 +54,17 @@ export async function ledgerBalance(tx: Tx, folioId: string): Promise<string> {
   return rows[0]!.total;
 }
 
+/** Stored balance and ledger sum of many folios in one statement (batch verification, M8). */
+export function folioBalancesWithLedger(tx: Tx, folioIds: string[]) {
+  if (folioIds.length === 0) return Promise.resolve([]);
+  return tx.$queryRaw<{ id: string; balance: string; ledger: string }[]>`
+    SELECT f."id", f."balance"::text AS "balance",
+           COALESCE((SELECT sum(i."amount") FROM "folio_items" i WHERE i."folio_id" = f."id"), 0)::text
+             AS "ledger"
+    FROM "folios" f
+    WHERE f."id" = ANY(${folioIds}::uuid[])`;
+}
+
 export function findFolioRef(tx: Tx, propertyId: string, id: string) {
   return tx.folio.findFirst({
     where: { id, propertyId },
@@ -92,6 +103,14 @@ export function findWindowRef(
   return tx.folio.findFirst({
     where: { propertyId, reservationRoomId, window },
     select: { id: true },
+  });
+}
+
+/** Window-1 folios of many reservation rooms (night audit batch, M8). */
+export function findWindowOneRefs(tx: Tx, propertyId: string, reservationRoomIds: string[]) {
+  return tx.folio.findMany({
+    where: { propertyId, reservationRoomId: { in: reservationRoomIds }, window: 1 },
+    select: { id: true, reservationRoomId: true },
   });
 }
 
@@ -326,6 +345,19 @@ export function findPostingKeys(tx: Tx, propertyId: string, reservationRoomId: s
       AND i."posting_key" IS NOT NULL`;
 }
 
+/** Posting keys of many reservation rooms (night audit batch, M8). */
+export function findPostingKeysMany(tx: Tx, propertyId: string, reservationRoomIds: string[]) {
+  if (reservationRoomIds.length === 0) return Promise.resolve([]);
+  return tx.$queryRaw<{ reservation_room_id: string; posting_key: string; reversed: boolean }[]>`
+    SELECT i."origin_reservation_room_id" AS "reservation_room_id", i."posting_key",
+           EXISTS (SELECT 1 FROM "folio_items" r
+                   WHERE r."corrects_item_id" = i."id" AND r."kind" = 'REVERSAL') AS "reversed"
+    FROM "folio_items" i
+    WHERE i."property_id" = ${propertyId}::uuid
+      AND i."origin_reservation_room_id" = ANY(${reservationRoomIds}::uuid[])
+      AND i."posting_key" IS NOT NULL`;
+}
+
 export interface LedgerRow {
   id: string;
   folio_id: string;
@@ -490,10 +522,18 @@ export function findFolioListPage(
     limit: number;
   },
 ) {
+  // Open balance (B5): candidates come from the partial index of non-zero
+  // folios; the exact rule — the windows' balances sum to non-zero — still
+  // decides, before the page is cut.
   const scope =
     options.view === "in_house"
       ? Prisma.sql`AND rr."status" = 'IN_HOUSE'`
-      : Prisma.sql`AND EXISTS (SELECT 1 FROM "folios" x WHERE x."reservation_room_id" = rr."id")`;
+      : options.view === "open_balance"
+        ? Prisma.sql`AND rr."id" IN (SELECT x."reservation_room_id" FROM "folios" x
+                                      WHERE x."property_id" = ${propertyId}::uuid AND x."balance" <> 0)
+                     AND (SELECT sum(y."balance") FROM "folios" y
+                          WHERE y."reservation_room_id" = rr."id") <> 0`
+        : Prisma.sql`AND EXISTS (SELECT 1 FROM "folios" x WHERE x."reservation_room_id" = rr."id")`;
   const search = options.search
     ? Prisma.sql`AND ((${
         options.search.tokens.length > 0
@@ -508,11 +548,23 @@ export function findFolioListPage(
   const cursor = options.cursor
     ? Prisma.sql`AND (g."search_name", rr."id") > (${options.cursor.v}, ${options.cursor.i}::uuid)`
     : Prisma.empty;
-  const having =
-    options.view === "open_balance"
-      ? Prisma.sql`HAVING COALESCE(SUM(f."balance"), 0) <> 0`
-      : Prisma.empty;
+  // Two phases (B5): cut the page of reservation rooms first (keyset order,
+  // no aggregation), then total the folios of that page only — instead of
+  // grouping every historical reservation room of the property per request.
   return tx.$queryRaw<FolioListSqlRow[]>`
+    WITH page AS (
+      SELECT rr."id", g."search_name"
+      FROM "reservation_rooms" rr
+      JOIN "reservations" res ON res."id" = rr."reservation_id"
+      JOIN "guests" g ON g."id" = rr."primary_guest_id"
+      LEFT JOIN "rooms" rm ON rm."id" = rr."room_id"
+      WHERE rr."property_id" = ${propertyId}::uuid
+        ${scope}
+        ${search}
+        ${cursor}
+      ORDER BY g."search_name", rr."id"
+      LIMIT ${options.limit + 1}
+    )
     SELECT rr."id" AS "reservation_room_id", res."confirmation_number", g."first_name",
            g."last_name", g."search_name", rm."number" AS "room_number", rr."arrival_date",
            rr."departure_date", s."status"::text AS "stay_status",
@@ -520,18 +572,13 @@ export function findFolioListPage(
            COALESCE(SUM(f."balance"), 0)::text AS "balance",
            COUNT(f."id") FILTER (WHERE f."status" = 'OPEN')::int AS "open_windows",
            COUNT(f."id") FILTER (WHERE f."status" = 'SETTLED')::int AS "settled_windows"
-    FROM "reservation_rooms" rr
+    FROM page
+    JOIN "reservation_rooms" rr ON rr."id" = page."id"
     JOIN "reservations" res ON res."id" = rr."reservation_id"
     JOIN "guests" g ON g."id" = rr."primary_guest_id"
     LEFT JOIN "rooms" rm ON rm."id" = rr."room_id"
     LEFT JOIN "stays" s ON s."reservation_room_id" = rr."id"
     LEFT JOIN "folios" f ON f."reservation_room_id" = rr."id"
-    WHERE rr."property_id" = ${propertyId}::uuid
-      ${scope}
-      ${search}
-      ${cursor}
     GROUP BY rr."id", res."confirmation_number", g."id", rm."number", s."status"
-    ${having}
-    ORDER BY g."search_name", rr."id"
-    LIMIT ${options.limit + 1}`;
+    ORDER BY g."search_name", rr."id"`;
 }

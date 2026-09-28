@@ -4,7 +4,7 @@ import type { Tx } from "@/lib/db/prisma";
 import { runInTransaction } from "@/lib/db/transaction";
 import { auditActor, type SessionContext } from "@/lib/http/context";
 import { AppError } from "@/lib/http/errors";
-import { canAccessProperty, hasPermission } from "@/lib/permissions/evaluate";
+import { canAccessProperty, hasAnyPermission, hasPermission } from "@/lib/permissions/evaluate";
 import { recordAudit } from "@/modules/audit/audit.service";
 import { hasBusinessDateHistory } from "@/modules/business-date/business-date.service";
 import {
@@ -37,8 +37,13 @@ export async function copyPropertySetup(
   if (!hasPermission(ctx.access, targetPropertyId, "properties:manage")) {
     throw new AppError("FORBIDDEN", "You do not have access to this property");
   }
-  // An inaccessible source is indistinguishable from a missing one.
-  if (!canAccessProperty(ctx.access, sourcePropertyId)) {
+  // The copy reveals the source's configuration, so the caller must be allowed
+  // to read it there (M5), not merely see the property. An inaccessible or
+  // insufficiently authorized source is indistinguishable from a missing one.
+  if (
+    !canAccessProperty(ctx.access, sourcePropertyId) ||
+    !hasAnyPermission(ctx.access, sourcePropertyId, ["settings:read", "properties:manage"])
+  ) {
     throw new AppError("FORBIDDEN", "You do not have access to the source property");
   }
   if (sourcePropertyId === targetPropertyId) {

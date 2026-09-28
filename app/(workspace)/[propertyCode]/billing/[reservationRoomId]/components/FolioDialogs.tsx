@@ -214,7 +214,13 @@ export function PostChargeDialog({
       if ("data" in result && result.data) setPreview(result.data);
       return;
     }
-    const result = await post({ propertyId: property.id, folioId: win.id, idempotencyKey, body });
+    const result = await post({
+      propertyId: property.id,
+      reservationRoomId: account.reservationRoomId,
+      folioId: win.id,
+      idempotencyKey,
+      body,
+    });
     if ("data" in result) onClose();
   };
   const money = (value: string) =>
@@ -371,6 +377,7 @@ export function PaymentDialog({
       onSubmit={async () => {
         const result = await pay({
           propertyId: property.id,
+          reservationRoomId: account.reservationRoomId,
           folioId: win.id,
           idempotencyKey,
           body: {
@@ -449,6 +456,7 @@ export function SettleDialog({
       onSubmit={async () => {
         const result = await settle({
           propertyId: property.id,
+          reservationRoomId: account.reservationRoomId,
           folioId: win.id,
           version: win.version,
         });
@@ -507,6 +515,7 @@ export function ReverseDialog({
       onSubmit={async () => {
         const result = await reverse({
           propertyId: property.id,
+          reservationRoomId: account.reservationRoomId,
           itemId: item.id,
           idempotencyKey,
           body: { reason: reason.trim(), ...(reasonCodeId ? { reasonCodeId } : {}) },
@@ -557,6 +566,7 @@ export function AdjustDialog({
       onSubmit={async () => {
         const result = await adjust({
           propertyId: property.id,
+          reservationRoomId: account.reservationRoomId,
           itemId: item.id,
           idempotencyKey,
           body: { amount, reasonCodeId, reason: reason.trim() },
@@ -625,6 +635,7 @@ export function VoidDialog({
       onSubmit={async () => {
         const result = await voidPayment({
           propertyId: property.id,
+          reservationRoomId: account.reservationRoomId,
           paymentId: item.payment!.id,
           idempotencyKey,
           body: { reason: reason.trim(), ...(reasonCodeId ? { reasonCodeId } : {}) },
@@ -692,6 +703,7 @@ export function RefundDialog({
       onSubmit={async () => {
         const result = await refund({
           propertyId: property.id,
+          reservationRoomId: account.reservationRoomId,
           paymentId: item.payment!.id,
           idempotencyKey,
           body: {

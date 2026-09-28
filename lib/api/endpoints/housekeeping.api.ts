@@ -30,7 +30,7 @@ const listTag = (propertyId: string) => ({
 });
 
 function afterTaskCommand(_r: unknown, _e: unknown, arg: { propertyId: string }) {
-  return operationsTags(arg.propertyId);
+  return operationsTags(arg.propertyId, { availability: false });
 }
 
 export const housekeepingApi = baseApi.injectEndpoints({

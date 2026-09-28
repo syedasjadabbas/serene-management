@@ -7,6 +7,10 @@ export function insertAuditLog(tx: Tx, data: Prisma.AuditLogUncheckedCreateInput
   return tx.auditLog.create({ data, select: { id: true } });
 }
 
+export function insertAuditLogs(tx: Tx, data: Prisma.AuditLogCreateManyInput[]) {
+  return tx.auditLog.createMany({ data });
+}
+
 export function findPropertyAuditLogs(
   tx: Tx,
   propertyId: string,
@@ -123,6 +127,13 @@ export function findUserNames(tx: Tx, organizationId: string, userIds: string[])
   });
 }
 
+export function findReasonCodeScope(tx: Tx, reasonCodeId: string) {
+  return tx.reasonCode.findUnique({
+    where: { id: reasonCodeId },
+    select: { propertyId: true, property: { select: { organizationId: true } } },
+  });
+}
+
 /** Audit trail of specific resources (e.g. a stay and its reservation room), oldest first. */
 export function findResourceHistory(
   tx: Tx,
@@ -143,6 +154,7 @@ export function findResourceHistory(
     take,
     select: {
       id: true,
+      propertyId: true,
       createdAt: true,
       action: true,
       userId: true,

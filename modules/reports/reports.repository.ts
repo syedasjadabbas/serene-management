@@ -131,32 +131,51 @@ const stayListSelect = `
   LEFT JOIN "groups" gr ON gr."id" = res."group_id"`;
 
 /** Arrivals (expected or arrived) between two dates, optionally for one room type. */
-export function findArrivalsBetween(db: Tx, range: Range, roomTypeId: string | null) {
+/**
+ * Row-level report reads take a row limit (H10): the report service asks for
+ * one row more than it accepts and refuses an over-large result instead of
+ * holding it in memory.
+ */
+export function findArrivalsBetween(
+  db: Tx,
+  range: Range,
+  roomTypeId: string | null,
+  limit: number,
+) {
   return db.$queryRawUnsafe<StayListRow[]>(
     `${stayListSelect}
      WHERE rr."property_id" = $1::uuid AND rr."arrival_date" BETWEEN $2::date AND $3::date
        AND rr."status" IN ('RESERVED', 'IN_HOUSE', 'CHECKED_OUT')
        AND ($4::uuid IS NULL OR rr."room_type_id" = $4::uuid)
-     ORDER BY rr."arrival_date", res."confirmation_number", rr."line_number"`,
+     ORDER BY rr."arrival_date", res."confirmation_number", rr."line_number"
+     LIMIT $5`,
     range.propertyId,
     range.from,
     range.to,
     roomTypeId,
+    limit,
   );
 }
 
 /** Departures (due or departed) between two dates. */
-export function findDeparturesBetween(db: Tx, range: Range, roomTypeId: string | null) {
+export function findDeparturesBetween(
+  db: Tx,
+  range: Range,
+  roomTypeId: string | null,
+  limit: number,
+) {
   return db.$queryRawUnsafe<StayListRow[]>(
     `${stayListSelect}
      WHERE rr."property_id" = $1::uuid AND rr."departure_date" BETWEEN $2::date AND $3::date
        AND rr."status" IN ('RESERVED', 'IN_HOUSE', 'CHECKED_OUT')
        AND ($4::uuid IS NULL OR rr."room_type_id" = $4::uuid)
-     ORDER BY rr."departure_date", r."number", res."confirmation_number"`,
+     ORDER BY rr."departure_date", r."number", res."confirmation_number"
+     LIMIT $5`,
     range.propertyId,
     range.from,
     range.to,
     roomTypeId,
+    limit,
   );
 }
 
@@ -172,7 +191,7 @@ export function findInHouse(db: Tx, propertyId: string, roomTypeId: string | nul
   );
 }
 
-export function findNoShowsBetween(db: Tx, range: Range) {
+export function findNoShowsBetween(db: Tx, range: Range, limit: number) {
   return db.$queryRawUnsafe<(StayListRow & { business_date: string; guaranteed: boolean })[]>(
     `SELECT sl.*, rr2."no_show_business_date"::text AS "business_date", t."is_guaranteed" AS "guaranteed"
      FROM (${stayListSelect}) sl
@@ -180,14 +199,16 @@ export function findNoShowsBetween(db: Tx, range: Range) {
      JOIN "reservation_types" t ON t."id" = rr2."reservation_type_id"
      WHERE rr2."property_id" = $1::uuid
        AND rr2."no_show_business_date" BETWEEN $2::date AND $3::date
-     ORDER BY rr2."no_show_business_date", sl."confirmation_number"`,
+     ORDER BY rr2."no_show_business_date", sl."confirmation_number"
+     LIMIT $4`,
     range.propertyId,
     range.from,
     range.to,
+    limit,
   );
 }
 
-export function findCancellationsBetween(db: Tx, range: Range) {
+export function findCancellationsBetween(db: Tx, range: Range, limit: number) {
   return db.$queryRawUnsafe<
     (StayListRow & {
       business_date: string;
@@ -202,10 +223,12 @@ export function findCancellationsBetween(db: Tx, range: Range) {
      LEFT JOIN "reason_codes" rc ON rc."id" = rr2."cancel_reason_id"
      WHERE rr2."property_id" = $1::uuid
        AND rr2."cancellation_business_date" BETWEEN $2::date AND $3::date
-     ORDER BY rr2."cancellation_business_date", sl."confirmation_number"`,
+     ORDER BY rr2."cancellation_business_date", sl."confirmation_number"
+     LIMIT $4`,
     range.propertyId,
     range.from,
     range.to,
+    limit,
   );
 }
 
@@ -246,7 +269,7 @@ export function findRoomStatus(db: Tx, propertyId: string, businessDate: string)
     ORDER BY r."number"`;
 }
 
-export function findHousekeepingTasks(db: Tx, { propertyId, from, to }: Range) {
+export function findHousekeepingTasks(db: Tx, { propertyId, from, to }: Range, limit: number) {
   return db.$queryRaw<
     {
       business_date: string;
@@ -268,7 +291,8 @@ export function findHousekeepingTasks(db: Tx, { propertyId, from, to }: Range) {
     LEFT JOIN "housekeeping_attendants" a ON a."id" = t."attendant_id"
     WHERE t."property_id" = ${propertyId}::uuid
       AND t."business_date" BETWEEN ${from}::date AND ${to}::date
-    ORDER BY t."business_date", r."number", tt."name"`;
+    ORDER BY t."business_date", r."number", tt."name"
+    LIMIT ${limit}`;
 }
 
 // --- Finance ---------------------------------------------------------------------------------
@@ -379,7 +403,7 @@ export function sumPaymentsByMethod(db: Tx, { propertyId, from, to }: Range) {
 }
 
 /** Every void and refund in the range. */
-export function findVoidsAndRefunds(db: Tx, { propertyId, from, to }: Range) {
+export function findVoidsAndRefunds(db: Tx, { propertyId, from, to }: Range, limit: number) {
   return db.$queryRaw<
     {
       business_date: string;
@@ -414,11 +438,12 @@ export function findVoidsAndRefunds(db: Tx, { propertyId, from, to }: Range) {
     LEFT JOIN "users" u ON u."id" = f."created_by_id"
     WHERE f."property_id" = ${propertyId}::uuid AND f."status" = 'SUCCEEDED'
       AND f."business_date" BETWEEN ${from}::date AND ${to}::date
-    ORDER BY 1, 3`;
+    ORDER BY 1, 3
+    LIMIT ${limit}`;
 }
 
 /** Prior-day corrections (ADJUSTMENT rows, D9) with their reason and user. */
-export function findAdjustments(db: Tx, { propertyId, from, to }: Range) {
+export function findAdjustments(db: Tx, { propertyId, from, to }: Range, limit: number) {
   return db.$queryRaw<
     {
       business_date: string;
@@ -445,11 +470,12 @@ export function findAdjustments(db: Tx, { propertyId, from, to }: Range) {
     LEFT JOIN "reservations" res ON res."id" = rr."reservation_id"
     WHERE i."property_id" = ${propertyId}::uuid AND i."kind" = 'ADJUSTMENT'
       AND i."business_date" BETWEEN ${from}::date AND ${to}::date
-    ORDER BY i."business_date", i."posted_at"`;
+    ORDER BY i."business_date", i."posted_at"
+    LIMIT ${limit}`;
 }
 
 /** Open balances as of the end of a business date (ledger lines up to that date). */
-export function findBalancesAsOf(db: Tx, propertyId: string, asOf: string) {
+export function findBalancesAsOf(db: Tx, propertyId: string, asOf: string, limit: number) {
   return db.$queryRaw<
     {
       folio_id: string;
@@ -474,7 +500,8 @@ export function findBalancesAsOf(db: Tx, propertyId: string, asOf: string) {
     WHERE f."property_id" = ${propertyId}::uuid
     GROUP BY f."id", g."first_name", g."last_name", res."confirmation_number", rr."line_number", rr."status"
     HAVING sum(i."amount") <> 0
-    ORDER BY sum(i."amount") DESC, f."id"`;
+    ORDER BY sum(i."amount") DESC, f."id"
+    LIMIT ${limit}`;
 }
 
 /** Guest-ledger roll-forward per business date, straight from the ledger. */

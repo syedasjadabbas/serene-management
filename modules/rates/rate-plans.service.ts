@@ -3,8 +3,8 @@ import type { Prisma } from "@/generated/prisma/client";
 import { prisma, type Tx } from "@/lib/db/prisma";
 import { runInTransaction } from "@/lib/db/transaction";
 import { auditActor, type PropertyContext } from "@/lib/http/context";
-import { AppError, notFound, staleVersion } from "@/lib/http/errors";
-import { hasPermission } from "@/lib/permissions/evaluate";
+import { AppError, forbidden, notFound, staleVersion } from "@/lib/http/errors";
+import { hasPermission, hasPermissionAnywhere } from "@/lib/permissions/evaluate";
 import { formatMoney, isMinorUnitAligned, parseMoney } from "@/lib/utils/money";
 import { recordAudit } from "@/modules/audit/audit.service";
 import type { RestrictionRow } from "@/modules/availability/availability.policy";
@@ -170,11 +170,14 @@ export async function getRatePlan(
     packages: row.packages.map((p) => p.package),
     derivedPlans: row.derived,
     requiresNegotiation: row.requiresNegotiation,
-    negotiated: row.negotiated.map((n) => ({
-      account: n.account,
-      validFrom: n.validFrom ? toDateOnly(n.validFrom) : null,
-      validTo: n.validTo ? toDateOnly(n.validTo) : null,
-    })),
+    // Which companies a plan is negotiated for is account data (L14, D54).
+    negotiated: hasPermissionAnywhere(ctx.access, "accounts:read")
+      ? row.negotiated.map((n) => ({
+          account: n.account,
+          validFrom: n.validFrom ? toDateOnly(n.validFrom) : null,
+          validTo: n.validTo ? toDateOnly(n.validTo) : null,
+        }))
+      : [],
     actions: { manage: can("rates:manage"), managePackages: can("rates:manage") },
   };
 }
@@ -647,6 +650,7 @@ export async function setRatePlanAccounts(
   ratePlanId: string,
   input: RatePlanAccountsInput,
 ): Promise<RatePlanDetail> {
+  if (!hasPermissionAnywhere(ctx.access, "accounts:read")) throw forbidden("accounts:read");
   const ids = input.accounts.map((a) => a.accountProfileId);
   if (new Set(ids).size !== ids.length) throw fieldError("accounts", "Each company once");
   await runInTransaction(async (tx) => {

@@ -17,7 +17,12 @@ import { formatCurrency, formatShortDate } from "@/lib/utils/format";
  */
 export function DashboardPanel() {
   const property = useProperty();
-  const query = useDashboardQuery(property.id, { pollingInterval: 120_000 });
+  // Paused while the tab is hidden or unfocused, refreshed on return (B10).
+  const query = useDashboardQuery(property.id, {
+    pollingInterval: 120_000,
+    skipPollingIfUnfocused: true,
+    refetchOnFocus: true,
+  });
 
   if (query.isLoading) return <StatusPanel kind="loading" title="Loading today's figures" />;
   if (query.isError || !query.data) {

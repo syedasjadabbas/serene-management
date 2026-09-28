@@ -21,6 +21,12 @@ export interface ResolvedSession {
   organization: MeView["organization"];
   access: AccessProfile;
   properties: PropertySummary[];
+  /**
+   * Current business date per accessible property, read with the properties
+   * (M10). Property routes build their context from it — a request-scoped
+   * value, never cached across requests.
+   */
+  businessDates: Record<string, string | null>;
 }
 
 /**
@@ -28,7 +34,8 @@ export interface ResolvedSession {
  * permissions. Returns null when the session was revoked or expired, the user
  * is no longer active, or the token does not match the stored session — so
  * logout, disabling a user and role changes apply on the very next request.
- * Three indexed queries, no per-property loops.
+ * Three indexed queries (session with user and organization, grants,
+ * properties with their business dates), no per-property loops (M10).
  */
 export async function resolveSession(
   claims: AccessTokenClaims,
@@ -87,7 +94,8 @@ export async function resolveSession(
       organizationPermissions: [...organizationPermissions].sort(),
       byProperty,
     },
-    properties,
+    properties: properties.map(({ businessDate: _businessDate, ...property }) => property),
+    businessDates: Object.fromEntries(properties.map((p) => [p.id, p.businessDate])),
   };
 }
 

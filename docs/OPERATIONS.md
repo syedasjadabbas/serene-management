@@ -156,6 +156,18 @@ This is server administration outside the application; test it in the same quart
 - [ ] Ledgers stay append-only. A new append-only table gets the row guard **and** a `BEFORE TRUNCATE` guard, and is added to `scripts/ops/db-guards.ts`.
 - [ ] `npm run test` passes. `prisma migrate diff --from-config-datasource --to-schema prisma/schema --exit-code` reports no difference on a migrated database.
 
+### 3.3.1 Index migrations of Phase 10 (batches 4+5)
+
+The nine `20261110090000_idx_*` … `20261110090800_idx_*` migrations each contain one `CREATE INDEX CONCURRENTLY`. Writes continue while they build, and they run in a normal `npm run db:deploy`. On a large database, expect the build to take minutes per index, and schedule it off-peak and away from the night audit.
+
+If one fails, `migrate status` names it. Then:
+
+1. Drop the leftover INVALID index (`DROP INDEX CONCURRENTLY IF EXISTS "<name>"`).
+2. Run `prisma migrate resolve --rolled-back <migration>`.
+3. Deploy again.
+
+The recovery commands are also in each migration file's header.
+
 ### 3.4 A migration failed in production
 
 1. Stop there; do not run `db:deploy` again blindly. `npm run ops:db-check` reports "failed or unfinished migrations"; `migrate status` names the migration.
@@ -249,6 +261,7 @@ The application uses one connection pool per process (`lib/db/pool-config.ts`). 
 
 Notes:
 
+- **Reports.** Row-level reports are capped at 20 000 rows (refused beyond it, never cut) and run within the normal statement timeout; the JSON view pages 500 rows at a time and the CSV export streams every row.
 - **Long jobs.** The night audit commit raises its own statement timeout to 5 minutes for its transaction only (`runInTransaction({ statementTimeoutMs })`). Interactive transactions keep their own limit: 15 s by default, 300 s for the night audit commit.
 - **Sizing.** Total connections are (application processes × `DATABASE_POOL_MAX`) + maintenance and backup jobs + a few for administration. They must stay well under PostgreSQL's `max_connections` (100 by default). One process with 10 connections suits a hotel group on a small server. **Do not raise the pool to fix slowness.** Find the slow query first (`pg_stat_activity`, `pg_stat_statements`), because more connections usually add lock contention.
 - **Tuning.** These values are starting points. Tune them against the server's CPU count and the measured load.

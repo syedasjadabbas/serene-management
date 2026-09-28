@@ -259,8 +259,10 @@ export interface RoomBoardSqlRow {
 /**
  * Every active room with occupancy, housekeeping and service status for the
  * business date, the guest in house, today's assigned arrival, the current
- * housekeeping task and open maintenance. Bounded by the property's room
- * count; laterals use the (property, room) indexes.
+ * housekeeping task and open maintenance. Every active room — bounded by the
+ * property's physical room count, never cut (M11: a fixed LIMIT silently
+ * dropped rooms and falsified the counts); laterals use the (property, room)
+ * indexes. The service pages the items it returns.
  */
 export function findRoomBoard(
   tx: Tx,
@@ -327,8 +329,16 @@ export function findRoomBoard(
     WHERE r."property_id" = ${propertyId}::uuid AND r."status" = 'ACTIVE'
       ${filters.roomTypeId ? Prisma.sql`AND r."room_type_id" = ${filters.roomTypeId}::uuid` : Prisma.empty}
       ${filters.floorId ? Prisma.sql`AND r."floor_id" = ${filters.floorId}::uuid` : Prisma.empty}
-    ORDER BY r."sort_order", r."number"
-    LIMIT 2000`;
+    ORDER BY r."sort_order", r."number"`;
+}
+
+/** Active rooms for pickers (maintenance): no statuses, no laterals (M11). */
+export function findRoomPicker(tx: Tx, propertyId: string) {
+  return tx.room.findMany({
+    where: { propertyId, status: "ACTIVE", roomType: { isPseudo: false } },
+    orderBy: [{ sortOrder: "asc" }, { number: "asc" }],
+    select: { id: true, number: true, roomType: { select: { code: true } } },
+  });
 }
 
 export function findBoardReferenceData(tx: Tx, propertyId: string) {

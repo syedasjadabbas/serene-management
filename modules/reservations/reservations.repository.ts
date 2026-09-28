@@ -155,6 +155,41 @@ export function findNightsForPosting(tx: Tx, propertyId: string, reservationRoom
   });
 }
 
+/** Stay nights of many reservation rooms for posting (night audit batch, M8). */
+export function findNightsForPostingMany(tx: Tx, propertyId: string, reservationRoomIds: string[]) {
+  return tx.reservationRoomNight.findMany({
+    where: { propertyId, reservationRoomId: { in: reservationRoomIds } },
+    orderBy: [{ reservationRoomId: "asc" }, { stayDate: "asc" }],
+    select: {
+      reservationRoomId: true,
+      stayDate: true,
+      rateAmount: true,
+      currencyCode: true,
+      adults: true,
+      children: true,
+      ratePlanId: true,
+      postedAt: true,
+    },
+  });
+}
+
+/**
+ * Marks many (reservation room, night) pairs posted in one statement; returns
+ * how many were still unposted (the caller treats a shortfall as a race).
+ */
+export function setNightsPosted(
+  tx: Tx,
+  pairs: { reservationRoomId: string; stayDate: string }[],
+  at: Date,
+) {
+  return tx.$executeRaw`
+    UPDATE "reservation_room_nights" n SET "posted_at" = ${at}
+    FROM unnest(${pairs.map((p) => p.reservationRoomId)}::uuid[],
+                ${pairs.map((p) => p.stayDate)}::date[]) AS u("reservation_room_id", "stay_date")
+    WHERE n."reservation_room_id" = u."reservation_room_id" AND n."stay_date" = u."stay_date"
+      AND n."posted_at" IS NULL`;
+}
+
 /** Marks a night posted / unposted; 0 rows when it already was (the caller treats that as a race). */
 export function setNightPosted(tx: Tx, reservationRoomId: string, stayDate: Date, posted: boolean) {
   return tx.reservationRoomNight.updateMany({
@@ -266,42 +301,59 @@ export function updateReservationRoomVersioned(
  * what state transitions need. Scoped by property: another property's id
  * finds nothing.
  */
+const lockedRoomSelect = {
+  id: true,
+  reservationId: true,
+  lineNumber: true,
+  version: true,
+  status: true,
+  primaryGuestId: true,
+  arrivalDate: true,
+  departureDate: true,
+  adults: true,
+  children: true,
+  eta: true,
+  roomTypeId: true,
+  rateRoomTypeId: true,
+  roomId: true,
+  ratePlanId: true,
+  reservationTypeId: true,
+  marketCodeId: true,
+  sourceCodeId: true,
+  shareGroupId: true,
+  blockId: true,
+  currencyCode: true,
+  cancellationNumber: true,
+  reservationType: {
+    select: { code: true, deductsInventory: true, isGuaranteed: true, postNoShowCharge: true },
+  },
+  reservation: { select: { confirmationNumber: true, companyId: true } },
+} as const satisfies Prisma.ReservationRoomSelect;
+
 export async function lockReservationRoom(tx: Tx, propertyId: string, id: string) {
   const locked = await tx.$queryRaw<{ id: string }[]>`
     SELECT "id" FROM "reservation_rooms"
     WHERE "id" = ${id}::uuid AND "property_id" = ${propertyId}::uuid
     FOR UPDATE`;
   if (locked.length === 0) return null;
-  return tx.reservationRoom.findUnique({
-    where: { id },
-    select: {
-      id: true,
-      reservationId: true,
-      lineNumber: true,
-      version: true,
-      status: true,
-      primaryGuestId: true,
-      arrivalDate: true,
-      departureDate: true,
-      adults: true,
-      children: true,
-      eta: true,
-      roomTypeId: true,
-      rateRoomTypeId: true,
-      roomId: true,
-      ratePlanId: true,
-      reservationTypeId: true,
-      marketCodeId: true,
-      sourceCodeId: true,
-      shareGroupId: true,
-      blockId: true,
-      currencyCode: true,
-      cancellationNumber: true,
-      reservationType: {
-        select: { code: true, deductsInventory: true, isGuaranteed: true, postNoShowCharge: true },
-      },
-      reservation: { select: { confirmationNumber: true, companyId: true } },
-    },
+  return tx.reservationRoom.findUnique({ where: { id }, select: lockedRoomSelect });
+}
+
+/**
+ * Locks many reservation rooms FOR UPDATE in one statement, in id order (the
+ * same order concurrent lockers use), and loads them (night audit, M8).
+ */
+export async function lockReservationRooms(tx: Tx, propertyId: string, ids: string[]) {
+  if (ids.length === 0) return [];
+  const locked = await tx.$queryRaw<{ id: string }[]>`
+    SELECT "id" FROM "reservation_rooms"
+    WHERE "property_id" = ${propertyId}::uuid AND "id" = ANY(${ids}::uuid[])
+    ORDER BY "id"
+    FOR UPDATE`;
+  return tx.reservationRoom.findMany({
+    where: { id: { in: locked.map((row) => row.id) } },
+    orderBy: { id: "asc" },
+    select: lockedRoomSelect,
   });
 }
 

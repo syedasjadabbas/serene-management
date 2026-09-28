@@ -504,9 +504,8 @@ export async function addNote(
   requestId: string,
   input: NoteInput,
 ): Promise<MaintenanceDetail> {
-  if (!can(ctx, "maintenance:update") && !can(ctx, "maintenance:manage")) {
-    throw forbidden("maintenance:update");
-  }
+  // Same permission as the route and the other work actions (L13).
+  requirePermission(ctx, "maintenance:update");
   await runInTransaction(async (tx) => {
     const request = await lockRequest(tx, ctx.propertyId, requestId);
     if (!request) throw notFound("Maintenance request");
@@ -643,7 +642,7 @@ export async function getRequest(
         row.room !== null &&
         live.length === 0 &&
         ACTIVE_MAINTENANCE_STATUSES.includes(status),
-      note: update || manage,
+      note: update,
     },
   };
 }

@@ -73,7 +73,10 @@ export function EditProfileDialog({
     setForm((f) => ({ ...f, [key]: e.target.value }));
   const statusChange = form.status !== (guest.status === "INACTIVE" ? "INACTIVE" : "ACTIVE");
   const restrictionChange = form.isRestricted !== guest.isRestricted;
-  const needsReason = statusChange || restrictionChange;
+  const dateOfBirthChange =
+    guest.access.readSensitive && form.dateOfBirth !== (guest.dateOfBirth ?? "");
+  const manageRestrictions = guest.access.manageRestrictions;
+  const needsReason = statusChange || restrictionChange || dateOfBirthChange;
 
   return (
     <FormDialog
@@ -91,9 +94,7 @@ export function EditProfileDialog({
             lastName: form.lastName,
             preferredName: form.preferredName,
             gender: form.gender,
-            ...(guest.access.readSensitive && form.dateOfBirth !== (guest.dateOfBirth ?? "")
-              ? { dateOfBirth: form.dateOfBirth || null }
-              : {}),
+            ...(dateOfBirthChange ? { dateOfBirth: form.dateOfBirth || null } : {}),
             email: form.email,
             phone: form.phone,
             preferredContact: (form.preferredContact || null) as GuestContactView["type"] | null,
@@ -102,14 +103,16 @@ export function EditProfileDialog({
             vipLevelId: form.vipLevelId || null,
             marketingOptIn: form.marketingOptIn,
             ...(statusChange ? { status: form.status as "ACTIVE" | "INACTIVE" } : {}),
-            ...(restrictionChange
-              ? {
-                  isRestricted: form.isRestricted,
-                  restrictionReason: form.isRestricted ? form.restrictionReason : null,
-                }
-              : form.isRestricted && form.restrictionReason !== (guest.restrictionReason ?? "")
-                ? { restrictionReason: form.restrictionReason }
-                : {}),
+            ...(!manageRestrictions
+              ? {}
+              : restrictionChange
+                ? {
+                    isRestricted: form.isRestricted,
+                    restrictionReason: form.isRestricted ? form.restrictionReason : null,
+                  }
+                : form.isRestricted && form.restrictionReason !== (guest.restrictionReason ?? "")
+                  ? { restrictionReason: form.restrictionReason }
+                  : {}),
             contacts,
             addresses: addresses.map((a) => ({ ...a, countryCode: a.countryCode || null })),
             ...(form.reason.trim() ? { reason: form.reason.trim() } : {}),
@@ -209,15 +212,17 @@ export function EditProfileDialog({
             errors={error?.fieldErrors.dateOfBirth}
           />
         ) : null}
-        <Select
-          label="Status"
-          options={[
-            { value: "ACTIVE", label: "Active" },
-            { value: "INACTIVE", label: "Inactive" },
-          ]}
-          value={form.status}
-          onChange={set("status")}
-        />
+        {manageRestrictions ? (
+          <Select
+            label="Status"
+            options={[
+              { value: "ACTIVE", label: "Active" },
+              { value: "INACTIVE", label: "Inactive" },
+            ]}
+            value={form.status}
+            onChange={set("status")}
+          />
+        ) : null}
       </div>
       <label className="flex min-h-11 items-center gap-2 text-sm">
         <input
@@ -381,26 +386,33 @@ export function EditProfileDialog({
         </Button>
       </fieldset>
 
-      <fieldset className="flex flex-col gap-2 rounded-md border border-border-subtle p-3">
-        <legend className="px-1 text-sm">Restriction</legend>
-        <label className="flex min-h-11 items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={form.isRestricted}
-            onChange={(e) => setForm((f) => ({ ...f, isRestricted: e.target.checked }))}
-          />
-          Restrict this profile from booking (high-risk, audited)
-        </label>
-        {form.isRestricted ? (
-          <TextField
-            label="Why is the profile restricted?"
-            value={form.restrictionReason}
-            onChange={set("restrictionReason")}
-            maxLength={500}
-            errors={error?.fieldErrors.restrictionReason}
-          />
-        ) : null}
-      </fieldset>
+      {manageRestrictions ? (
+        <fieldset className="flex flex-col gap-2 rounded-md border border-border-subtle p-3">
+          <legend className="px-1 text-sm">Restriction</legend>
+          <label className="flex min-h-11 items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={form.isRestricted}
+              onChange={(e) => setForm((f) => ({ ...f, isRestricted: e.target.checked }))}
+            />
+            Restrict this profile from booking (high-risk, audited)
+          </label>
+          {form.isRestricted ? (
+            <TextField
+              label="Why is the profile restricted?"
+              value={form.restrictionReason}
+              onChange={set("restrictionReason")}
+              maxLength={500}
+              errors={error?.fieldErrors.restrictionReason}
+            />
+          ) : null}
+        </fieldset>
+      ) : (
+        <p className="text-sm text-fg-secondary">
+          Status and booking restriction apply to every property and are changed by an organization
+          administrator.
+        </p>
+      )}
       <TextArea
         label={needsReason ? "Reason for the change (required)" : "Reason (optional)"}
         value={form.reason}
@@ -536,7 +548,8 @@ export function NoteDialog({ guest, onClose }: { guest: GuestProfileView; onClos
     "ALL_STAFF",
   );
   const [isAlert, setIsAlert] = useState(false);
-  const [scope, setScope] = useState("");
+  // Notes for every property need organization scope (D54); default to this property.
+  const [scope, setScope] = useState(guest.access.addGlobalNote ? "" : property.id);
   return (
     <FormDialog
       title="Add note"
@@ -577,7 +590,7 @@ export function NoteDialog({ guest, onClose }: { guest: GuestProfileView; onClos
         <Select
           label="Applies to"
           options={[
-            { value: "", label: "Every property" },
+            ...(guest.access.addGlobalNote ? [{ value: "", label: "Every property" }] : []),
             { value: property.id, label: `Only ${property.code}` },
           ]}
           value={scope}
@@ -638,15 +651,17 @@ export function EnrollDialog({ guest, onClose }: { guest: GuestProfileView; onCl
             setTierId("");
           }}
         />
-        <Select
-          label="Tier"
-          placeholder="No tier"
-          options={(program?.tiers ?? [])
-            .filter((t) => t.status === "ACTIVE")
-            .map((t) => ({ value: t.id, label: t.name }))}
-          value={tierId}
-          onChange={(e) => setTierId(e.target.value)}
-        />
+        {guest.access.manageLoyalty ? (
+          <Select
+            label="Tier"
+            placeholder="No tier"
+            options={(program?.tiers ?? [])
+              .filter((t) => t.status === "ACTIVE")
+              .map((t) => ({ value: t.id, label: t.name }))}
+            value={tierId}
+            onChange={(e) => setTierId(e.target.value)}
+          />
+        ) : null}
         {program?.isExternal ? (
           <TextField
             label="Membership number"

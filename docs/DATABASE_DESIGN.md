@@ -292,6 +292,24 @@ Migration `20261015090000_multi_property_foundation`:
 - **Existing confirmation numbers** are unchanged; the sequence rows keep their empty prefix and the property prefix is added when a number is issued.
 - **Seed**: the first demo property gets its reference codes from the builder (`buildReferenceSetup`), the second copies them with `copyPropertySetup` before its go-live; taxes, rooms, rates and bookings stay property-specific.
 
+### Phase 10 notes (indexes, batches 4+5)
+
+Nine indexes, each built with `CREATE INDEX CONCURRENTLY` in its own migration (`20261110090000` … `0800`, OPERATIONS.md §3.3):
+
+| Index                                                                    | Serves                                           |
+| ------------------------------------------------------------------------ | ------------------------------------------------ |
+| `folio_items_payment_id_idx` (partial, `payment_id IS NOT NULL`)         | voids, refunds, night-audit payment checks       |
+| `folio_items_refund_id_idx` (partial)                                    | refund lines                                     |
+| `audit_logs_organization_id_created_at_idx` (`created_at DESC, id DESC`) | organization audit trail pages                   |
+| `audit_logs_property_id_business_date_idx`                               | audit-trail report by business date              |
+| `stays_property_id_arrival_business_date_idx`                            | today's arrivals, walk-ins, day use              |
+| `reservation_room_nights_unposted_idx` (partial, `posted_at IS NULL`)    | unposted nights (readiness, posting)             |
+| `folios_open_balance_idx` (partial, `balance <> 0`)                      | open-balance totals and folio list               |
+| `loyalty_memberships_program_id_enrolled_at_idx`                         | member list, newest first                        |
+| `reservations_confirmation_number_trgm_idx` (GIN, `gin_trgm_ops`)        | confirmation search: prefix, contains, ends-with |
+
+Night audit's statistics roll-forward reads the previous day's `daily_statistics.ledger_closing_balance` as the opening. This is exact because postings into closed dates are refused. It falls back to a full sum only without a snapshot.
+
 ### Time zones (all phases)
 
 - **Instants** (`timestamptz`) are stored as real UTC instants. Every application session runs with `TimeZone=UTC` (set on the connection in `lib/db/pool-config.ts`, and as a runtime-role default), because `@prisma/adapter-pg` sends a JavaScript `Date` as offset-less UTC wall-clock text and re-labels timestamps it reads as `+00:00`: in any other session zone both directions are shifted by the zone offset. Values written by PostgreSQL itself (`now()`, column defaults, triggers) and by the application therefore share one clock.

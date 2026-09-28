@@ -3,6 +3,8 @@ import { GET as arrivalsRoute } from "@/app/api/v1/properties/[propertyId]/front
 import { GET as departuresRoute } from "@/app/api/v1/properties/[propertyId]/front-desk/departures/route";
 import { GET as inHouseRoute } from "@/app/api/v1/properties/[propertyId]/front-desk/in-house/route";
 import { GET as roomBoardRoute } from "@/app/api/v1/properties/[propertyId]/front-desk/rooms/route";
+import { GET as orgAuditRoute } from "@/app/api/v1/audit-logs/route";
+import { GET as propertyAuditRoute } from "@/app/api/v1/properties/[propertyId]/audit-logs/route";
 import { GET as summaryRoute } from "@/app/api/v1/properties/[propertyId]/front-desk/summary/route";
 import { POST as walkInRoute } from "@/app/api/v1/properties/[propertyId]/front-desk/walk-ins/route";
 import { POST as assignRoute } from "@/app/api/v1/properties/[propertyId]/reservation-rooms/[reservationRoomId]/assign-room/route";
@@ -23,6 +25,7 @@ import {
   buildFixtureInventory,
   createFixtureOrg,
   createGuestRow,
+  createCustomUser,
   createUser,
 } from "./support/fixtures";
 import { type CookieJar, call, loginAs } from "./support/http";
@@ -927,5 +930,78 @@ describe("room assignment before arrival (Phase 2 endpoint)", () => {
       jar: agent,
     });
     expect(reassign.status).toBe(422);
+  });
+});
+
+describe("financial data in history and audit (M1)", () => {
+  it("hides folio balances from history and audit readers without billing:read", async () => {
+    const guest = await inHouse("KNG", 1);
+    await backdate(guest.reservationRoomId, 2, 0);
+    expect((await checkOut(agent, guest.stay.id, { version: guest.stay.version })).status).toBe(
+      200,
+    );
+    const checkOutEntry = (entries: { action: string; after: unknown }[]) =>
+      entries.find((e) => e.action === "stay.check_out")!.after as Record<string, unknown>;
+
+    // Front office staff with billing:read see the settlement in the stay history.
+    const byFom = await getStay(fom, guest.stay.id);
+    expect(checkOutEntry(byFom.body.data.history).folio).toMatchObject({
+      balance: expect.any(String),
+    });
+
+    // Housekeeping managers read stays (frontdesk:read) but not billing: the
+    // history is there, the folio values are not.
+    const hkm = await createUser(org, "hkm", [{ role: "HOUSEKEEPING_MANAGER", property: "A" }]);
+    const hkmJar = await loginAs(hkm.email, TEST_PASSWORD);
+    const byHkm = await getStay(hkmJar, guest.stay.id);
+    expect(byHkm.status).toBe(200);
+    expect(byHkm.body.data.folio).toBeNull();
+    const redacted = checkOutEntry(byHkm.body.data.history);
+    expect(redacted.folio).toBe("(restricted)");
+    expect(redacted.stayStatus).toBe("CHECKED_OUT");
+    expect(JSON.stringify(byHkm.body.data.history)).not.toMatch(/"balance"/);
+
+    // An audit-only role (audit:read without billing:read) cannot use the audit
+    // trail as a way around billing permissions, at property or organization level.
+    const auditOnly = await createCustomUser(org, "auditonly", [
+      { permissions: ["audit:read"], property: "A" },
+    ]);
+    const auditJar = await loginAs(auditOnly.email, TEST_PASSWORD);
+    const propertyTrail = await call(propertyAuditRoute, {
+      path: `${base(A)}/audit-logs?resourceId=${guest.stay.id}`,
+      params: { propertyId: A },
+      jar: auditJar,
+    });
+    expect(propertyTrail.status).toBe(200);
+    const trailRow = propertyTrail.body.data.find(
+      (r: { action: string; resourceId: string }) =>
+        r.action === "stay.check_out" && r.resourceId === guest.stay.id,
+    );
+    expect(trailRow.after.folio).toBe("(restricted)");
+    const orgTrail = await call(orgAuditRoute, { path: "/api/v1/audit-logs", jar: auditJar });
+    expect(orgTrail.status).toBe(200);
+    const orgRow = orgTrail.body.data.find(
+      (r: { action: string; resourceId: string }) =>
+        r.action === "stay.check_out" && r.resourceId === guest.stay.id,
+    );
+    expect(orgRow.after.folio).toBe("(restricted)");
+    // Its audit scope is still property A only: B and organization rows stay closed.
+    expect(
+      (await call(orgAuditRoute, { path: `/api/v1/audit-logs?scope=${B}`, jar: auditJar })).status,
+    ).toBe(403);
+    expect(
+      (await call(orgAuditRoute, { path: "/api/v1/audit-logs?scope=organization", jar: auditJar }))
+        .status,
+    ).toBe(403);
+    // The front office manager (billing:read at A) sees the values in the same trail.
+    const fomTrail = await call(propertyAuditRoute, {
+      path: `${base(A)}/audit-logs?resourceId=${guest.stay.id}`,
+      params: { propertyId: A },
+      jar: fom,
+    });
+    const fomRow = fomTrail.body.data.find(
+      (r: { action: string }) => r.action === "stay.check_out",
+    );
+    expect(fomRow.after.folio).toMatchObject({ balance: expect.any(String) });
   });
 });

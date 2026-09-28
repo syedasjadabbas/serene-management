@@ -3,7 +3,7 @@ import type {
   RoomHousekeepingInput,
 } from "@/modules/housekeeping/housekeeping.schema";
 import type { PlaceBlockInput, ReleaseBlockInput } from "@/modules/rooms/rooms.schema";
-import type { RoomBoardView, RoomDetail } from "@/modules/rooms/rooms.types";
+import type { RoomBoardView, RoomDetail, RoomPickerItem } from "@/modules/rooms/rooms.types";
 import type { ApiSuccess } from "@/types/api";
 import { baseApi } from "../baseApi";
 import { operationsTags } from "./operations-tags";
@@ -30,11 +30,34 @@ function afterRoomCommand(_r: unknown, _e: unknown, arg: { propertyId: string; r
   ];
 }
 
+/** Inspection and clean/dirty change cleaning status only, never availability (B11). */
+function afterHousekeepingCommand(
+  _r: unknown,
+  _e: unknown,
+  arg: { propertyId: string; roomId?: string },
+) {
+  return [
+    ...operationsTags(arg.propertyId, { availability: false }),
+    ...(arg.roomId ? [{ type: "Room" as const, id: arg.roomId }] : []),
+  ];
+}
+
 export const roomsApi = baseApi.injectEndpoints({
   endpoints: (build) => ({
+    roomPicker: build.query<RoomPickerItem[], string>({
+      query: (propertyId) => `/properties/${propertyId}/rooms/picker`,
+      transformResponse: (response: ApiSuccess<RoomPickerItem[]>) => response.data,
+      keepUnusedDataFor: 300,
+    }),
     roomBoardView: build.query<
       RoomBoardView,
-      { propertyId: string; filter?: string; roomTypeId?: string; floorId?: string }
+      {
+        propertyId: string;
+        filter?: string;
+        roomTypeId?: string;
+        floorId?: string;
+        offset?: string;
+      }
     >({
       query: ({ propertyId, ...params }) =>
         `/properties/${propertyId}/rooms/board?${toQuery(params)}`,
@@ -94,7 +117,7 @@ export const roomsApi = baseApi.injectEndpoints({
         method: "POST",
         body,
       }),
-      invalidatesTags: afterRoomCommand,
+      invalidatesTags: afterHousekeepingCommand,
     }),
     setRoomHousekeeping: build.mutation<
       unknown,
@@ -105,13 +128,14 @@ export const roomsApi = baseApi.injectEndpoints({
         method: "POST",
         body,
       }),
-      invalidatesTags: afterRoomCommand,
+      invalidatesTags: afterHousekeepingCommand,
     }),
   }),
 });
 
 export const {
   useRoomBoardViewQuery,
+  useRoomPickerQuery,
   useRoomBoardOptionsQuery,
   useRoomQuery,
   usePlaceRoomBlockMutation,

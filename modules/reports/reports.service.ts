@@ -4,7 +4,7 @@ import type { PropertyContext } from "@/lib/http/context";
 import { AppError, forbidden } from "@/lib/http/errors";
 import type { Permission } from "@/lib/permissions/catalog";
 import { hasPermission } from "@/lib/permissions/evaluate";
-import { toCsv } from "@/lib/utils/csv";
+import { csvLine } from "@/lib/utils/csv";
 import { type MoneyUnits, formatMoney, parseMoney } from "@/lib/utils/money";
 import { addDays } from "@/modules/business-date/business-date.policy";
 import {
@@ -14,6 +14,8 @@ import {
 } from "@/modules/night-audit/night-audit.repository";
 import { currencyMinorUnits } from "@/modules/rates/rates.service";
 import {
+  REPORT_PAGE_SIZE,
+  REPORT_ROW_LIMIT,
   type RoomNightFacts,
   adr,
   availableRooms,
@@ -76,6 +78,8 @@ interface ReportEnv {
   risk: string | null;
   financial: boolean;
   noShowCodeId: string | null;
+  /** Row cap passed to row-level reads: REPORT_ROW_LIMIT + 1 (H10). */
+  rowLimit: number;
 }
 
 interface ReportOutput {
@@ -554,6 +558,7 @@ const REPORTS: ReportDefinition[] = [
           prisma,
           { propertyId: env.ctx.propertyId, from: env.from, to: env.to },
           env.roomTypeId,
+          env.rowLimit,
         )
       ).map(stayRow);
       return { columns: stayColumns, rows, totals: stayTotals(rows), notes: [] };
@@ -574,6 +579,7 @@ const REPORTS: ReportDefinition[] = [
           prisma,
           { propertyId: env.ctx.propertyId, from: env.from, to: env.to },
           env.roomTypeId,
+          env.rowLimit,
         )
       ).map(stayRow);
       return { columns: stayColumns, rows, totals: stayTotals(rows), notes: [] };
@@ -604,11 +610,11 @@ const REPORTS: ReportDefinition[] = [
     riskFilter: false,
     run: async (env) => {
       const rows = (
-        await findNoShowsBetween(prisma, {
-          propertyId: env.ctx.propertyId,
-          from: env.from,
-          to: env.to,
-        })
+        await findNoShowsBetween(
+          prisma,
+          { propertyId: env.ctx.propertyId, from: env.from, to: env.to },
+          env.rowLimit,
+        )
       ).map((row) => ({
         date: row.business_date,
         ...stayRow(row),
@@ -637,11 +643,11 @@ const REPORTS: ReportDefinition[] = [
     riskFilter: false,
     run: async (env) => {
       const rows = (
-        await findCancellationsBetween(prisma, {
-          propertyId: env.ctx.propertyId,
-          from: env.from,
-          to: env.to,
-        })
+        await findCancellationsBetween(
+          prisma,
+          { propertyId: env.ctx.propertyId, from: env.from, to: env.to },
+          env.rowLimit,
+        )
       ).map((row) => ({
         date: row.business_date,
         cancellation: row.cancellation_number,
@@ -713,11 +719,11 @@ const REPORTS: ReportDefinition[] = [
     riskFilter: false,
     run: async (env) => {
       const rows = (
-        await findHousekeepingTasks(prisma, {
-          propertyId: env.ctx.propertyId,
-          from: env.from,
-          to: env.to,
-        })
+        await findHousekeepingTasks(
+          prisma,
+          { propertyId: env.ctx.propertyId, from: env.from, to: env.to },
+          env.rowLimit,
+        )
       ).map((row) => ({
         date: row.business_date,
         room: row.room_number,
@@ -903,11 +909,11 @@ const REPORTS: ReportDefinition[] = [
     riskFilter: false,
     run: async (env) => {
       const rows = (
-        await findVoidsAndRefunds(prisma, {
-          propertyId: env.ctx.propertyId,
-          from: env.from,
-          to: env.to,
-        })
+        await findVoidsAndRefunds(
+          prisma,
+          { propertyId: env.ctx.propertyId, from: env.from, to: env.to },
+          env.rowLimit,
+        )
       ).map((row) => ({
         date: row.business_date,
         kind: row.kind === "VOID" ? "Void" : "Refund",
@@ -944,11 +950,11 @@ const REPORTS: ReportDefinition[] = [
     riskFilter: false,
     run: async (env) => {
       const rows = (
-        await findAdjustments(prisma, {
-          propertyId: env.ctx.propertyId,
-          from: env.from,
-          to: env.to,
-        })
+        await findAdjustments(
+          prisma,
+          { propertyId: env.ctx.propertyId, from: env.from, to: env.to },
+          env.rowLimit,
+        )
       ).map((row) => ({
         date: row.business_date,
         confirmation: row.confirmation,
@@ -989,13 +995,15 @@ const REPORTS: ReportDefinition[] = [
     riskFilter: false,
     run: async (env) => {
       const asOf = coveredTo(env);
-      const rows = (await findBalancesAsOf(prisma, env.ctx.propertyId, asOf)).map((row) => ({
-        confirmation: row.confirmation ? `${row.confirmation}-${row.line_number}` : null,
-        guest: row.guest_name,
-        window: row.window,
-        status: row.status ? row.status.replace("_", " ").toLowerCase() : null,
-        balance: money(row.balance),
-      }));
+      const rows = (await findBalancesAsOf(prisma, env.ctx.propertyId, asOf, env.rowLimit)).map(
+        (row) => ({
+          confirmation: row.confirmation ? `${row.confirmation}-${row.line_number}` : null,
+          guest: row.guest_name,
+          window: row.window,
+          status: row.status ? row.status.replace("_", " ").toLowerCase() : null,
+          balance: money(row.balance),
+        }),
+      );
       return {
         columns: [
           col("confirmation", "Reservation"),
@@ -1304,11 +1312,27 @@ function requireLiveDate(ctx: PropertyContext): string {
   return ctx.businessDate;
 }
 
+/** One page of a report (H10): every row is computed, `rows` carries the requested page. */
 export async function runReport(
   ctx: PropertyContext,
   key: ReportKey,
   query: ReportQuery,
 ): Promise<ReportResult> {
+  const result = await computeReport(ctx, key, query);
+  const offset = query.offset ?? 0;
+  const limit = query.limit ?? REPORT_PAGE_SIZE;
+  return {
+    ...result,
+    rows: result.rows.slice(offset, offset + limit),
+    page: { offset, limit, totalRows: result.rows.length },
+  };
+}
+
+async function computeReport(
+  ctx: PropertyContext,
+  key: ReportKey,
+  query: ReportQuery,
+): Promise<Omit<ReportResult, "page">> {
   const report = BY_KEY.get(key)!;
   if (!can(ctx, report.permission)) throw forbidden(report.permission);
   const businessDate = requireLiveDate(ctx);
@@ -1329,8 +1353,16 @@ export async function runReport(
     risk: report.riskFilter ? (query.risk ?? null) : null,
     financial: can(ctx, "reports:financial"),
     noShowCodeId: config.noShowTransactionCodeId,
+    rowLimit: REPORT_ROW_LIMIT + 1,
   };
   const output = await report.run(env);
+  if (output.rows.length > REPORT_ROW_LIMIT) {
+    throw new AppError(
+      "BUSINESS_RULE_VIOLATION",
+      `This report has more than ${REPORT_ROW_LIMIT.toLocaleString("en")} rows. Narrow the date range.`,
+      { reason: "REPORT_TOO_LARGE", limit: REPORT_ROW_LIMIT },
+    );
+  }
   return {
     ...catalogItem(report),
     params: { from, to, roomTypeId: env.roomTypeId, risk: env.risk },
@@ -1342,6 +1374,8 @@ export async function runReport(
   };
 }
 
+const CSV_CHUNK_ROWS = 500;
+
 /** CSV export of a report (reports:export on top of the report's own permission). */
 export async function exportReport(
   ctx: PropertyContext,
@@ -1349,25 +1383,50 @@ export async function exportReport(
   query: ReportQuery,
 ): Promise<Response> {
   if (!can(ctx, "reports:export")) throw forbidden("reports:export");
-  const result = await runReport(ctx, key, query);
+  const result = await computeReport(ctx, key, query);
   const minorUnits = await currencyMinorUnits(prisma, ctx.currencyCode);
   const cell = (column: ReportColumn, value: ReportRow[string]) =>
     column.type === "money" && typeof value === "string" && value !== ""
       ? formatMoney(parseMoney(value), minorUnits)
       : value;
-  const lines = result.rows.map((row) => result.columns.map((c) => cell(c, row[c.key] ?? null)));
-  if (result.totals) {
-    const totals = result.totals;
-    lines.push(result.columns.map((c) => cell(c, totals[c.key] ?? null)));
-  }
-  const csv = toCsv(
-    result.columns.map((c) => (c.type === "money" ? `${c.label} (${ctx.currencyCode})` : c.label)),
-    lines,
-  );
   const filename = `${ctx.propertyCode}-${key}-${result.params.from}${
     result.params.to !== result.params.from ? `_${result.params.to}` : ""
   }.csv`;
-  return new Response(`﻿${csv}`, {
+  // Streamed in chunks (H10): the rows are formatted as they are sent, never
+  // copied into a second array or one large string.
+  const encoder = new TextEncoder();
+  const header = result.columns.map((c) =>
+    c.type === "money" ? `${c.label} (${ctx.currencyCode})` : c.label,
+  );
+  let next = -1;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (next === -1) {
+        controller.enqueue(encoder.encode(`﻿${csvLine(header)}`));
+        next = 0;
+        return;
+      }
+      if (next < result.rows.length) {
+        const end = Math.min(next + CSV_CHUNK_ROWS, result.rows.length);
+        let chunk = "";
+        for (let i = next; i < end; i++) {
+          const row = result.rows[i]!;
+          chunk += csvLine(result.columns.map((c) => cell(c, row[c.key] ?? null)));
+        }
+        next = end;
+        controller.enqueue(encoder.encode(chunk));
+        return;
+      }
+      if (result.totals) {
+        const totals = result.totals;
+        controller.enqueue(
+          encoder.encode(csvLine(result.columns.map((c) => cell(c, totals[c.key] ?? null)))),
+        );
+      }
+      controller.close();
+    },
+  });
+  return new Response(body, {
     status: 200,
     headers: {
       "content-type": "text/csv; charset=utf-8",
@@ -1417,6 +1476,7 @@ export async function propertyPerformance(
     risk: null,
     financial: false,
     noShowCodeId: config.noShowTransactionCodeId,
+    rowLimit: REPORT_ROW_LIMIT + 1,
   };
   const last = coveredTo(env);
   const list = await nightFacts(env, from, last);
@@ -1452,6 +1512,55 @@ export async function propertyOpenBalance(
   return { balance: units(balances.balance), folios: balances.folios };
 }
 
+/**
+ * What the organization overview shows of one property (M9): today's
+ * movements and tonight's occupancy — the same figures as the dashboard's
+ * `today` block — and, with reports:financial, the open folio balance.
+ * Three indexed reads instead of the full dashboard (trend, room states,
+ * revenue).
+ */
+export async function propertyOverviewFacts(ctx: PropertyContext): Promise<{
+  today: Pick<
+    DashboardView["today"],
+    | "arrivalsExpected"
+    | "arrivalsDone"
+    | "departuresExpected"
+    | "departuresDone"
+    | "inHouse"
+    | "roomsOccupied"
+    | "roomsAvailable"
+    | "occupancy"
+  >;
+  openBalance: string | null;
+}> {
+  const businessDate = requireLiveDate(ctx);
+  const movements = await countTodayMovements(prisma, ctx.propertyId, businessDate);
+  const rooms = await countRoomsForNight(prisma, ctx.propertyId, businessDate);
+  const night: RoomNightFacts = {
+    physical: rooms.physical_rooms,
+    outOfOrder: rooms.out_of_order_rooms,
+    sold: rooms.rooms_sold,
+    complimentary: rooms.complimentary_rooms,
+    houseUse: rooms.house_use_rooms,
+  };
+  const balances = can(ctx, "reports:financial")
+    ? await sumOpenBalances(prisma, ctx.propertyId)
+    : null;
+  return {
+    today: {
+      arrivalsExpected: movements.arrivals_expected,
+      arrivalsDone: movements.arrivals_done,
+      departuresExpected: movements.departures_expected,
+      departuresDone: movements.departures_done,
+      inHouse: movements.in_house,
+      roomsOccupied: night.sold,
+      roomsAvailable: availableRooms(night),
+      occupancy: occupancy(night),
+    },
+    openBalance: balances ? money(balances.balance)! : null,
+  };
+}
+
 // --- Dashboard ----------------------------------------------------------------------------------
 
 export async function getDashboard(ctx: PropertyContext): Promise<DashboardView> {
@@ -1467,6 +1576,7 @@ export async function getDashboard(ctx: PropertyContext): Promise<DashboardView>
     risk: null,
     financial,
     noShowCodeId: config.noShowTransactionCodeId,
+    rowLimit: REPORT_ROW_LIMIT + 1,
   };
   const movements = await countTodayMovements(prisma, ctx.propertyId, businessDate);
   const rooms = await countRoomStates(prisma, ctx.propertyId);

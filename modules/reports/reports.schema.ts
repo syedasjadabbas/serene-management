@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { idSchema, isoDateSchema } from "@/lib/validation/common";
 import { daysBetween } from "@/modules/business-date/business-date.policy";
-import { MAX_REPORT_DAYS } from "./reports.policy";
+import { MAX_REPORT_DAYS, REPORT_PAGE_MAX, REPORT_ROW_LIMIT } from "./reports.policy";
 
 export const REPORT_KEYS = [
   "manager-flash",
@@ -43,6 +43,9 @@ export const reportQuerySchema = z
     to: isoDateSchema.optional(),
     roomTypeId: idSchema.optional(),
     risk: z.enum(["LOW", "STANDARD", "HIGH"]).optional(),
+    /** JSON paging (H10); ignored by the CSV export, which carries every row. */
+    offset: z.coerce.number().int().min(0).max(REPORT_ROW_LIMIT).optional(),
+    limit: z.coerce.number().int().min(1).max(REPORT_PAGE_MAX).optional(),
   })
   .strict()
   .superRefine((value, ctx) => {

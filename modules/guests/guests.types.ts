@@ -145,6 +145,10 @@ export interface GuestProfileView extends GuestSummaryView {
     manageCompanies: boolean;
     /** Preferences for every property need an organization-scope grant (D3). */
     manageGlobalPreferences: boolean;
+    /** Do-not-rent and active/inactive status apply everywhere: organization scope (D54). */
+    manageRestrictions: boolean;
+    /** Notes for every property need an organization-scope grant (D54). */
+    addGlobalNote: boolean;
     /** Enrolment is open to property staff with loyalty:manage. */
     enrollLoyalty: boolean;
     /** Tier/status changes and point adjustments need organization scope (D3). */

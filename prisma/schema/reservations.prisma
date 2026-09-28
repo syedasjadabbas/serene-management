@@ -151,6 +151,8 @@ model Reservation {
   @@index([travelAgentId])
   @@index([bookerGuestId])
   @@index([propertyId, blockId])
+  /// Phase 10 (H9): confirmation search (prefix, contains, ends-with).
+  @@index([confirmationNumber(ops: raw("gin_trgm_ops"))], type: Gin, map: "reservations_confirmation_number_trgm_idx")
   @@map("reservations")
 }
 
@@ -285,6 +287,8 @@ model ReservationRoomNight {
 
   @@id([reservationRoomId, stayDate])
   @@index([propertyId, stayDate, roomTypeId])
+  /// Phase 10 (H9): nights not yet posted (partial).
+  @@index([propertyId, stayDate], map: "reservation_room_nights_unposted_idx", where: raw("posted_at IS NULL"))
   @@map("reservation_room_nights")
 }
 
@@ -424,6 +428,8 @@ model Stay {
   @@index([propertyId, roomId, status])
   @@index([primaryGuestId, checkedInAt(sort: Desc)])
   @@index([propertyId, departureBusinessDate])
+  /// Phase 10 (H9): today's arrivals / walk-ins / day use.
+  @@index([propertyId, arrivalBusinessDate], map: "stays_property_id_arrival_business_date_idx")
   @@map("stays")
 }
 

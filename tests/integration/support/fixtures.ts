@@ -1,7 +1,7 @@
 import { hashPassword } from "@/lib/auth/password";
 import { prisma } from "@/lib/db/prisma";
 import type { PropertyContext, SessionContext } from "@/lib/http/context";
-import { ALL_PERMISSIONS } from "@/lib/permissions/catalog";
+import { ALL_PERMISSIONS, type Permission } from "@/lib/permissions/catalog";
 import type { RoleCode } from "@/lib/permissions/roles";
 import { bootstrapOrganization } from "@/modules/access/access.service";
 import { addDays, localDateInZone } from "@/modules/business-date/business-date.policy";
@@ -153,6 +153,52 @@ export async function createUser(
       data: {
         userId: user.id,
         roleId: org.roleIds[grant.role]!,
+        scope: propertyId ? "PROPERTY" : "ORGANIZATION",
+        propertyId,
+        grantedById: org.adminId,
+      },
+    });
+  }
+  return { id: user.id, email };
+}
+
+/**
+ * A user whose roles carry exactly the given permissions (organization-level
+ * custom roles), for combinations no template covers — e.g. audit:read without
+ * billing:read, or a permission at one property only.
+ */
+export async function createCustomUser(
+  org: FixtureOrg,
+  localPart: string,
+  grants: { permissions: Permission[]; property?: string }[],
+) {
+  passwordHash ??= hashPassword(TEST_PASSWORD);
+  const email = `${localPart}.${org.suffix.toLowerCase()}@serene.test`;
+  const user = await prisma.user.create({
+    data: {
+      organizationId: org.organizationId,
+      email,
+      displayName: `${localPart} ${org.suffix}`,
+      passwordHash: await passwordHash,
+      status: "ACTIVE",
+    },
+    select: { id: true },
+  });
+  for (const [index, grant] of grants.entries()) {
+    const role = await prisma.role.create({
+      data: {
+        organizationId: org.organizationId,
+        code: `C_${localPart}_${index}_${org.suffix}`.toUpperCase().slice(0, 40),
+        name: `Custom ${localPart} ${index}`,
+        permissions: { create: grant.permissions.map((permissionKey) => ({ permissionKey })) },
+      },
+      select: { id: true },
+    });
+    const propertyId = grant.property ? org.properties[grant.property]!.id : null;
+    await prisma.userRoleAssignment.create({
+      data: {
+        userId: user.id,
+        roleId: role.id,
         scope: propertyId ? "PROPERTY" : "ORGANIZATION",
         propertyId,
         grantedById: org.adminId,

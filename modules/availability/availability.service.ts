@@ -1,7 +1,8 @@
 import "server-only";
 import { prisma, type Tx } from "@/lib/db/prisma";
 import type { PropertyContext } from "@/lib/http/context";
-import { AppError } from "@/lib/http/errors";
+import { AppError, forbidden } from "@/lib/http/errors";
+import { hasPermissionAnywhere } from "@/lib/permissions/evaluate";
 import { addDays, toDateOnly } from "@/modules/business-date/business-date.policy";
 import { findBookableAccount } from "@/modules/accounts/accounts.repository";
 import { loadRates, quoteRoomType, type StayRequest } from "@/modules/rates/rates.service";
@@ -128,6 +129,10 @@ export async function searchAvailability(
     throw new AppError("NOT_FOUND", "Room type not found");
   }
   const roomTypeIds = roomTypes.map((rt) => rt.id);
+  // Company quotes reveal negotiated rates: account data (L14, D54).
+  if (query.companyId && !hasPermissionAnywhere(ctx.access, "accounts:read")) {
+    throw forbidden("accounts:read");
+  }
   if (
     query.companyId &&
     !(await findBookableAccount(prisma, ctx.organizationId, query.companyId))

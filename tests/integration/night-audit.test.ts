@@ -21,7 +21,10 @@ import { ALL_PERMISSIONS } from "@/lib/permissions/catalog";
 import { formatMoney, parseMoney } from "@/lib/utils/money";
 import { addDays, fromDateOnly, toDateOnly } from "@/modules/business-date/business-date.policy";
 import { COMMIT_STEPS } from "@/modules/night-audit/night-audit.policy";
-import { sumMoneyForDate } from "@/modules/night-audit/night-audit.repository";
+import {
+  ledgerBalancesForDate,
+  sumMoneyForDate,
+} from "@/modules/night-audit/night-audit.repository";
 import { recoverRun, startNightAudit } from "@/modules/night-audit/night-audit.service";
 import { stayNights } from "@/modules/reservations/reservations.policy";
 import {
@@ -819,6 +822,20 @@ describe("closing the day (property A)", () => {
       (dayLedger._sum.amount ?? stats.ledgerOpening.sub(stats.ledgerOpening)).toFixed(4),
     );
     expect(stats.noShowRevenue.greaterThan(0)).toBe(true);
+    // H8: the next date's roll-forward starts from this snapshot instead of
+    // re-summing history, and matches the full-history sums exactly.
+    const next = addDays(DA, 1);
+    const [fast, full] = await prisma.$transaction(async (tx) => [
+      await ledgerBalancesForDate(tx, A, next),
+      (
+        await tx.$queryRaw<{ opening: string; closing: string }[]>`
+          SELECT COALESCE(sum("amount") FILTER (WHERE "business_date" < ${next}::date), 0)::numeric(19, 4)::text AS "opening",
+                 COALESCE(sum("amount") FILTER (WHERE "business_date" <= ${next}::date), 0)::numeric(19, 4)::text AS "closing"
+          FROM "folio_items" WHERE "property_id" = ${A}::uuid`
+      )[0]!,
+    ]);
+    expect(fast.ledger_opening).toBe(stats.ledgerClosing.toFixed(4));
+    expect(fast).toEqual({ ledger_opening: full.opening, ledger_closing: full.closing });
     // Snapshots are frozen.
     await expect(
       prisma.dailyStatistic.update({

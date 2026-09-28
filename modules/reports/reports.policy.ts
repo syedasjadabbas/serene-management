@@ -57,3 +57,14 @@ export function revpar(facts: RoomNightFacts, roomRevenue: MoneyUnits): string {
 
 /** Longest date range a report accepts (inclusive days). */
 export const MAX_REPORT_DAYS = 366;
+
+/**
+ * Most rows one report run may produce (H10). Row-level reads ask the
+ * database for one more; a larger result is refused (narrow the range)
+ * rather than held in memory or silently cut, so totals are always complete.
+ */
+export const REPORT_ROW_LIMIT = 20_000;
+
+/** Rows per JSON page (the CSV export always carries every row). */
+export const REPORT_PAGE_SIZE = 500;
+export const REPORT_PAGE_MAX = 1_000;

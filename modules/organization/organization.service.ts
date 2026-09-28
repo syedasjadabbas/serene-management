@@ -14,10 +14,8 @@ import { toCsv } from "@/lib/utils/csv";
 import { type MoneyUnits, formatMoney, parseMoney } from "@/lib/utils/money";
 import { searchAvailability } from "@/modules/availability/availability.service";
 import { daysBetween } from "@/modules/business-date/business-date.policy";
-import {
-  getBusinessDateView,
-  getCurrentBusinessDate,
-} from "@/modules/business-date/business-date.service";
+import { getBusinessDateViews } from "@/modules/business-date/business-date.service";
+import type { BusinessDateView } from "@/modules/business-date/business-date.types";
 import { findOrganization, findPropertiesByIds } from "@/modules/properties/properties.repository";
 import {
   type RoomNightFacts,
@@ -27,8 +25,8 @@ import {
   revpar,
 } from "@/modules/reports/reports.policy";
 import {
-  getDashboard,
   propertyOpenBalance,
+  propertyOverviewFacts,
   propertyPerformance,
 } from "@/modules/reports/reports.service";
 import type { CentralAvailabilityQuery, OrganizationPerformanceQuery } from "./organization.schema";
@@ -50,26 +48,39 @@ import type {
 
 const FAN_OUT = 4;
 
+/**
+ * Property contexts of the requested (accessible) properties, with their
+ * business-date views: two reads for any number of properties (M9).
+ */
 async function propertyContexts(
   ctx: SessionContext,
   propertyIds: string[],
-): Promise<(PropertyContext & { property: OrganizationPropertyRef })[]> {
+): Promise<
+  (PropertyContext & { property: OrganizationPropertyRef; dateView: BusinessDateView })[]
+> {
   const rows = await findPropertiesByIds(prisma, ctx.organizationId, propertyIds);
-  return mapWithConcurrency(rows, FAN_OUT, async (row) => ({
-    ...ctx,
-    propertyId: row.id,
-    propertyCode: row.code,
-    timezone: row.timezone,
-    currencyCode: row.currencyCode,
-    businessDate: await getCurrentBusinessDate(row.id),
-    property: {
-      id: row.id,
-      code: row.code,
-      name: row.name,
-      currencyCode: row.currencyCode,
+  const views = await getBusinessDateViews(
+    rows.map((row) => ({ propertyId: row.id, timezone: row.timezone })),
+  );
+  return rows.map((row) => {
+    const dateView = views.get(row.id)!;
+    return {
+      ...ctx,
+      propertyId: row.id,
+      propertyCode: row.code,
       timezone: row.timezone,
-    },
-  }));
+      currencyCode: row.currencyCode,
+      businessDate: dateView.businessDate,
+      dateView,
+      property: {
+        id: row.id,
+        code: row.code,
+        name: row.name,
+        currencyCode: row.currencyCode,
+        timezone: row.timezone,
+      },
+    };
+  });
 }
 
 /** Accessible properties holding every permission, optionally narrowed by the request. */
@@ -94,34 +105,21 @@ function scopedProperties(
 export async function getOrganizationOverview(ctx: SessionContext): Promise<OrganizationOverview> {
   const organization = await findOrganization(prisma, ctx.organizationId);
   if (!organization) throw notFound("Organization");
+  // One read for every property's business date (M9); each property then
+  // needs only its overview figures, never the full dashboard.
   const contexts = await propertyContexts(ctx, Object.keys(ctx.access.byProperty));
   const properties = await mapWithConcurrency(contexts, FAN_OUT, async (pctx) => {
-    const dashboard =
+    const facts =
       pctx.businessDate && hasPermission(ctx.access, pctx.propertyId, "dashboard:read")
-        ? await getDashboard(pctx)
+        ? await propertyOverviewFacts(pctx)
         : null;
-    const date = await getBusinessDateView({
-      propertyId: pctx.propertyId,
-      timezone: pctx.timezone,
-    });
     return {
       property: pctx.property,
       businessDate: pctx.businessDate,
-      dateStatus: date.status,
-      auditState: date.sync?.state ?? null,
-      today: dashboard
-        ? {
-            arrivalsExpected: dashboard.today.arrivalsExpected,
-            arrivalsDone: dashboard.today.arrivalsDone,
-            departuresExpected: dashboard.today.departuresExpected,
-            departuresDone: dashboard.today.departuresDone,
-            inHouse: dashboard.today.inHouse,
-            roomsOccupied: dashboard.today.roomsOccupied,
-            roomsAvailable: dashboard.today.roomsAvailable,
-            occupancy: dashboard.today.occupancy,
-          }
-        : null,
-      openBalance: dashboard?.finance?.openBalance ?? null,
+      dateStatus: pctx.dateView.status,
+      auditState: pctx.dateView.sync?.state ?? null,
+      today: facts?.today ?? null,
+      openBalance: facts?.openBalance ?? null,
     };
   });
   return {
@@ -229,16 +227,12 @@ export async function organizationPerformance(
   const results = await mapWithConcurrency(contexts, FAN_OUT, async (pctx) => {
     const financial = hasPermission(ctx.access, pctx.propertyId, "reports:financial");
     const performance = await propertyPerformance(pctx, query.from, query.to);
-    const date = await getBusinessDateView({
-      propertyId: pctx.propertyId,
-      timezone: pctx.timezone,
-    });
     return {
       pctx,
       performance,
       financial,
       openBalance: performance && financial ? (await propertyOpenBalance(pctx)).balance : 0n,
-      dateStatus: date.status,
+      dateStatus: pctx.dateView.status,
     };
   });
 

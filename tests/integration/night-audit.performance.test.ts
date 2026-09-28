@@ -16,6 +16,7 @@ import {
   createUser,
 } from "./support/fixtures";
 import { call, loginAs } from "./support/http";
+import { countStatements, projectedSeconds } from "./support/statements";
 
 /**
  * Night audit at hotel scale (Phase 8 completion criterion): 1 000 rooms in
@@ -123,6 +124,15 @@ beforeAll(async () => {
     where: { id: { in: others } },
     data: { frontOfficeStatus: "OCCUPIED" },
   });
+  // Check-in opens window 1 of every stay (the template got it from the real command).
+  await prisma.$executeRaw`
+    INSERT INTO "folios" ("id", "property_id", "owner_type", "window", "reservation_room_id",
+      "payee_guest_id", "status", "currency_code", "opened_by_id", "updated_at")
+    SELECT gen_random_uuid(), rr."property_id", 'GUEST', 1, rr."id", rr."primary_guest_id", 'OPEN',
+      rr."currency_code", ${org.adminId}::uuid, now()
+    FROM "reservation_rooms" rr
+    WHERE rr."reservation_id" = (SELECT "reservation_id" FROM "reservation_rooms" WHERE "id" = ${template.id}::uuid)
+      AND NOT EXISTS (SELECT 1 FROM "folios" f WHERE f."reservation_room_id" = rr."id")`;
 }, 600_000);
 
 describe("night audit with 1 000 rooms in house", () => {
@@ -137,24 +147,56 @@ describe("night audit with 1 000 rooms in house", () => {
       businessDate: D,
     };
     const started = performance.now();
-    const run = await startNightAudit(
-      ctx,
-      { reason: "Scale test" },
-      { key: `perf-${randomUUID()}`, route: "POST /perf", requestHash: "e".repeat(64) },
+    const { result: run, statements } = await countStatements(() =>
+      startNightAudit(
+        ctx,
+        { reason: "Scale test" },
+        { key: `perf-${randomUUID()}`, route: "POST /perf", requestHash: "e".repeat(64) },
+      ),
     );
     const seconds = (performance.now() - started) / 1000;
-    console.warn(`Night audit, ${ROOMS} rooms in house: ${seconds.toFixed(1)} s`);
     expect(run.status).toBe("COMPLETED");
     expect(run.summary!.roomsPosted).toBe(ROOMS);
     expect(run.summary!.nightsPosted).toBe(ROOMS);
     // Room line + tax line per room.
     expect(run.summary!.linesPosted).toBe(ROOMS * 2);
+    const lines = await prisma.folioItem.findMany({
+      where: { propertyId: A, businessDate: fromDateOnly(D) },
+      select: { kind: true, amount: true },
+    });
+    expect(lines.filter((l) => l.kind === "CHARGE")).toHaveLength(ROOMS);
+    expect(lines.filter((l) => l.kind === "TAX")).toHaveLength(ROOMS);
+    // Every posted folio's stored balance still equals its ledger.
+    const drift = await prisma.$queryRaw<{ n: number }[]>`
+      SELECT count(*)::int AS "n" FROM "folios" f
+      WHERE f."property_id" = ${A}::uuid
+        AND f."balance" <> COALESCE((SELECT sum(i."amount") FROM "folio_items" i WHERE i."folio_id" = f."id"), 0)`;
+    expect(drift[0]!.n).toBe(0);
+    expect(
+      await prisma.reservationRoomNight.count({
+        where: { propertyId: A, stayDate: fromDateOnly(D), postedAt: null },
+      }),
+    ).toBe(0);
     const stats = await prisma.dailyStatistic.findUniqueOrThrow({
       where: { propertyId_businessDate: { propertyId: A, businessDate: fromDateOnly(D) } },
     });
     expect(stats.roomsSold).toBe(ROOMS);
     expect(stats.physicalRooms).toBe(ROOMS);
-    // Well inside the 300 s commit timeout.
+    // H8: the roll-forward equals the full-history sums it no longer scans on live paths.
+    const [sums] = await prisma.$queryRaw<{ opening: string; closing: string }[]>`
+      SELECT COALESCE(sum("amount") FILTER (WHERE "business_date" < ${D}::date), 0)::numeric(19, 4)::text AS "opening",
+             COALESCE(sum("amount") FILTER (WHERE "business_date" <= ${D}::date), 0)::numeric(19, 4)::text AS "closing"
+      FROM "folio_items" WHERE "property_id" = ${A}::uuid`;
+    expect(stats.ledgerOpening.toFixed(4)).toBe(sums!.opening);
+    expect(stats.ledgerClosing.toFixed(4)).toBe(sums!.closing);
+
+    // M8: round trips, not wall-clock time, decide whether the commit fits its
+    // 300 s window on a remote database. Before the batch it was ~35 statements
+    // per in-house room (35 057 for 1 000 rooms: ~175 s at 5 ms per round trip);
+    // now the room and tax line inserts dominate.
+    expect(statements / ROOMS).toBeLessThan(4);
+    expect(projectedSeconds(statements, 5)).toBeLessThan(30);
+    // Local wall-clock stays a loose sanity bound only.
     expect(seconds).toBeLessThan(180);
   }, 600_000);
 });

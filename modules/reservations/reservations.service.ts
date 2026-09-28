@@ -6,7 +6,7 @@ import { auditActor, type PropertyContext } from "@/lib/http/context";
 import type { AuditActor } from "@/modules/audit/audit.types";
 import { AppError, forbidden, notFound, staleVersion } from "@/lib/http/errors";
 import type { Permission } from "@/lib/permissions/catalog";
-import { hasPermission } from "@/lib/permissions/evaluate";
+import { hasPermission, hasPermissionAnywhere } from "@/lib/permissions/evaluate";
 import { decodeCursor, encodeCursor } from "@/lib/utils/cursor";
 import { formatMoney, parseMoney, sum } from "@/lib/utils/money";
 import { requireReservationCompany } from "@/modules/accounts/accounts.service";
@@ -40,6 +40,7 @@ import {
   priceForBooking,
 } from "@/modules/rates/rates.service";
 import { requireSellablePackage } from "@/modules/rates/packages.service";
+import { auditSnapshots } from "@/modules/audit/audit.policy";
 import { negotiatedFor } from "@/modules/rates/rates.policy";
 import type { ReservationPackageInput } from "@/modules/rates/rates.schema";
 import type { CursorPageMeta } from "@/types/api";
@@ -75,6 +76,7 @@ import {
   findChannel,
   findMarketCode,
   findNightsForPosting,
+  findNightsForPostingMany,
   findReservationPackage,
   deleteReservationPackage,
   insertReservationPackage,
@@ -93,9 +95,11 @@ import {
   insertReservation,
   insertReservationRoom,
   lockReservationRoom,
+  lockReservationRooms,
   releaseActiveAssignments,
   replacePrimaryGuest,
   setNightPosted,
+  setNightsPosted,
   sumNightAmounts,
   updateReservationRoomVersioned,
 } from "./reservations.repository";
@@ -134,6 +138,15 @@ import type {
 
 function requirePermission(ctx: PropertyContext, permission: Permission) {
   if (!hasPermission(ctx.access, ctx.propertyId, permission)) throw forbidden(permission);
+}
+
+/**
+ * Choosing a company (and so its negotiated rates) needs `accounts:read`,
+ * held anywhere in the organization like every account permission (L14,
+ * D54). A group pickup inheriting its group's company is not a choice.
+ */
+function requireCompanyAccess(ctx: PropertyContext) {
+  if (!hasPermissionAnywhere(ctx.access, "accounts:read")) throw forbidden("accounts:read");
 }
 
 function assertTransition(
@@ -399,6 +412,7 @@ export async function createReservationInTx(
     });
   }
   // Company (Phase 7): validated server-side; a pickup defaults to its group's company.
+  if (input.companyId) requireCompanyAccess(ctx);
   const companyId =
     input.companyId ?? (options.block ? await findGroupCompanyId(tx, options.block.groupId) : null);
   if (companyId) {
@@ -1154,6 +1168,20 @@ export function lockReservationRoomForCommand(
   return lockRoomOrThrow(tx, ctx, reservationRoomId, version);
 }
 
+/**
+ * Locks many reservation rooms FOR UPDATE (id order) in one statement: night
+ * audit's posting batch (M8). Every id must still exist.
+ */
+export async function lockReservationRoomsByIds(
+  tx: Tx,
+  ctx: PropertyContext,
+  reservationRoomIds: string[],
+): Promise<LockedReservationRoom[]> {
+  const rooms = await lockReservationRooms(tx, ctx.propertyId, reservationRoomIds);
+  if (rooms.length !== new Set(reservationRoomIds).size) throw notFound("Reservation");
+  return rooms;
+}
+
 /** Locks a reservation room FOR UPDATE without a version check (stay commands carry the stay's version). */
 export async function lockReservationRoomById(
   tx: Tx,
@@ -1518,24 +1546,21 @@ export async function removeReservationPackage(
 // Called by modules/billing inside its transaction, while it holds the
 // reservation room lock (lockReservationRoomById).
 
-/** The reservation room's stay nights with their priced rate and posting state. */
-export async function nightsForRoomCharges(
-  tx: Tx,
-  propertyId: string,
-  reservationRoomId: string,
-): Promise<
-  {
-    stayDate: string;
-    rateAmount: string;
-    currencyCode: string;
-    adults: number;
-    children: number;
-    ratePlanId: string;
-    posted: boolean;
-  }[]
-> {
-  const nights = await findNightsForPosting(tx, propertyId, reservationRoomId);
-  return nights.map((night) => ({
+/** A stay night as the posting engine reads it. */
+export interface PostingNight {
+  stayDate: string;
+  rateAmount: string;
+  currencyCode: string;
+  adults: number;
+  children: number;
+  ratePlanId: string;
+  posted: boolean;
+}
+
+function toPostingNight(
+  night: Awaited<ReturnType<typeof findNightsForPosting>>[number],
+): PostingNight {
+  return {
     stayDate: toDateOnly(night.stayDate),
     rateAmount: night.rateAmount.toFixed(4),
     currencyCode: night.currencyCode,
@@ -1543,7 +1568,47 @@ export async function nightsForRoomCharges(
     children: night.children,
     ratePlanId: night.ratePlanId,
     posted: night.postedAt !== null,
-  }));
+  };
+}
+
+/** The reservation room's stay nights with their priced rate and posting state. */
+export async function nightsForRoomCharges(
+  tx: Tx,
+  propertyId: string,
+  reservationRoomId: string,
+): Promise<PostingNight[]> {
+  const nights = await findNightsForPosting(tx, propertyId, reservationRoomId);
+  return nights.map(toPostingNight);
+}
+
+/** Stay nights of many reservation rooms in one read (night audit batch, M8). */
+export async function nightsForRoomChargesMany(
+  tx: Tx,
+  propertyId: string,
+  reservationRoomIds: string[],
+): Promise<Map<string, PostingNight[]>> {
+  const byRoom = new Map<string, PostingNight[]>();
+  if (reservationRoomIds.length === 0) return byRoom;
+  for (const night of await findNightsForPostingMany(tx, propertyId, reservationRoomIds)) {
+    const list = byRoom.get(night.reservationRoomId) ?? [];
+    list.push(toPostingNight(night));
+    byRoom.set(night.reservationRoomId, list);
+  }
+  return byRoom;
+}
+
+/** Marks many nights posted in one statement; a shortfall means a concurrent change. */
+export async function markNightsPosted(
+  tx: Tx,
+  pairs: { reservationRoomId: string; stayDate: string }[],
+): Promise<void> {
+  if (pairs.length === 0) return;
+  const count = await setNightsPosted(tx, pairs, new Date());
+  if (count !== pairs.length) {
+    throw new AppError("CONFLICT", "A night's room charge was changed by someone else", {
+      reason: "NIGHT_POSTING_CHANGED",
+    });
+  }
 }
 
 /** Records that a night's room charge was posted (true) or reversed (false). */
@@ -1781,6 +1846,7 @@ export async function setReservationCompany(
     if (!locked) throw notFound("Reservation");
     if (locked.version !== input.version) throw staleVersion("Reservation");
     if (input.companyId) {
+      requireCompanyAccess(ctx);
       await requireReservationCompany(tx, ctx.organizationId, input.companyId, input.bookerGuestId);
     }
     const rooms = await findActiveRoomsForCompany(tx, ctx.propertyId, reservationId);
@@ -1991,6 +2057,7 @@ export async function getReservation(
       body: n.body,
       createdAt: n.createdAt.toISOString(),
     })),
+    // Billing facts in the snapshots need billing:read here (M1).
     history: history.map((h) => ({
       id: h.id,
       at: h.createdAt.toISOString(),
@@ -1998,8 +2065,7 @@ export async function getReservation(
       userDisplayName: h.userId ? (names.get(h.userId) ?? null) : null,
       risk: h.risk,
       reason: h.reason,
-      before: h.before,
-      after: h.after,
+      ...auditSnapshots(h, can("billing:read")),
     })),
   };
 }

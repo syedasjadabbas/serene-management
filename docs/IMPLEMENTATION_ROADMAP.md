@@ -85,7 +85,37 @@ The product owner re-sequenced Phase 2 to **Reservations + Availability**. It de
 
 Moved to later phases: configuration screens for rooms, rate plans and restrictions; full guest profiles (documents, preferences, merge); room holds and auto-assign; deposits and cancellation penalties (billing); negotiated, member and day-use rates; block pickup (groups); turnaway capture.
 
-## Phase 10 batch 3 (as executed) — Operations and reliability (pending commit)
+## Phase 10 batches 4+5 (as executed) — RBAC hardening and performance (pending commit)
+
+Nine concurrent index migrations `20261110090000`–`0800` (D55).
+
+**RBAC (D54):**
+
+- M1: financial redaction in audit and history snapshots.
+- M2: tier at enrolment needs organization scope.
+- M3: guest restriction and status need organization scope.
+- M4, L10: organization-wide notes and property-scoped sensitive notes.
+- M5: setup-copy source permission.
+- L7: audit reason codes checked against the audited scope.
+- L12: DOB changes need a reason.
+- L13: maintenance note permission aligned.
+- L14: `accounts:read` enforced on company and negotiated-rate APIs.
+
+**Performance (D55):**
+
+- H8: live figures without ledger-history scans.
+- H9: the indexes above.
+- H10: report paging, a 20 000-row limit and a streamed CSV.
+- B4: readiness balance check scoped.
+- B5: two-phase folio list.
+- M8: night-audit posting batch, 35 → ~2 statements per room.
+- M9: batched organization overview.
+- M10: 3 statements per request before the handler.
+- M11: room board counts and paging, plus a room picker.
+- B10: background-tab polling paused.
+- M18/B11: targeted financial invalidation.
+
+## Phase 10 batch 3 (as executed) — Operations and reliability (tag `phase-10-batch-3`)
 
 One migration `20261101090000_truncate_guards` (statement-level TRUNCATE guards on the 15 append-only/delete-guarded tables, D51). Operator commands `ops:backup` (create/verify/list/restore — checksummed `pg_dump -Fc`, restore only into a new or empty confirmed database), `ops:maintenance` (batched retention of transient data; pending outbox events kept, D50) and `ops:db-check` (role, guard, session and migration posture). Explicit pool/connect/statement/idle-transaction settings from the environment with UTC sessions (D52); owner/runtime role split through `MIGRATION_DATABASE_URL` and `scripts/db/runtime-role.sql` (D53). GitHub Actions CI with natively installed PostgreSQL (no Docker). Runbooks: [OPERATIONS.md](OPERATIONS.md) (backups, restore drill, RPO/RTO targets, migration policy, retention, roles, scheduling) and DEPLOYMENT.md §9.
 

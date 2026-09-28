@@ -55,7 +55,16 @@ export interface RoomBoardView {
     urgent: number;
     maintenance: number;
   };
+  /** One page of the rooms matching the filter, most urgent first. */
   items: RoomBoardRow[];
+  /** Paging of `items` (M11): [offset, offset + limit) of `total` matching rooms. */
+  page: { offset: number; limit: number; total: number };
+}
+
+export interface RoomPickerItem {
+  id: string;
+  number: string;
+  roomTypeCode: string;
 }
 
 export interface RoomDetail {

@@ -287,6 +287,19 @@ export async function updateGuest(
   if (input.dateOfBirth !== undefined && !readSensitive) throw forbidden("guests:read_sensitive");
   const restrictionChange = input.isRestricted !== undefined;
   const statusChange = input.status !== undefined;
+  // Do-not-rent and deactivation apply at every property of the organization,
+  // so they need the grant at organization scope (D41, D54). Ordinary profile
+  // edits stay open to property staff.
+  const restrictionEdit =
+    restrictionChange || statusChange || input.restrictionReason !== undefined;
+  if (restrictionEdit && !hasOrganizationPermission(ctx.access, "guests:update")) {
+    throw new AppError(
+      "FORBIDDEN",
+      "Restricting or deactivating a guest profile applies to every property and needs " +
+        "organization-level guest permission",
+      { permission: "guests:update", reason: "ORGANIZATION_SCOPE_REQUIRED" },
+    );
+  }
   if ((restrictionChange || statusChange) && !input.reason) {
     throw invalid("reason", "A reason is required to change the restriction or status");
   }
@@ -396,6 +409,11 @@ export async function updateGuest(
     }
     if (input.contacts) afterAudit.contacts = input.contacts.length;
     if (input.addresses) afterAudit.addresses = input.addresses.length;
+    if ("dateOfBirth" in afterAudit && !input.reason) {
+      // L12: a date-of-birth change is sensitive and HIGH risk; the value is
+      // never written to the audit trail, so the reason explains the change.
+      throw invalid("reason", "A reason is required to change the date of birth");
+    }
     const highRisk =
       "isRestricted" in afterAudit || "status" in afterAudit || "dateOfBirth" in afterAudit;
     await recordAudit(tx, auditActor(ctx), {
@@ -507,8 +525,13 @@ export async function addGuestNote(
   if (input.visibility !== "ALL_STAFF" && !can(ctx, "guests:read_sensitive")) {
     throw forbidden("guests:read_sensitive");
   }
-  if (input.propertyId && !hasPermission(ctx.access, input.propertyId, "guests:update")) {
-    throw forbidden("guests:update");
+  if (!canManageNote(ctx, input.propertyId ?? null)) throw noteScopeForbidden(input.propertyId);
+  if (
+    input.visibility !== "ALL_STAFF" &&
+    input.propertyId &&
+    !hasPermission(ctx.access, input.propertyId, "guests:read_sensitive")
+  ) {
+    throw forbidden("guests:read_sensitive");
   }
   await runInTransaction(async (tx) => {
     const locked = await lockGuest(tx, ctx.organizationId, guestId);
@@ -550,9 +573,7 @@ export async function deleteGuestNote(
     if (!locked) throw notFound("Guest");
     const note = await findNote(tx, guestId, noteId);
     if (!note || !noteReadable(ctx, note)) throw notFound("Note");
-    if (note.propertyId && !hasPermission(ctx.access, note.propertyId, "guests:update")) {
-      throw forbidden("guests:update");
-    }
+    if (!canManageNote(ctx, note.propertyId)) throw noteScopeForbidden(note.propertyId);
     await softDeleteNote(tx, noteId);
     await recordAudit(tx, auditActor(ctx), {
       action: "guest.note_delete",
@@ -565,12 +586,42 @@ export async function deleteGuestNote(
   return getGuest(ctx, guestId);
 }
 
+/**
+ * Notes (D54): a property note is read and managed with permissions held at
+ * that property — its restricted visibilities need `guests:read_sensitive`
+ * there, not at some other property (L10). An organization-wide note
+ * (propertyId null) is profile data: readable like the date of birth (the
+ * permission anywhere), but added or deleted only with organization-scope
+ * `guests:update` (M4), like preferences for every property.
+ */
 function noteReadable(
   ctx: SessionContext,
   note: { visibility: "ALL_STAFF" | "MANAGEMENT" | "INTERNAL"; propertyId: string | null },
 ): boolean {
-  if (!noteVisible(note.visibility, can(ctx, "guests:read_sensitive"))) return false;
-  return note.propertyId === null || canAccessProperty(ctx.access, note.propertyId);
+  if (note.propertyId === null) {
+    return noteVisible(note.visibility, can(ctx, "guests:read_sensitive"));
+  }
+  if (!canAccessProperty(ctx.access, note.propertyId)) return false;
+  return noteVisible(
+    note.visibility,
+    hasPermission(ctx.access, note.propertyId, "guests:read_sensitive"),
+  );
+}
+
+function canManageNote(ctx: SessionContext, propertyId: string | null): boolean {
+  return propertyId === null
+    ? hasOrganizationPermission(ctx.access, "guests:update")
+    : hasPermission(ctx.access, propertyId, "guests:update");
+}
+
+function noteScopeForbidden(propertyId: string | null | undefined) {
+  return propertyId
+    ? forbidden("guests:update")
+    : new AppError(
+        "FORBIDDEN",
+        "Notes for every property need organization-level guest permission",
+        { permission: "guests:update", reason: "ORGANIZATION_SCOPE_REQUIRED" },
+      );
 }
 
 // --- History -------------------------------------------------------------------------------
@@ -738,9 +789,7 @@ function toProfile(
       property: n.property,
       createdBy: names.get(n.createdById) ?? null,
       createdAt: n.createdAt.toISOString(),
-      canDelete:
-        update &&
-        (n.propertyId === null || hasPermission(ctx.access, n.propertyId, "guests:update")),
+      canDelete: canManageNote(ctx, n.propertyId),
     })),
     alerts: notes.filter((n) => n.isAlert).map((n) => n.body),
     companies: can(ctx, "accounts:read")
@@ -763,6 +812,8 @@ function toProfile(
       addNote: update,
       manageCompanies: can(ctx, "accounts:manage"),
       manageGlobalPreferences: hasOrganizationPermission(ctx.access, "guests:update"),
+      manageRestrictions: hasOrganizationPermission(ctx.access, "guests:update"),
+      addGlobalNote: hasOrganizationPermission(ctx.access, "guests:update"),
       enrollLoyalty: can(ctx, "loyalty:manage"),
       manageLoyalty: hasOrganizationPermission(ctx.access, "loyalty:manage"),
       readHistory: propertiesWithPermission(ctx.access, "reservations:read").length > 0,

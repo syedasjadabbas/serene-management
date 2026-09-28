@@ -78,8 +78,8 @@ POST night-audits                           # run the audit: { reason } + Idempo
 GET  night-audits/{runId}                   # run, steps, summary (nightaudit:read)
 POST night-audits/{runId}/recover           # stale run: { reason } (nightaudit:run, HIGH)
 GET  reports                                # catalog filtered by permission
-GET  reports/{reportKey}?from&to&roomTypeId&risk   # JSON { columns, rows, totals, notes }
-GET  reports/{reportKey}/export?…           # CSV (reports:export + the report's permission)
+GET  reports/{reportKey}?from&to&roomTypeId&risk&offset&limit   # JSON { columns, rows (one page), totals (all rows), notes, page }
+GET  reports/{reportKey}/export?…           # CSV, every row, streamed (reports:export + the report's permission)
 GET  dashboard                              # KPIs (dashboard:read; revenue with reports:financial)
 POST stays/{stayId}/extend                  # { version, departure, override?, reason? } (reservations:update)
 POST reservation-rooms/{id}/reinstate-no-show   # { version, reason, override } (reservations:reinstate, HIGH)
@@ -111,6 +111,8 @@ GET   /api/v1/properties/{id}/front-desk/arrivals?q=&filter=&cursor=&limit=     
 GET   /api/v1/properties/{id}/front-desk/in-house?q=&filter=&cursor=&limit=     filter: all|arrived_today|due_out
 GET   /api/v1/properties/{id}/front-desk/departures?q=&filter=&cursor=&limit=   filter: all|due_out|departed
 GET   /api/v1/properties/{id}/front-desk/rooms?filter=&roomTypeId=              room board (occupancy, readiness, today's arrival)
+GET   /api/v1/properties/{id}/rooms/board?filter=&floorId=&roomTypeId=&offset=&limit=   room board: counts over every room, items paged (default 1 000, max 2 000) with `page { offset, limit, total }` (Phase 10, M11)
+GET   /api/v1/properties/{id}/rooms/picker                                  active rooms (id, number, room type) for pickers (rooms:read)
 POST  /api/v1/properties/{id}/front-desk/walk-ins                book + check in (one transaction), 201
 GET   /api/v1/properties/{id}/reservation-rooms/{rrId}/room-options           rooms usable for the remaining nights, with readiness
 POST  /api/v1/properties/{id}/reservation-rooms/{rrId}/check-in              { version, roomId?, acceptNotReady?, reason? } → stay, 201
@@ -317,6 +319,8 @@ Rules: messages are safe to show; the client localizes by `code` (+ `details`), 
 - **Offset** (reports, admin tables that show page numbers): `?page=1&pageSize=50` (max 200) → `meta { page, pageSize, total }`. `total` is computed with a separate `COUNT(*)` only where needed.
 - Grids with natural bounds (room rack, availability grid) take a bounded window (`from` + `days ≤ 31`) instead of pagination.
 - No endpoint returns an unbounded list.
+
+**Reports (Phase 10, H10).** JSON reports return one page of rows (`offset`, `limit` default 500, max 1 000) with `page { offset, limit, totalRows }`. Totals always cover every row. A report whose rows would exceed 20 000 is refused with `422 BUSINESS_RULE_VIOLATION` (`details.reason = REPORT_TOO_LARGE`, `details.limit`): narrow the date range. Nothing is truncated silently. The CSV export carries every row and streams it in chunks.
 
 ## 7. Filtering, sorting, search
 

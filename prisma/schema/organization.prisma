@@ -63,34 +63,34 @@ model Organization {
 
 /// A hotel. Every operational record is scoped to exactly one property.
 model Property {
-  id              String       @id @default(uuid(7)) @db.Uuid
-  organizationId  String       @map("organization_id") @db.Uuid
-  code            String       @db.VarChar(20)
-  name            String       @db.VarChar(200)
-  legalName       String?      @map("legal_name") @db.VarChar(200)
+  id                 String       @id @default(uuid(7)) @db.Uuid
+  organizationId     String       @map("organization_id") @db.Uuid
+  code               String       @db.VarChar(20)
+  name               String       @db.VarChar(200)
+  legalName          String?      @map("legal_name") @db.VarChar(200)
   /// IANA zone, e.g. "Asia/Karachi". All local-time conversions use this.
-  timezone        String       @db.VarChar(64)
-  currencyCode    String       @map("currency_code") @db.Char(3)
-  countryCode     String       @map("country_code") @db.Char(2)
-  defaultLocale   String       @default("en") @map("default_locale") @db.VarChar(10)
-  addressLine1    String?      @map("address_line1") @db.VarChar(200)
-  addressLine2    String?      @map("address_line2") @db.VarChar(200)
-  city            String?      @db.VarChar(100)
-  region          String?      @db.VarChar(100)
-  postalCode      String?      @map("postal_code") @db.VarChar(20)
-  phone           String?      @db.VarChar(40)
-  email           String?      @db.VarChar(254)
-  taxRegistration String?      @map("tax_registration") @db.VarChar(60)
+  timezone           String       @db.VarChar(64)
+  currencyCode       String       @map("currency_code") @db.Char(3)
+  countryCode        String       @map("country_code") @db.Char(2)
+  defaultLocale      String       @default("en") @map("default_locale") @db.VarChar(10)
+  addressLine1       String?      @map("address_line1") @db.VarChar(200)
+  addressLine2       String?      @map("address_line2") @db.VarChar(200)
+  city               String?      @db.VarChar(100)
+  region             String?      @db.VarChar(100)
+  postalCode         String?      @map("postal_code") @db.VarChar(20)
+  phone              String?      @db.VarChar(40)
+  email              String?      @db.VarChar(254)
+  taxRegistration    String?      @map("tax_registration") @db.VarChar(60)
   /// Local wall-clock times, "HH:MM".
-  checkInTime     String       @default("14:00") @map("check_in_time") @db.VarChar(5)
-  checkOutTime    String       @default("12:00") @map("check_out_time") @db.VarChar(5)
+  checkInTime        String       @default("14:00") @map("check_in_time") @db.VarChar(5)
+  checkOutTime       String       @default("12:00") @map("check_out_time") @db.VarChar(5)
   /// Phase 9: prefix of new confirmation numbers ("SMR-100045"); defaults to
   /// the property code, unique within the organization. Earlier (unprefixed)
   /// confirmation numbers are kept as they are.
-  confirmationPrefix String   @map("confirmation_prefix") @db.VarChar(10)
-  status          RecordStatus @default(ACTIVE)
-  createdAt       DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt       DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+  confirmationPrefix String       @map("confirmation_prefix") @db.VarChar(10)
+  status             RecordStatus @default(ACTIVE)
+  createdAt          DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   organization               Organization                @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   configuration              PropertyConfiguration?

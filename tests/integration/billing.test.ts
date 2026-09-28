@@ -34,6 +34,7 @@ import {
   createUser,
 } from "./support/fixtures";
 import { type CookieJar, call, loginAs } from "./support/http";
+import { countStatements } from "./support/statements";
 
 type Inventory = Awaited<ReturnType<typeof buildFixtureInventory>>;
 type Handler = typeof chargesRoute;
@@ -969,6 +970,54 @@ describe("security and isolation", () => {
     expect(crossHistory.status).toBe(404);
     const list = await get(foliosRoute, auditor, "/folios?view=in_house", {});
     expect(list.status).toBe(200);
+  });
+
+  it("lists open balances exactly and pages the folio list without per-row queries (B5)", async () => {
+    const charged = await inHouse();
+    const w1 = await window1(charged.rrId);
+    expect(
+      (await charge(agent, w1.id, { transactionCodeId: MINIBAR(), unitAmount: "15.00" })).status,
+    ).toBe(201);
+    // Charged, then fully reversed: balance 0, so not an open balance.
+    const reversed = await inHouse();
+    const w2 = await window1(reversed.rrId);
+    const line = await charge(agent, w2.id, { transactionCodeId: MINIBAR(), unitAmount: "20.00" });
+    expect(
+      (await reverse(fom, line.body.data.itemIds[0], { reason: "Posted in error" })).status,
+    ).toBe(201);
+    const untouched = await inHouse();
+
+    async function ids(view: string) {
+      const found = new Set<string>();
+      let cursor: string | null = null;
+      do {
+        const r = await get(
+          foliosRoute,
+          fom,
+          `/folios?view=${view}&limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
+        );
+        expect(r.status).toBe(200);
+        for (const row of r.body.data as { reservationRoomId: string; balance: string }[]) {
+          found.add(row.reservationRoomId);
+          if (view === "open_balance") expect(parseMoney(row.balance)).not.toBe(0n);
+        }
+        cursor = r.body.meta.nextCursor;
+      } while (cursor);
+      return found;
+    }
+    const open = await ids("open_balance");
+    expect(open.has(charged.rrId)).toBe(true);
+    expect(open.has(reversed.rrId)).toBe(false);
+    expect(open.has(untouched.rrId)).toBe(false);
+    const all = await ids("all");
+    for (const id of [charged.rrId, reversed.rrId, untouched.rrId]) expect(all.has(id)).toBe(true);
+
+    // One page costs the same whether it holds one row or several: no N+1.
+    const statementsFor = async (limit: number) =>
+      (await countStatements(() => get(foliosRoute, fom, `/folios?view=all&limit=${limit}`)))
+        .statements;
+    await statementsFor(1); // warm-up
+    expect(await statementsFor(5)).toBe(await statementsFor(1));
   });
 
   it("serves the ledger with a database running balance and keyset pages", async () => {

@@ -16,7 +16,7 @@ import {
   useCreateMaintenanceRequestMutation,
   useMaintenanceOptionsQuery,
 } from "@/lib/api/endpoints/maintenance.api";
-import { useRoomBoardViewQuery } from "@/lib/api/endpoints/rooms.api";
+import { useRoomPickerQuery } from "@/lib/api/endpoints/rooms.api";
 import { toClientApiError } from "@/lib/api/errors";
 import { addDays } from "@/modules/business-date/business-date.policy";
 import {
@@ -35,10 +35,8 @@ export function NewRequestDialog({ onClose }: { onClose: () => void }) {
   const { can } = usePermissions(property.id);
   const businessDate = useBusinessDate().data?.businessDate ?? null;
   const options = useMaintenanceOptionsQuery(property.id);
-  const rooms = useRoomBoardViewQuery(
-    { propertyId: property.id, filter: "all" },
-    { skip: !can("rooms:read") },
-  );
+  // A light list of rooms, not the whole room board (M11).
+  const rooms = useRoomPickerQuery(property.id, { skip: !can("rooms:read") });
   const [roomId, setRoomId] = useState("");
   const [location, setLocation] = useState("");
   const [categoryId, setCategoryId] = useState("");
@@ -110,9 +108,9 @@ export function NewRequestDialog({ onClose }: { onClose: () => void }) {
           <Select
             label="Room"
             placeholder={rooms.data ? "Public area (no room)" : "Loading rooms…"}
-            options={(rooms.data?.items ?? []).map((r) => ({
+            options={(rooms.data ?? []).map((r) => ({
               value: r.id,
-              label: `${r.number} · ${r.roomType.code}`,
+              label: `${r.number} · ${r.roomTypeCode}`,
             }))}
             value={roomId}
             onChange={(e) => {

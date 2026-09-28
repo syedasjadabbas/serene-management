@@ -161,6 +161,8 @@ model LoyaltyMembership {
   /// One membership per guest and program: re-activate instead of re-enrolling.
   @@unique([programId, guestId])
   @@index([guestId])
+  /// Phase 10 (H9): member list, newest enrolment first.
+  @@index([programId, enrolledAt(sort: Desc), id(sort: Desc)], map: "loyalty_memberships_program_id_enrolled_at_idx")
   @@map("loyalty_memberships")
 }
 

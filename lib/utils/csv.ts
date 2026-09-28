@@ -13,9 +13,13 @@ export function csvField(value: string | number | boolean | null | undefined): s
   return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
 }
 
-export function toCsv(
-  header: readonly string[],
-  rows: readonly (readonly (string | number | boolean | null | undefined)[])[],
-): string {
-  return [header, ...rows].map((row) => row.map(csvField).join(",")).join("\r\n") + "\r\n";
+type CsvRow = readonly (string | number | boolean | null | undefined)[];
+
+/** One CSV record with its CRLF terminator (for streamed output). */
+export function csvLine(row: CsvRow): string {
+  return `${row.map(csvField).join(",")}\r\n`;
+}
+
+export function toCsv(header: readonly string[], rows: readonly CsvRow[]): string {
+  return [header, ...rows].map(csvLine).join("");
 }

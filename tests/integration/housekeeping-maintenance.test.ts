@@ -14,6 +14,7 @@ import { POST as assignRequestRoute } from "@/app/api/v1/properties/[propertyId]
 import { POST as cancelRequestRoute } from "@/app/api/v1/properties/[propertyId]/maintenance/[requestId]/cancel/route";
 import { POST as closeRequestRoute } from "@/app/api/v1/properties/[propertyId]/maintenance/[requestId]/close/route";
 import { POST as holdRequestRoute } from "@/app/api/v1/properties/[propertyId]/maintenance/[requestId]/hold/route";
+import { POST as requestNoteRoute } from "@/app/api/v1/properties/[propertyId]/maintenance/[requestId]/notes/route";
 import { POST as resolveRequestRoute } from "@/app/api/v1/properties/[propertyId]/maintenance/[requestId]/resolve/route";
 import { POST as resumeRequestRoute } from "@/app/api/v1/properties/[propertyId]/maintenance/[requestId]/resume/route";
 import { GET as requestRoute } from "@/app/api/v1/properties/[propertyId]/maintenance/[requestId]/route";
@@ -713,6 +714,33 @@ describe("maintenance", () => {
       },
     );
   }
+
+  it("adds notes with the same permission on the route and in the service (L13)", async () => {
+    const created = await report(hk, { title: "Loose tile", roomId: takeRoom("KNG") });
+    expect(created.status).toBe(201);
+    const requestId = created.body.data.id as string;
+    const note = (jar: CookieJar, propertyId = A) =>
+      post(
+        requestNoteRoute,
+        jar,
+        `/maintenance/${requestId}/notes`,
+        { requestId },
+        { body: "Checked, needs grout" },
+        propertyId,
+      );
+    // Readers of maintenance (the housekeeping manager) cannot write notes;
+    // the route itself refuses, naming the permission the service enforces.
+    const byReader = await note(sup);
+    expect(byReader.status).toBe(403);
+    expect(byReader.body.error.details.permission).toBe("maintenance:update");
+    expect((await note(hk)).status).toBe(403);
+    // Maintenance staff and managers (both hold maintenance:update) can.
+    expect((await note(tech)).status).toBe(201);
+    expect((await note(chief)).status).toBe(201);
+    // Another property's user never reaches the request.
+    expect((await note(gmB)).status).toBe(403);
+    expect((await note(gmB, B)).status).toBe(404);
+  });
 
   it("runs open → assigned → in progress → on hold → resolved → closed with activities", async () => {
     const roomId = takeRoom("KNG");

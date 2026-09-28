@@ -345,7 +345,7 @@ model AccountProfile {
 
 /// A guest profile acting as contact person for an account.
 model AccountContact {
-  accountProfileId String   @map("account_profile_id") @db.Uuid
+  accountProfileId String             @map("account_profile_id") @db.Uuid
   guestId          String             @map("guest_id") @db.Uuid
   kind             AccountContactKind @default(CONTACT)
   /// Job title or role at the account.

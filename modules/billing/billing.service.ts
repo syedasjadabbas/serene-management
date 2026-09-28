@@ -17,9 +17,10 @@ import {
 import {
   type ResourceHistoryEntry,
   recordAudit,
+  recordAuditMany,
   resourceHistory,
 } from "@/modules/audit/audit.service";
-import type { AuditActor } from "@/modules/audit/audit.types";
+import type { AuditActor, AuditEntry } from "@/modules/audit/audit.types";
 import { addDays, fromDateOnly, toDateOnly } from "@/modules/business-date/business-date.policy";
 import { requireOpenBusinessDate } from "@/modules/business-date/business-date.service";
 import { normalizeName } from "@/modules/guests/guests.policy";
@@ -28,9 +29,12 @@ import { billingRules } from "@/modules/properties/properties.service";
 import { currencyMinorUnits } from "@/modules/rates/rates.service";
 import {
   type LockedReservationRoom,
+  type PostingNight,
   lockReservationRoomById,
   markNightPosting,
+  markNightsPosted,
   nightsForRoomCharges,
+  nightsForRoomChargesMany,
 } from "@/modules/reservations/reservations.service";
 import {
   type ChargeBreakdown,
@@ -59,12 +63,15 @@ import {
   findManualChargeCodes,
   findPaymentMethods,
   findPostingKeys,
+  findPostingKeysMany,
   findReasonCode,
   findTaxRules,
   findTransactionCode,
   findTransactionCodes,
+  findWindowOneRefs,
   findWindowRef,
   findWindows,
+  folioBalancesWithLedger,
   insertFolio,
   insertItem,
   ledgerBalance,
@@ -627,6 +634,115 @@ type ReservationPackageRows = {
   package: PackageRows[number];
 }[];
 
+const ratePlanPostingSelect = {
+  id: true,
+  code: true,
+  taxInclusive: true,
+  roomTransactionCodeId: true,
+  packages: { select: { package: { select: packageSelect } } },
+} as const satisfies Prisma.RatePlanSelect;
+
+type RatePlanPostingRow = Prisma.RatePlanGetPayload<{ select: typeof ratePlanPostingSelect }>;
+
+const reservationPackageSelect = {
+  quantity: true,
+  startDate: true,
+  endDate: true,
+  unitPriceOverride: true,
+  package: { select: packageSelect },
+} as const satisfies Prisma.ReservationPackageSelect;
+
+/**
+ * Configuration the posting engine reads besides the stay itself: rate plans
+ * with their packages, the stay's booked packages, transaction codes, tax
+ * rules in force and the currency's minor units (M8). The direct reader
+ * queries each time (single-room commands); night audit's batch memoizes
+ * them for its one transaction, so every room of the run is posted against
+ * the same configuration snapshot.
+ */
+interface PostingReference {
+  ratePlans(ids: string[]): Promise<RatePlanPostingRow[]>;
+  reservationPackages(reservationRoomId: string): Promise<ReservationPackageRows>;
+  codes(ids: string[]): Promise<Map<string, CodeRow>>;
+  taxRules(ids: string[], businessDate: string): Promise<Map<string, TaxRuleInput[]>>;
+  minorUnits(currencyCode: string): Promise<number>;
+}
+
+function directReference(tx: Tx, propertyId: string): PostingReference {
+  return {
+    ratePlans: (ids) =>
+      tx.ratePlan.findMany({
+        where: { propertyId, id: { in: ids } },
+        select: ratePlanPostingSelect,
+      }),
+    reservationPackages: (reservationRoomId) =>
+      tx.reservationPackage.findMany({
+        where: { propertyId, reservationRoomId },
+        select: reservationPackageSelect,
+      }),
+    codes: async (ids) =>
+      new Map((await findTransactionCodes(tx, propertyId, ids)).map((c) => [c.id, c])),
+    taxRules: (ids, businessDate) => taxRulesByCode(tx, propertyId, ids, businessDate),
+    minorUnits: (currencyCode) => currencyMinorUnits(tx, currencyCode),
+  };
+}
+
+function memoizedReference(
+  tx: Tx,
+  propertyId: string,
+  reservationPackages: Map<string, ReservationPackageRows>,
+): PostingReference {
+  const direct = directReference(tx, propertyId);
+  const plans = new Map<string, RatePlanPostingRow>();
+  const codes = new Map<string, CodeRow | null>();
+  const rules = new Map<string, TaxRuleInput[]>();
+  const minor = new Map<string, number>();
+  let rulesDate: string | null = null;
+  return {
+    async ratePlans(ids) {
+      const missing = ids.filter((id) => !plans.has(id));
+      if (missing.length > 0) for (const p of await direct.ratePlans(missing)) plans.set(p.id, p);
+      return ids.flatMap((id) => (plans.has(id) ? [plans.get(id)!] : []));
+    },
+    reservationPackages: async (reservationRoomId) =>
+      reservationPackages.get(reservationRoomId) ?? [],
+    async codes(ids) {
+      const missing = ids.filter((id) => !codes.has(id));
+      if (missing.length > 0) {
+        const found = await direct.codes(missing);
+        for (const id of missing) codes.set(id, found.get(id) ?? null);
+      }
+      return new Map(
+        ids.flatMap((id) => {
+          const code = codes.get(id);
+          return code ? [[id, code] as const] : [];
+        }),
+      );
+    },
+    async taxRules(ids, businessDate) {
+      if (rulesDate !== businessDate) {
+        rules.clear();
+        rulesDate = businessDate;
+      }
+      const missing = ids.filter((id) => !rules.has(id));
+      if (missing.length > 0) {
+        const found = await direct.taxRules(missing, businessDate);
+        for (const id of missing) rules.set(id, found.get(id) ?? []);
+      }
+      return new Map(
+        ids.flatMap((id) => {
+          const list = rules.get(id) ?? [];
+          return list.length > 0 ? [[id, list] as const] : [];
+        }),
+      );
+    },
+    async minorUnits(currencyCode) {
+      if (!minor.has(currencyCode)) minor.set(currencyCode, await direct.minorUnits(currencyCode));
+      return minor.get(currencyCode)!;
+    },
+  };
+}
+
 /** One line a stay night generates: a package component or the room line. */
 interface NightLine {
   base: string;
@@ -660,29 +776,12 @@ async function planNightLines(
     currencyCode: string;
     businessDate: string;
   },
+  reference: PostingReference = directReference(tx, propertyId),
 ) {
   const { arrival, departure, minorUnits } = stay;
   const ratePlanIds = [...new Set(nights.map((n) => n.ratePlanId))];
-  const ratePlans = await tx.ratePlan.findMany({
-    where: { propertyId: propertyId, id: { in: ratePlanIds } },
-    select: {
-      id: true,
-      code: true,
-      taxInclusive: true,
-      roomTransactionCodeId: true,
-      packages: { select: { package: { select: packageSelect } } },
-    },
-  });
-  const reservationPackages = await tx.reservationPackage.findMany({
-    where: { propertyId: propertyId, reservationRoomId },
-    select: {
-      quantity: true,
-      startDate: true,
-      endDate: true,
-      unitPriceOverride: true,
-      package: { select: packageSelect },
-    },
-  });
+  const ratePlans = await reference.ratePlans(ratePlanIds);
+  const reservationPackages = await reference.reservationPackages(reservationRoomId);
 
   const plannedCodeIds = new Set<string>();
   for (const plan of ratePlans) {
@@ -693,10 +792,8 @@ async function planNightLines(
   reservationPackages.forEach((rp) =>
     rp.package.components.forEach((c) => plannedCodeIds.add(c.transactionCodeId)),
   );
-  const codes = new Map(
-    (await findTransactionCodes(tx, propertyId, [...plannedCodeIds])).map((c) => [c.id, c]),
-  );
-  const rules = await taxRulesByCode(tx, propertyId, [...plannedCodeIds], stay.businessDate);
+  const codes = await reference.codes([...plannedCodeIds]);
+  const rules = await reference.taxRules([...plannedCodeIds], stay.businessDate);
 
   const byNight = new Map<string, NightLine[]>();
   for (const night of nights) {
@@ -909,6 +1006,11 @@ export interface NightPostingResult {
  * generation), and the unique index on it makes a repeated run a no-op; a
  * reversed night gets the next generation. Nothing is audited when nothing
  * was posted.
+ *
+ * With a `batch` (night audit, M8) the reads come from bulk loads made once
+ * for all rooms, and the night flags, audit records and after-balance
+ * verification are written once per run (`flushPostingBatch`); the lines
+ * themselves are planned, taxed and inserted exactly as without it.
  */
 export async function postNightsInTx(
   tx: Tx,
@@ -922,27 +1024,40 @@ export async function postNightsInTx(
     actor: AuditActor;
     permission: Permission;
   },
+  batch?: PostingBatch,
 ): Promise<NightPostingResult> {
   const reservationRoomId = room.id;
-  const nights = (await nightsForRoomCharges(tx, ctx.propertyId, reservationRoomId)).filter(
-    (night) => night.stayDate <= through,
-  );
+  const allNights = batch
+    ? (batch.nights.get(reservationRoomId) ?? [])
+    : await nightsForRoomCharges(tx, ctx.propertyId, reservationRoomId);
+  const nights = allNights.filter((night) => night.stayDate <= through);
   if (nights.length === 0 || nights.every((night) => night.posted)) {
     // A reversed night clears its `posted` flag, so a stay whose nights are
     // all flagged has no line left to post.
     return { folioId: null, postedNights: [], itemIds: [], total: 0n, taxes: 0n };
   }
-  const folioId = await ensureGuestFolioInTx(tx, ctx, businessDate, room, 1);
-  const folio = await folioState(tx, ctx.propertyId, folioId);
+  let folio: LockedFolio;
+  let before: MoneyUnits;
+  if (batch) {
+    const prepared = batch.folios.get(reservationRoomId);
+    if (!prepared) throw new Error(`Posting batch has no folio for ${reservationRoomId}`);
+    ({ folio, balance: before } = prepared);
+  } else {
+    const folioId = await ensureGuestFolioInTx(tx, ctx, businessDate, room, 1);
+    folio = await folioState(tx, ctx.propertyId, folioId);
+  }
   assertOpenForPosting(folio);
-  const before = await verifiedBalance(tx, folio);
+  if (!batch) before = await verifiedBalance(tx, folio);
+  const reference = batch?.reference ?? directReference(tx, ctx.propertyId);
 
   const arrival = toDateOnly(room.arrivalDate);
   const departure = toDateOnly(room.departureDate);
-  const minorUnits = await currencyMinorUnits(tx, folio.currency_code);
+  const minorUnits = await reference.minorUnits(folio.currency_code);
 
   // Existing keys: generation count and whether a live (unreversed) posting exists.
-  const keys = await findPostingKeys(tx, ctx.propertyId, reservationRoomId);
+  const keys = batch
+    ? (batch.postingKeys.get(reservationRoomId) ?? [])
+    : await findPostingKeys(tx, ctx.propertyId, reservationRoomId);
   const byBase = new Map<string, { generations: number; live: boolean }>();
   for (const key of keys) {
     const base = key.posting_key.slice(0, key.posting_key.lastIndexOf(":"));
@@ -952,19 +1067,28 @@ export async function postNightsInTx(
     byBase.set(base, entry);
   }
 
-  const planned = await planNightLines(tx, ctx.propertyId, reservationRoomId, nights, {
-    arrival,
-    departure,
-    minorUnits,
-    currencyCode: folio.currency_code,
-    businessDate,
-  });
+  const planned = await planNightLines(
+    tx,
+    ctx.propertyId,
+    reservationRoomId,
+    nights,
+    {
+      arrival,
+      departure,
+      minorUnits,
+      currencyCode: folio.currency_code,
+      businessDate,
+    },
+    reference,
+  );
   const { codes, rules } = planned;
 
   const postedNights: string[] = [];
   const itemIds: string[] = [];
   let total = 0n;
   let taxes = 0n;
+  // Ledger amounts inserted (net charge + non-zero taxes): the folio balance moves by this.
+  let inserted = 0n;
   for (const night of nights) {
     const lines = planned.byNight.get(night.stayDate)!;
 
@@ -1002,35 +1126,163 @@ export async function postNightsInTx(
       itemIds.push(...ids);
       total += breakdown.total;
       taxes += breakdown.taxes.reduce((sum, tax) => sum + tax.amount, 0n);
+      inserted += breakdown.net + breakdown.taxes.reduce((sum, tax) => sum + tax.amount, 0n);
       postedAny = true;
     }
-    if (!night.posted) await markNightPosting(tx, reservationRoomId, night.stayDate, true);
+    if (!night.posted) {
+      if (batch) batch.postedNights.push({ reservationRoomId, stayDate: night.stayDate });
+      else await markNightPosting(tx, reservationRoomId, night.stayDate, true);
+    }
     if (postedAny || !night.posted) postedNights.push(night.stayDate);
   }
 
   if (postedNights.length > 0) {
-    const after = await totalsAfter(tx, ctx.propertyId, folio.id);
-    await recordAudit(
-      tx,
-      { ...options.actor, businessDate },
-      {
-        action: "folio.post_room_charges",
-        resourceType: "Folio",
-        resourceId: folio.id,
-        before: { balance: money(before) },
-        after: folioAudit(folio, {
-          reservationRoomId,
-          nights: postedNights,
-          itemIds,
-          total: money(total),
-          balance: money(after.balance),
-          source: options.source,
-        }),
-        permission: options.permission,
-      },
-    );
+    let balanceAfter: MoneyUnits;
+    if (batch) {
+      // Verified for every touched folio at once by flushPostingBatch.
+      balanceAfter = before! + inserted;
+      batch.expectedBalances.set(folio.id, balanceAfter);
+    } else {
+      balanceAfter = (await totalsAfter(tx, ctx.propertyId, folio.id)).balance;
+    }
+    const entry: AuditEntry = {
+      action: "folio.post_room_charges",
+      resourceType: "Folio",
+      resourceId: folio.id,
+      before: { balance: money(before!) },
+      after: folioAudit(folio, {
+        reservationRoomId,
+        nights: postedNights,
+        itemIds,
+        total: money(total),
+        balance: money(balanceAfter),
+        source: options.source,
+      }),
+      permission: options.permission,
+    };
+    const actor = { ...options.actor, businessDate };
+    if (batch) batch.audits.push({ actor, entry });
+    else await recordAudit(tx, actor, entry);
   }
   return { folioId: folio.id, postedNights, itemIds, total, taxes };
+}
+
+/**
+ * Night audit's POST_ROOM_AND_TAX over many rooms (M8): the reads
+ * `postNightsInTx` would make per room — nights, posting keys, booked
+ * packages, the window-1 folio (locked FOR UPDATE in id order and its
+ * balance verified against the ledger) and configuration — are made once for
+ * all rooms. Writes that need no per-room round trip are deferred to
+ * `flushPostingBatch`. The caller holds the reservation-room locks.
+ */
+export interface PostingBatch {
+  reference: PostingReference;
+  nights: Map<string, PostingNight[]>;
+  postingKeys: Map<string, { posting_key: string; reversed: boolean }[]>;
+  folios: Map<string, { folio: LockedFolio; balance: MoneyUnits }>;
+  postedNights: { reservationRoomId: string; stayDate: string }[];
+  audits: { actor: AuditActor; entry: AuditEntry }[];
+  expectedBalances: Map<string, MoneyUnits>;
+}
+
+export async function preparePostingBatch(
+  tx: Tx,
+  ctx: PropertyContext,
+  businessDate: string,
+  rooms: LockedReservationRoom[],
+  through: string,
+): Promise<PostingBatch> {
+  const ids = rooms.map((room) => room.id);
+  const nights = await nightsForRoomChargesMany(tx, ctx.propertyId, ids);
+  // Only rooms with a night left to post need a folio, keys and packages.
+  const posting = rooms.filter((room) =>
+    (nights.get(room.id) ?? []).some((night) => night.stayDate <= through && !night.posted),
+  );
+  const postingIds = posting.map((room) => room.id);
+  const postingKeys = new Map<string, { posting_key: string; reversed: boolean }[]>();
+  for (const row of await findPostingKeysMany(tx, ctx.propertyId, postingIds)) {
+    const list = postingKeys.get(row.reservation_room_id) ?? [];
+    list.push({ posting_key: row.posting_key, reversed: row.reversed });
+    postingKeys.set(row.reservation_room_id, list);
+  }
+  const reservationPackages = new Map<string, ReservationPackageRows>();
+  if (postingIds.length > 0) {
+    const rows = await tx.reservationPackage.findMany({
+      where: { propertyId: ctx.propertyId, reservationRoomId: { in: postingIds } },
+      select: { ...reservationPackageSelect, reservationRoomId: true },
+    });
+    for (const { reservationRoomId, ...row } of rows) {
+      const list = reservationPackages.get(reservationRoomId) ?? [];
+      list.push(row);
+      reservationPackages.set(reservationRoomId, list);
+    }
+  }
+
+  // Window-1 folios: open the missing ones (check-in normally did), then lock
+  // all FOR UPDATE in id order and verify their balances in one statement.
+  const folioOf = new Map(
+    (await findWindowOneRefs(tx, ctx.propertyId, postingIds)).map((f) => [
+      f.reservationRoomId!,
+      f.id,
+    ]),
+  );
+  for (const room of posting) {
+    if (!folioOf.has(room.id)) {
+      folioOf.set(room.id, await ensureGuestFolioInTx(tx, ctx, businessDate, room, 1));
+    }
+  }
+  const locked = await lockFolios(tx, ctx.propertyId, [...folioOf.values()]);
+  const ledger = new Map(
+    (
+      await folioBalancesWithLedger(
+        tx,
+        locked.map((f) => f.id),
+      )
+    ).map((row) => [row.id, row]),
+  );
+  const byId = new Map(locked.map((folio) => [folio.id, folio]));
+  const folios = new Map<string, { folio: LockedFolio; balance: MoneyUnits }>();
+  for (const [reservationRoomId, folioId] of folioOf) {
+    const folio = byId.get(folioId)!;
+    const row = ledger.get(folioId);
+    if (!row || parseMoney(row.ledger) !== parseMoney(folio.balance)) {
+      throw new Error(`Folio ${folioId} balance does not match its ledger`);
+    }
+    folios.set(reservationRoomId, { folio, balance: parseMoney(row.ledger) });
+  }
+  return {
+    reference: memoizedReference(tx, ctx.propertyId, reservationPackages),
+    nights,
+    postingKeys,
+    folios,
+    postedNights: [],
+    audits: [],
+    expectedBalances: new Map(),
+  };
+}
+
+/**
+ * Completes a posting batch: marks the posted nights, re-verifies every
+ * touched folio — stored balance (maintained by the ledger trigger) = ledger
+ * sum = balance expected from the lines inserted — and writes the audit
+ * records, each in one statement.
+ */
+export async function flushPostingBatch(tx: Tx, batch: PostingBatch): Promise<void> {
+  await markNightsPosted(tx, batch.postedNights);
+  const rows = await folioBalancesWithLedger(tx, [...batch.expectedBalances.keys()]);
+  for (const row of rows) {
+    const expected = batch.expectedBalances.get(row.id)!;
+    if (parseMoney(row.balance) !== parseMoney(row.ledger) || parseMoney(row.ledger) !== expected) {
+      throw new Error(`Folio ${row.id} balance does not match its ledger`);
+    }
+  }
+  if (rows.length !== batch.expectedBalances.size) {
+    throw new Error("A posted folio disappeared during the posting batch");
+  }
+  await recordAuditMany(tx, batch.audits);
+  batch.postedNights = [];
+  batch.audits = [];
+  batch.expectedBalances.clear();
 }
 
 /**

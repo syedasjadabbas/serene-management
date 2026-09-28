@@ -102,7 +102,11 @@ export const frontDeskApi = baseApi.injectEndpoints({
     stay: build.query<StayDetail, { propertyId: string; stayId: string }>({
       query: ({ propertyId, stayId }) => `/properties/${propertyId}/stays/${stayId}`,
       transformResponse: (response: ApiSuccess<StayDetail>) => response.data,
-      providesTags: (_r, _e, { stayId }) => [{ type: "Stay", id: stayId }],
+      providesTags: (result, _e, { stayId }) => [
+        { type: "Stay", id: stayId },
+        // Financial commands refresh the stay's folio summary by reservation room (B11).
+        ...(result ? [{ type: "Stay" as const, id: `RR-${result.reservationRoomId}` }] : []),
+      ],
     }),
     checkIn: build.mutation<
       StayDetail,

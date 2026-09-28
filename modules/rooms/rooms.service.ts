@@ -26,6 +26,7 @@ import {
   findOverlappingAssignments,
   findOverlappingBlocks,
   findRoomBoard,
+  findRoomPicker,
   findRoomDetail,
   findRoomRef,
   findServiceReasonCode,
@@ -37,7 +38,8 @@ import {
   releaseBlockRow,
   updateRoomStatusVersioned,
 } from "./rooms.repository";
-import type { RoomBoardRow, RoomBoardView, RoomDetail } from "./rooms.types";
+import { ROOM_BOARD_PAGE_SIZE } from "./rooms.schema";
+import type { RoomBoardRow, RoomBoardView, RoomDetail, RoomPickerItem } from "./rooms.types";
 
 /**
  * Rooms: locked status changes with history, out-of-order / out-of-service
@@ -417,7 +419,13 @@ const MAINTENANCE_RANKS = ["URGENT", "HIGH", "NORMAL", "LOW"] as const;
  */
 export async function listRoomBoard(
   ctx: PropertyContext,
-  query: { filter: RoomBoardFilter; roomTypeId?: string; floorId?: string },
+  query: {
+    filter: RoomBoardFilter;
+    roomTypeId?: string;
+    floorId?: string;
+    offset?: number;
+    limit?: number;
+  },
 ): Promise<RoomBoardView> {
   const businessDate = requireBusinessDate(ctx);
   const can = (permission: Permission) => hasPermission(ctx.access, ctx.propertyId, permission);
@@ -539,12 +547,25 @@ export async function listRoomBoard(
     if (r.maintenance) counts.maintenance += 1;
   }
   const rank = { URGENT: 0, PRIORITY: 1, NORMAL: 2 } as const;
-  const items = all
+  const matching = all
     .filter(matches[query.filter])
     .map((r, index) => ({ r, index }))
     .sort((a, b) => rank[a.r.urgency] - rank[b.r.urgency] || a.index - b.index)
     .map(({ r }) => r);
-  return { businessDate, counts, items };
+  const offset = query.offset ?? 0;
+  const limit = query.limit ?? ROOM_BOARD_PAGE_SIZE;
+  return {
+    businessDate,
+    counts,
+    items: matching.slice(offset, offset + limit),
+    page: { offset, limit, total: matching.length },
+  };
+}
+
+/** Rooms to choose from (maintenance reports): number and type only (M11). */
+export async function listRoomPicker(ctx: PropertyContext): Promise<RoomPickerItem[]> {
+  const rooms = await findRoomPicker(prisma, ctx.propertyId);
+  return rooms.map((r) => ({ id: r.id, number: r.number, roomTypeCode: r.roomType.code }));
 }
 
 export async function boardReferenceData(ctx: PropertyContext) {
@@ -704,19 +725,33 @@ export async function rollOccupiedRoomsInTx(
   ).map((room) => room.id);
   if (ids.length === 0) return [];
   const rooms = await lockRoomsForUpdate(tx, actor.propertyId, businessDate, ids);
-  const rolled: string[] = [];
-  for (const room of rooms.values()) {
-    if (room.frontOfficeStatus !== "OCCUPIED" || room.housekeepingStatus === "DIRTY") continue;
-    await changeRoomStatus(
-      tx,
-      actor,
-      room,
-      { housekeepingStatus: "DIRTY" },
-      "NIGHT_AUDIT",
-      businessDate,
-      "Occupied overnight",
-    );
-    rolled.push(room.number);
-  }
-  return rolled;
+  const due = [...rooms.values()].filter(
+    (room) => room.frontOfficeStatus === "OCCUPIED" && room.housekeepingStatus !== "DIRTY",
+  );
+  if (due.length === 0) return [];
+  // Set-based (M8): the same versioned change and history row changeRoomStatus
+  // writes per room, as one UPDATE and one INSERT for all rooms.
+  const updated = await tx.$executeRaw`
+    UPDATE "rooms" r
+    SET "housekeeping_status" = 'DIRTY', "version" = r."version" + 1,
+        "status_changed_at" = now(), "updated_at" = now()
+    FROM unnest(${due.map((room) => room.id)}::uuid[], ${due.map((room) => room.version)}::int[])
+      AS u("id", "version")
+    WHERE r."id" = u."id" AND r."version" = u."version"`;
+  if (updated !== due.length) throw staleVersion("Room");
+  await insertStatusHistory(
+    tx,
+    due.map((room) => ({
+      propertyId: actor.propertyId,
+      roomId: room.id,
+      field: "HOUSEKEEPING" as const,
+      fromValue: room.housekeepingStatus,
+      toValue: "DIRTY",
+      businessDate: fromDateOnly(businessDate),
+      source: "NIGHT_AUDIT" as const,
+      reason: "Occupied overnight",
+      changedById: actor.userId,
+    })),
+  );
+  return due.map((room) => room.number);
 }

@@ -49,6 +49,10 @@ model AuditLog {
   /// Phase 9: resource history of organization data (guests, companies) and
   /// the organization audit trail.
   @@index([organizationId, resourceId, createdAt(sort: Desc)])
+  /// Phase 10 (H9): the organization audit trail (keyset newest first) and the
+  /// audit-trail report by business date.
+  @@index([organizationId, createdAt(sort: Desc), id(sort: Desc)], map: "audit_logs_organization_id_created_at_idx")
+  @@index([propertyId, businessDate], map: "audit_logs_property_id_business_date_idx")
   @@map("audit_logs")
 }
 

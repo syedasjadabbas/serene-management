@@ -301,6 +301,16 @@ export async function enrollGuest(
 ): Promise<GuestProfileView> {
   requirePermission(ctx, "loyalty:manage");
   requirePermission(ctx, "guests:read");
+  // M2 (D41, D54): tiers are organization data. Property staff may enrol a
+  // guest, who then starts without a tier; placing a member in a tier at
+  // enrolment is a tier change and needs organization-scope loyalty:manage.
+  if (input.tierId && !hasOrganizationPermission(ctx.access, "loyalty:manage")) {
+    throw new AppError(
+      "FORBIDDEN",
+      "Choosing a tier needs organization-level loyalty permission; enrol without a tier",
+      { permission: "loyalty:manage", reason: "ORGANIZATION_SCOPE_REQUIRED" },
+    );
+  }
   await runInTransaction(async (tx) => {
     // Enrollments of one guest serialize on the guest row; the unique
     // (program, guest) index backs this up.

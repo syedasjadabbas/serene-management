@@ -290,8 +290,15 @@ export function findDueArrivals(db: Tx, propertyId: string, businessDate: string
     ORDER BY rr."arrival_date", res."confirmation_number", rr."line_number"`;
 }
 
-/** Folios whose stored totals disagree with their ledger. */
-export function findUnbalancedFolios(db: Tx, propertyId: string) {
+/**
+ * Folios whose stored totals disagree with their ledger. Checks the folios
+ * that can still change — every folio not CLOSED, and any folio with a line
+ * dated D — instead of re-summing the property's whole history on every
+ * readiness view (B4). A CLOSED folio is final: the database refuses
+ * postings into it (SM002) and the ledger is append-only (SM001), so its
+ * totals cannot drift through any application path.
+ */
+export function findUnbalancedFolios(db: Tx, propertyId: string, businessDate: string) {
   return db.$queryRaw<
     {
       id: string;
@@ -301,15 +308,26 @@ export function findUnbalancedFolios(db: Tx, propertyId: string) {
       ledger: string;
     }[]
   >`
-    SELECT f."id", f."reservation_room_id", f."window", f."balance"::text AS "balance",
-           COALESCE(sum(i."amount"), 0)::text AS "ledger"
-    FROM "folios" f
-    LEFT JOIN "folio_items" i ON i."folio_id" = f."id"
-    WHERE f."property_id" = ${propertyId}::uuid
-    GROUP BY f."id"
-    HAVING f."balance" <> COALESCE(sum(i."amount"), 0)
-        OR f."balance" <> f."charges_total" + f."credits_total"
-    ORDER BY f."id"`;
+    WITH candidates AS (
+      SELECT f."id", f."reservation_room_id", f."window", f."balance", f."charges_total",
+             f."credits_total"
+      FROM "folios" f
+      WHERE f."property_id" = ${propertyId}::uuid
+        AND (f."status" <> 'CLOSED'
+             OR EXISTS (SELECT 1 FROM "folio_items" d
+                        WHERE d."folio_id" = f."id" AND d."property_id" = ${propertyId}::uuid
+                          AND d."business_date" = ${businessDate}::date))
+    ), checked AS (
+      SELECT c.*,
+             COALESCE((SELECT sum(i."amount") FROM "folio_items" i WHERE i."folio_id" = c."id"), 0)
+               AS "ledger"
+      FROM candidates c
+    )
+    SELECT "id", "reservation_room_id", "window", "balance"::text AS "balance",
+           "ledger"::text AS "ledger"
+    FROM checked
+    WHERE "balance" <> "ledger" OR "balance" <> "charges_total" + "credits_total"
+    ORDER BY "id"`;
 }
 
 /** Payments and refunds of D whose ledger line is missing or does not match. */
@@ -542,8 +560,6 @@ export interface MoneyRow {
   payments_total: string;
   voids_total: string;
   refunds_total: string;
-  ledger_opening: string;
-  ledger_closing: string;
 }
 
 /**
@@ -551,7 +567,8 @@ export interface MoneyRow {
  * reversals and adjustments, by revenue bucket of the transaction code:
  * ROOM (without the no-show fee code), PACKAGE, TAX; everything else that
  * is revenue is "other". Payments, voids and refunds come from their own
- * tables; the roll-forward is the ledger sum before / through D.
+ * tables. Reads only D's rows: dashboards and live reports call it on every
+ * poll (H8). The guest-ledger roll-forward is `ledgerBalancesForDate`.
  */
 export async function sumMoneyForDate(
   tx: Tx,
@@ -588,14 +605,36 @@ export async function sumMoneyForDate(
            AND p."status" = 'VOIDED')::text AS "voids_total",
       (SELECT COALESCE(sum(r."amount"), 0) FROM "refunds" r
          WHERE r."property_id" = ${propertyId}::uuid AND r."business_date" = ${businessDate}::date
-           AND r."status" = 'SUCCEEDED')::text AS "refunds_total",
-      (SELECT COALESCE(sum(i."amount"), 0) FROM "folio_items" i
-         WHERE i."property_id" = ${propertyId}::uuid
-           AND i."business_date" < ${businessDate}::date)::text AS "ledger_opening",
-      (SELECT COALESCE(sum(i."amount"), 0) FROM "folio_items" i
-         WHERE i."property_id" = ${propertyId}::uuid
-           AND i."business_date" <= ${businessDate}::date)::text AS "ledger_closing"
+           AND r."status" = 'SUCCEEDED')::text AS "refunds_total"
     FROM lines`;
+  return rows[0]!;
+}
+
+/**
+ * Guest-ledger roll-forward of D (night audit STATISTICS): opening = Σ ledger
+ * before D, closing = opening + D's lines. The opening is the previous closed
+ * day's stored closing balance when that snapshot exists — exact, because
+ * the posting-date guard refuses lines dated into a closed business date —
+ * and a full-history sum only when it does not (first audit, or gaps).
+ * COALESCE evaluates the fallback only when needed (H8).
+ */
+export async function ledgerBalancesForDate(tx: Tx, propertyId: string, businessDate: string) {
+  const rows = await tx.$queryRaw<{ ledger_opening: string; ledger_closing: string }[]>`
+    WITH opening AS (
+      SELECT COALESCE(
+        (SELECT s."ledger_closing_balance" FROM "daily_statistics" s
+          WHERE s."property_id" = ${propertyId}::uuid
+            AND s."business_date" = ${businessDate}::date - 1),
+        (SELECT COALESCE(sum(i."amount"), 0) FROM "folio_items" i
+          WHERE i."property_id" = ${propertyId}::uuid
+            AND i."business_date" < ${businessDate}::date)
+      ) AS "amount"
+    ), movement AS (
+      SELECT COALESCE(sum(i."amount"), 0) AS "amount" FROM "folio_items" i
+      WHERE i."property_id" = ${propertyId}::uuid AND i."business_date" = ${businessDate}::date
+    )
+    SELECT o."amount"::text AS "ledger_opening", (o."amount" + m."amount")::text AS "ledger_closing"
+    FROM opening o, movement m`;
   return rows[0]!;
 }
 

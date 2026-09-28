@@ -32,11 +32,14 @@ export function ReportView({ reportKey }: { reportKey: string }) {
   const search = useSearchParams();
   const businessDate = useBusinessDate().data?.businessDate ?? null;
   const { can } = usePermissions(property.id);
+  const offsetParam = Number(search.get("offset") ?? "0");
   const query: ReportQuery = {
     from: search.get("from") ?? undefined,
     to: search.get("to") ?? undefined,
     roomTypeId: search.get("roomTypeId") ?? undefined,
     risk: (search.get("risk") as ReportQuery["risk"]) ?? undefined,
+    // Large reports come in pages (H10); normal ones fit on the first page.
+    ...(Number.isInteger(offsetParam) && offsetParam > 0 ? { offset: offsetParam } : {}),
   };
   const report = useReportQuery({ propertyId: property.id, reportKey, query });
   const options = useBookingOptionsQuery(property.id, {
@@ -53,6 +56,13 @@ export function ReportView({ reportKey }: { reportKey: string }) {
     if (to) next.set("to", to);
     if (roomTypeId) next.set("roomTypeId", roomTypeId);
     if (risk) next.set("risk", risk);
+    router.replace(`${pathname}?${next.toString()}` as Route);
+  }
+
+  function goToOffset(offset: number) {
+    const next = new URLSearchParams(search.toString());
+    if (offset > 0) next.set("offset", String(offset));
+    else next.delete("offset");
     router.replace(`${pathname}?${next.toString()}` as Route);
   }
 
@@ -240,6 +250,37 @@ export function ReportView({ reportKey }: { reportKey: string }) {
           </table>
         </div>
       )}
+      {data.page.totalRows > data.page.limit ? (
+        <nav
+          aria-label="Report pages"
+          className="flex flex-wrap items-center gap-2 text-sm print:hidden"
+        >
+          <span className="me-auto text-fg-secondary">
+            Rows {(data.page.offset + 1).toLocaleString()}–
+            {Math.min(data.page.offset + data.page.limit, data.page.totalRows).toLocaleString()} of{" "}
+            {data.page.totalRows.toLocaleString()}. Totals cover every row
+            {data.canExport ? "; the CSV export contains them all" : ""}.
+          </span>
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={data.page.offset === 0 || report.isFetching}
+            onClick={() => goToOffset(Math.max(0, data.page.offset - data.page.limit))}
+          >
+            Previous
+          </Button>
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={
+              data.page.offset + data.page.limit >= data.page.totalRows || report.isFetching
+            }
+            onClick={() => goToOffset(data.page.offset + data.page.limit)}
+          >
+            Next
+          </Button>
+        </nav>
+      ) : null}
       <p className="text-xs text-fg-muted">
         Generated {formatDateTime(data.generatedAt, property.timezone)} · amounts in{" "}
         {data.currencyCode}

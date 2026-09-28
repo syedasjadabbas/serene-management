@@ -3,7 +3,12 @@ import type { Prisma } from "@/generated/prisma/client";
 import { prisma, type Tx } from "@/lib/db/prisma";
 import type { PropertyContext, SessionContext } from "@/lib/http/context";
 import { AppError, forbidden } from "@/lib/http/errors";
-import { hasOrganizationPermission, propertiesWithPermission } from "@/lib/permissions/evaluate";
+import {
+  type AccessProfile,
+  hasOrganizationPermission,
+  hasPermission,
+  propertiesWithPermission,
+} from "@/lib/permissions/evaluate";
 import { decodeCursor, encodeCursor } from "@/lib/utils/cursor";
 import { toDateOnly } from "@/modules/business-date/business-date.policy";
 import type { CursorPageMeta } from "@/types/api";
@@ -11,10 +16,13 @@ import {
   findOrganizationAuditLogs,
   findPropertyAuditLogs,
   findPropertyCodes,
+  findReasonCodeScope,
   findResourceHistory,
   findUserNames,
   insertAuditLog,
+  insertAuditLogs,
 } from "./audit.repository";
+import { auditSnapshots } from "./audit.policy";
 import type { AuditLogQuery, OrganizationAuditLogQuery } from "./audit.schema";
 import type { AuditActor, AuditEntry, AuditLogView, OrganizationAuditLogView } from "./audit.types";
 
@@ -24,6 +32,31 @@ import type { AuditActor, AuditEntry, AuditLogView, OrganizationAuditLogView } f
  * append-only (database trigger); there is deliberately no update/delete API.
  */
 export async function recordAudit(tx: Tx, actor: AuditActor, entry: AuditEntry): Promise<void> {
+  if (entry.reasonCodeId) {
+    await assertReasonCodeInScope(tx, actor, entry.reasonCodeId);
+  }
+  await insertAuditLog(tx, auditRow(actor, entry));
+}
+
+/**
+ * Many audit records in one statement, built exactly like `recordAudit`
+ * (night audit batch, M8). Same transaction semantics.
+ */
+export async function recordAuditMany(
+  tx: Tx,
+  items: { actor: AuditActor; entry: AuditEntry }[],
+): Promise<void> {
+  if (items.length === 0) return;
+  for (const { actor, entry } of items) {
+    if (entry.reasonCodeId) await assertReasonCodeInScope(tx, actor, entry.reasonCodeId);
+  }
+  await insertAuditLogs(
+    tx,
+    items.map(({ actor, entry }) => auditRow(actor, entry)),
+  );
+}
+
+function auditRow(actor: AuditActor, entry: AuditEntry) {
   const after =
     entry.permission === undefined
       ? entry.after
@@ -31,8 +64,7 @@ export async function recordAudit(tx: Tx, actor: AuditActor, entry: AuditEntry):
           ...(isPlainObject(entry.after) ? entry.after : { value: entry.after }),
           meta: { permission: entry.permission },
         };
-
-  await insertAuditLog(tx, {
+  return {
     organizationId: actor.organizationId,
     propertyId: actor.propertyId ?? null,
     userId: actor.userId ?? null,
@@ -49,7 +81,7 @@ export async function recordAudit(tx: Tx, actor: AuditActor, entry: AuditEntry):
     requestId: actor.requestId ?? null,
     ipAddress: actor.ipAddress ?? null,
     userAgent: actor.userAgent ?? null,
-  });
+  };
 }
 
 /** Reads a property's audit trail (newest first, keyset pagination). */
@@ -57,6 +89,8 @@ export async function listPropertyAuditLogs(
   organizationId: string,
   propertyId: string,
   query: AuditLogQuery,
+  /** Whether the caller holds billing:read at the property (M1: redaction otherwise). */
+  financialVisible: boolean,
 ): Promise<{ items: AuditLogView[]; meta: CursorPageMeta }> {
   let after: { createdAt: Date; id: string } | null = null;
   if (query.cursor) {
@@ -101,11 +135,22 @@ export async function listPropertyAuditLogs(
       businessDate: row.businessDate ? toDateOnly(row.businessDate) : null,
       reason: row.reason,
       requestId: row.requestId,
-      before: row.before,
-      after: row.after,
+      ...auditSnapshots(row, financialVisible),
     })),
     meta: { nextCursor, limit: query.limit },
   };
+}
+
+/**
+ * Whether billing data of an audit row's scope is visible to the caller:
+ * `billing:read` at the row's property, or at organization scope for
+ * organization-level rows (M1, D54).
+ */
+export function financialVisibleFor(access: AccessProfile) {
+  return (propertyId: string | null) =>
+    propertyId === null
+      ? hasOrganizationPermission(access, "billing:read")
+      : hasPermission(access, propertyId, "billing:read");
 }
 
 /**
@@ -169,6 +214,7 @@ export async function listOrganizationAuditLogs(
       ])
     ).map((p) => [p.id, p.code]),
   );
+  const financialVisible = financialVisibleFor(ctx.access);
   return {
     items: page.map((row) => ({
       id: row.id,
@@ -182,14 +228,34 @@ export async function listOrganizationAuditLogs(
       businessDate: row.businessDate ? toDateOnly(row.businessDate) : null,
       reason: row.reason,
       requestId: row.requestId,
-      before: row.before,
-      after: row.after,
+      ...auditSnapshots(row, financialVisible(row.propertyId)),
       property: row.propertyId
         ? { id: row.propertyId, code: codes.get(row.propertyId) ?? "" }
         : null,
     })),
     meta: { nextCursor, limit: query.limit },
   };
+}
+
+/**
+ * A structured reason code on an audit row must be a real code of the row's
+ * scope (L7): the row's property, or for organization-level rows a property
+ * of the organization. Optional codes stay optional; an arbitrary or foreign
+ * id is refused (the whole command rolls back) instead of being recorded as
+ * misleading metadata. Reason codes are property configuration (no foreign
+ * key on audit_logs, which is append-only and outlives configuration).
+ */
+async function assertReasonCodeInScope(tx: Tx, actor: AuditActor, reasonCodeId: string) {
+  const code = await findReasonCodeScope(tx, reasonCodeId);
+  const inScope =
+    code !== null &&
+    code.property.organizationId === actor.organizationId &&
+    (actor.propertyId == null || code.propertyId === actor.propertyId);
+  if (!inScope) {
+    throw new AppError("VALIDATION_FAILED", "Unknown reason code", {
+      fields: { reasonCodeId: ["Choose a reason code of this property"] },
+    });
+  }
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -233,7 +299,7 @@ export async function resourceHistory(
     includeOrganization: hasOrganizationPermission(ctx.access, "audit:read"),
   };
   if (scope.propertyIds.length === 0 && !scope.includeOrganization) return [];
-  return historyEntries(tx, scope, resourceIds, take);
+  return historyEntries(tx, scope, resourceIds, take, financialVisibleFor(ctx.access));
 }
 
 /**
@@ -256,6 +322,7 @@ export async function propertyResourceHistory(
     },
     resourceIds,
     take,
+    financialVisibleFor(ctx.access),
   );
 }
 
@@ -264,6 +331,7 @@ async function historyEntries(
   scope: { organizationId: string; propertyIds: string[]; includeOrganization: boolean },
   resourceIds: string[],
   take: number,
+  financialVisible: (propertyId: string | null) => boolean,
 ): Promise<ResourceHistoryEntry[]> {
   const organizationId = scope.organizationId;
   const rows = await findResourceHistory(tx, scope, resourceIds, take);
@@ -280,8 +348,7 @@ async function historyEntries(
     userDisplayName: row.userId ? (names.get(row.userId) ?? null) : null,
     risk: row.risk,
     reason: row.reason,
-    before: row.before,
-    after: row.after,
+    ...auditSnapshots(row, financialVisible(row.propertyId)),
   }));
 }
 

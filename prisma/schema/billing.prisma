@@ -254,6 +254,8 @@ model Folio {
   @@unique([reservationRoomId, window], where: raw("reservation_room_id IS NOT NULL"))
   @@unique([blockId, window], where: raw("block_id IS NOT NULL"))
   @@index([propertyId, status])
+  /// Phase 10 (H9): non-zero balances (open-balance totals and folio list).
+  @@index([propertyId, reservationRoomId], map: "folios_open_balance_idx", where: raw("balance <> 0"))
   @@index([payeeAccountId])
   @@map("folios")
 }
@@ -318,6 +320,9 @@ model FolioItem {
   /// An item can be reversed at most once.
   @@unique([correctsItemId, kind], map: "folio_items_one_reversal_per_item", where: raw("kind = 'REVERSAL'"))
   @@unique([propertyId, postingKey], map: "folio_items_posting_key_key", where: raw("posting_key IS NOT NULL"))
+  /// Phase 10 (H9): payment / refund lines, partial (migrations 20261110090000/0100).
+  @@index([paymentId], map: "folio_items_payment_id_idx", where: raw("payment_id IS NOT NULL"))
+  @@index([refundId], map: "folio_items_refund_id_idx", where: raw("refund_id IS NOT NULL"))
   @@index([folioId, postedAt])
   @@index([propertyId, businessDate, transactionCodeId])
   @@index([propertyId, cashierShiftId])

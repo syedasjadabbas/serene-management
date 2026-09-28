@@ -12,7 +12,6 @@ import {
   hasPermission,
 } from "@/lib/permissions/evaluate";
 import { type ResolvedSession, resolveSession } from "@/modules/access/access.service";
-import { getCurrentBusinessDate } from "@/modules/business-date/business-date.service";
 import type { IdempotencyRequest, PropertyContext, RequestMeta, SessionContext } from "./context";
 import { AppError, forbidden } from "./errors";
 import { resolveClientIp } from "./client-ip";
@@ -155,7 +154,8 @@ export function definePropertyRoute<P extends { propertyId: string }, Q = undefi
         propertyCode: property.code,
         timezone: property.timezone,
         currencyCode: property.currencyCode,
-        businessDate: await getCurrentBusinessDate(property.id),
+        // Read with the session's properties in this request (M10).
+        businessDate: session.session.businessDates[property.id] ?? null,
       };
       return options.handler({ ...parsed, ctx, idempotency });
     });

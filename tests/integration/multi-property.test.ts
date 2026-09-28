@@ -32,6 +32,7 @@ import {
   TEST_PASSWORD,
   buildFixtureInventory,
   createFixtureOrg,
+  createCustomUser,
   createGuestRow,
   createUser,
 } from "./support/fixtures";
@@ -399,6 +400,91 @@ describe("D. property setup copy", () => {
       where: { propertyId: D, code: "2000" },
     });
     expect(copied.defaultPrice).toBeNull();
+  });
+});
+
+describe("D2. setup copy authorization and audit reason codes (M5, L7)", () => {
+  const copy = (
+    target: string,
+    source: string,
+    jar: CookieJar,
+    extra: Record<string, unknown> = {},
+  ) =>
+    call(copySetupRoute, {
+      method: "POST",
+      path: `${P(target)}/setup/copy-from/${source}`,
+      params: { propertyId: target, sourceId: source },
+      body: { reason: "Pre-opening setup", ...extra },
+      jar,
+    });
+
+  it("needs permission to read the source's configuration, not only to see it", async () => {
+    // Manages the target C; at A only front desk access (no settings:read).
+    const visibleOnly = await createCustomUser(org, "copyvis", [
+      { permissions: ["properties:manage"], property: "C" },
+      { permissions: ["frontdesk:read"], property: "A" },
+    ]);
+    const denied = await copy(C, A, await loginAs(visibleOnly.email, TEST_PASSWORD));
+    expect(denied.status).toBe(403);
+    expect(denied.body.error.message).toBe("You do not have access to the source property");
+    // With settings:read at the source the copy is allowed (idempotent: nothing new).
+    const allowedUser = await createCustomUser(org, "copyok", [
+      { permissions: ["properties:manage"], property: "C" },
+      { permissions: ["settings:read"], property: "A" },
+    ]);
+    const allowed = await copy(C, A, await loginAs(allowedUser.email, TEST_PASSWORD));
+    expect(allowed.status).toBe(200);
+    // Reading the source is not enough without managing the target.
+    const readerOnly = await createCustomUser(org, "copyread", [
+      { permissions: ["settings:read"], property: "A" },
+      { permissions: ["settings:read"], property: "C" },
+    ]);
+    expect((await copy(C, A, await loginAs(readerOnly.email, TEST_PASSWORD))).status).toBe(403);
+    // Another organization's property is never a source.
+    const foreign = await copy(C, other.properties.X!.id, admin);
+    expect(foreign.status).toBe(403);
+    // A live target stays closed.
+    expect((await copy(A, B, admin)).status).toBe(422);
+  });
+
+  it("records only reason codes of the audited scope", async () => {
+    const foreignCode = await prisma.reasonCode.create({
+      data: { propertyId: other.properties.X!.id, category: "VOID", code: "FX", name: "Foreign" },
+    });
+    const codeOfA = invA.reasonCodes["VOID:ERR"]!;
+    const codeOfC = await prisma.reasonCode.findFirstOrThrow({
+      where: { propertyId: C, category: "VOID", code: "ERR" },
+    });
+    for (const [reasonCodeId, status] of [
+      ["01900000-0000-7000-8000-00000000dead", 400], // no such code
+      [foreignCode.id, 400], // another organization
+      [codeOfA, 400], // another property than the audited one
+      [codeOfC.id, 200], // the target's own code
+    ] as const) {
+      const r = await copy(C, A, admin, { reasonCodeId });
+      expect(r.status, reasonCodeId).toBe(status);
+      if (status === 400) expect(r.body.error.details.fields.reasonCodeId).toBeDefined();
+    }
+    // Omitted stays optional.
+    expect((await copy(C, A, admin)).status).toBe(200);
+    const recorded = await prisma.auditLog.findFirstOrThrow({
+      where: { resourceId: C, action: "property.setup_copy", reasonCodeId: { not: null } },
+    });
+    expect(recorded.reasonCodeId).toBe(codeOfC.id);
+
+    // Organization-level rows accept a code of any property of the organization only.
+    const orgActor = { organizationId: org.organizationId, userId: null, propertyId: null };
+    const write = (reasonCodeId: string) =>
+      runInTransaction((tx) =>
+        recordAudit(tx, orgActor, {
+          action: "test.reason_code",
+          resourceType: "Test",
+          reason: "Check",
+          reasonCodeId,
+        }),
+      );
+    await expect(write(codeOfA)).resolves.toBeUndefined();
+    await expect(write(foreignCode.id)).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
   });
 });
 

@@ -12,13 +12,19 @@ import { recordAudit, userDisplayNames } from "@/modules/audit/audit.service";
 import { recordEvent } from "@/modules/integrations/outbox.service";
 import type { AuditActor } from "@/modules/audit/audit.types";
 import { reconcileInventoryInTx } from "@/modules/availability/availability.service";
-import { postNightsInTx, postNoShowFeeInTx } from "@/modules/billing/billing.service";
+import {
+  flushPostingBatch,
+  postNightsInTx,
+  postNoShowFeeInTx,
+  preparePostingBatch,
+} from "@/modules/billing/billing.service";
 import { addDays, localDateInZone, toDateOnly } from "@/modules/business-date/business-date.policy";
 import { applyCutoffsInTx } from "@/modules/groups/groups.service";
 import { rollTasksInTx } from "@/modules/housekeeping/housekeeping.service";
 import { runIdempotent } from "@/modules/idempotency/idempotency.service";
 import {
   lockReservationRoomById,
+  lockReservationRoomsByIds,
   releaseReservationInTx,
 } from "@/modules/reservations/reservations.service";
 import { rollOccupiedRoomsInTx, rollServiceBlocksInTx } from "@/modules/rooms/rooms.service";
@@ -64,6 +70,7 @@ import {
   nextAttempt,
   rollBusinessDate,
   setBusinessDateStatus,
+  ledgerBalancesForDate,
   sumMoneyForDate,
   sumRoomRevenueByType,
 } from "./night-audit.repository";
@@ -197,7 +204,7 @@ export async function runChecks(propertyId: string, businessDate: string): Promi
     );
   }
 
-  const folios = await findUnbalancedFolios(prisma, propertyId);
+  const folios = await findUnbalancedFolios(prisma, propertyId, businessDate);
   results.push(
     folios.length === 0
       ? check("VALIDATE_BALANCES", "PASSED", "Every folio balance equals its ledger", [])
@@ -556,13 +563,25 @@ async function commitNightAudit(
   await step("POST_ROOM_AND_TAX", async () => {
     let charges = 0n;
     let taxes = 0n;
-    for (const id of await findInHouseReservationRoomIds(tx, ctx.propertyId)) {
-      const room = await lockReservationRoomById(tx, ctx, id);
-      const posted = await postNightsInTx(tx, ctx, businessDate, room, businessDate, {
-        source: "NIGHT_AUDIT",
-        actor,
-        permission: "nightaudit:run",
-      });
+    // One posting batch for every in-house room (M8): rooms locked in one
+    // statement, reads made once, night flags / audits / folio checks written
+    // once; each room's lines go through the same posting engine.
+    const rooms = await lockReservationRoomsByIds(
+      tx,
+      ctx,
+      await findInHouseReservationRoomIds(tx, ctx.propertyId),
+    );
+    const batch = await preparePostingBatch(tx, ctx, businessDate, rooms, businessDate);
+    for (const room of rooms) {
+      const posted = await postNightsInTx(
+        tx,
+        ctx,
+        businessDate,
+        room,
+        businessDate,
+        { source: "NIGHT_AUDIT", actor, permission: "nightaudit:run" },
+        batch,
+      );
       if (posted.postedNights.length === 0) continue;
       summary.roomsPosted += 1;
       summary.nightsPosted += posted.postedNights.length;
@@ -570,6 +589,7 @@ async function commitNightAudit(
       charges += posted.total;
       taxes += posted.taxes;
     }
+    await flushPostingBatch(tx, batch);
     summary.chargesPosted = formatMoney(charges);
     summary.taxesPosted = formatMoney(taxes);
     return {
@@ -678,12 +698,10 @@ async function commitNightAudit(
   });
 
   await step("STATISTICS", async () => {
-    const money = await sumMoneyForDate(
-      tx,
-      ctx.propertyId,
-      businessDate,
-      config.noShowTransactionCodeId,
-    );
+    const money = {
+      ...(await sumMoneyForDate(tx, ctx.propertyId, businessDate, config.noShowTransactionCodeId)),
+      ...(await ledgerBalancesForDate(tx, ctx.propertyId, businessDate)),
+    };
     const date = new Date(`${businessDate}T00:00:00.000Z`);
     await tx.dailyStatistic.create({
       data: {
