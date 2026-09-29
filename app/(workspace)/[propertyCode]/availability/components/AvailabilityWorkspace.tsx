@@ -92,7 +92,9 @@ export function AvailabilityWorkspace() {
   }
 
   const error = toClientApiError(availability.error);
-  const view = availability.data;
+  // currentData only ever answers the criteria on screen; while new criteria
+  // load, the skeleton shows instead of the previous search's results.
+  const view = availability.currentData;
   const bookHref = (roomTypeId: string, ratePlanId: string) =>
     `/${property.code}/reservations/new?${new URLSearchParams({
       arrival: criteria.arrival,
@@ -167,7 +169,7 @@ export function AvailabilityWorkspace() {
             </Button>
           }
         />
-      ) : availability.isLoading || !view ? (
+      ) : !view ? (
         <div role="status" className="flex flex-col gap-4">
           <span className="sr-only">Checking availability</span>
           <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">

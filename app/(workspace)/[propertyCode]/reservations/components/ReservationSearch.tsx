@@ -40,6 +40,8 @@ export function ReservationSearch() {
     cursors: [undefined],
   });
   const cursors = pages.key === filterKey ? pages.cursors : [undefined];
+  // Sort alone only reorders; it does not narrow the results.
+  const hasFilters = RESERVATION_FILTER_KEYS.some((key) => key !== "sort" && Boolean(filters[key]));
 
   if (isLoading) return <PageSkeleton title="Loading reservations" />;
   if (!can("reservations:read")) {
@@ -67,8 +69,13 @@ export function ReservationSearch() {
     filters,
     cursor,
     isLast: index === cursors.length - 1,
+    hasFilters,
+    onClearFilters: () => apply({ sort: filters.sort }),
     onLoadMore: (next: string) => setPages({ key: filterKey, cursors: [...cursors, next] }),
   });
+  // Keyed by the filters too, so a filter change remounts the pages instead of
+  // showing the previous query's rows (or appending its cursor) under the new one.
+  const pageKey = (cursor: string | undefined) => `${filterKey}|${cursor ?? "first"}`;
 
   return (
     <div className="flex flex-col gap-6">
@@ -117,7 +124,7 @@ export function ReservationSearch() {
         <ul className="divide-y divide-border-subtle">
           {cursors.map((cursor, index) => (
             <ReservationResultsPage
-              key={cursor ?? "first"}
+              key={pageKey(cursor)}
               variant="list"
               {...pageProps(cursor, index)}
             />
@@ -143,7 +150,7 @@ export function ReservationSearch() {
           </THead>
           {cursors.map((cursor, index) => (
             <ReservationResultsPage
-              key={cursor ?? "first"}
+              key={pageKey(cursor)}
               variant="table"
               {...pageProps(cursor, index)}
             />

@@ -1,7 +1,6 @@
 "use client";
 
 import { ChartColumn } from "lucide-react";
-import Link from "next/link";
 import type { Route } from "next";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
@@ -14,12 +13,32 @@ import { TextField } from "@/components/ui/TextField";
 import { useBusinessDate } from "@/hooks/useBusinessDate";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useProperty } from "@/hooks/useProperty";
-import { reportExportUrl, useReportQuery } from "@/lib/api/endpoints/reports.api";
+import {
+  reportExportUrl,
+  useReportCatalogQuery,
+  useReportQuery,
+} from "@/lib/api/endpoints/reports.api";
 import { useBookingOptionsQuery } from "@/lib/api/endpoints/reservations.api";
 import { toClientApiError } from "@/lib/api/errors";
 import { formatCurrency, formatDate, formatDateTime } from "@/lib/utils/format";
+import { addDays, daysBetween } from "@/modules/business-date/business-date.policy";
 import type { ReportQuery } from "@/modules/reports/reports.schema";
-import type { ReportCell, ReportColumn } from "@/modules/reports/reports.types";
+import type {
+  ReportCatalogItem,
+  ReportCell,
+  ReportColumn,
+  ReportResult,
+} from "@/modules/reports/reports.types";
+
+/** Mirrors the server's range limit (reports.policy MAX_REPORT_DAYS). */
+const MAX_REPORT_DAYS = 366;
+
+/**
+ * Reports that read only the end date (manager's flash: the day and month to
+ * date as of `to`; guest ledger: balances as of `to`). They get a single
+ * "As of" input instead of a misleading From–To pair.
+ */
+const SINGLE_DATE_REPORTS: ReadonlySet<string> = new Set(["manager-flash", "guest-ledger"]);
 
 /**
  * One report: the date range (and room type / risk where the report offers
@@ -44,21 +63,73 @@ export function ReportView({ reportKey }: { reportKey: string }) {
     ...(Number.isInteger(offsetParam) && offsetParam > 0 ? { offset: offsetParam } : {}),
   };
   const report = useReportQuery({ propertyId: property.id, reportKey, query });
+  const catalog = useReportCatalogQuery(property.id);
+  // Only the result for the current URL is shown; `data` would keep the
+  // previous selection's figures on screen while the new one runs.
+  const current = report.currentData;
+  // What the report offers (date range, filters) is known from the catalog
+  // even when the run itself fails, so the form stays usable.
+  const meta: ReportCatalogItem | undefined =
+    current ??
+    catalog.data?.reports.find((r) => r.key === reportKey) ??
+    (report.data?.key === reportKey ? report.data : undefined);
+  const singleDate = SINGLE_DATE_REPORTS.has(reportKey);
+  const error = toClientApiError(report.error);
+  const ranged = meta?.ranged ?? true;
+  const offersRoomType = meta?.roomTypeFilter ?? false;
+  const offersRisk = meta?.riskFilter ?? !!query.risk;
   const options = useBookingOptionsQuery(property.id, {
-    skip: !report.data?.roomTypeFilter || !can("reservations:read"),
+    skip: !offersRoomType || !can("reservations:read"),
   });
-  const [from, setFrom] = useState(query.from ?? businessDate ?? "");
-  const [to, setTo] = useState(query.to ?? businessDate ?? "");
-  const [roomTypeId, setRoomTypeId] = useState(query.roomTypeId ?? "");
-  const [risk, setRisk] = useState(query.risk ?? "");
+
+  // Drafts override the applied values only until the URL changes; the
+  // applied values mirror the server (to = to ?? from, from = from ?? to)
+  // and prefer the resolved params of the report on screen.
+  const urlKey = search.toString();
+  const [draft, setDraft] = useState<{
+    key: string;
+    from?: string;
+    to?: string;
+    roomTypeId?: string;
+    risk?: string;
+  }>({ key: urlKey });
+  const drafts = draft.key === urlKey ? draft : { key: urlKey };
+  const setField = (field: "from" | "to" | "roomTypeId" | "risk", value: string) =>
+    setDraft({ ...drafts, [field]: value });
+  const appliedFrom = current?.params.from ?? query.from ?? query.to ?? businessDate ?? "";
+  const appliedTo = current?.params.to ?? query.to ?? query.from ?? businessDate ?? "";
+  const from = drafts.from ?? appliedFrom;
+  const to = drafts.to ?? appliedTo;
+  const roomTypeId = drafts.roomTypeId ?? query.roomTypeId ?? "";
+  const risk = drafts.risk ?? query.risk ?? "";
+
+  const dateError =
+    !ranged || singleDate || !from || !to
+      ? null
+      : to < from
+        ? "Must be on or after the start date"
+        : daysBetween(from, to) + 1 > MAX_REPORT_DAYS
+          ? `A report covers at most ${MAX_REPORT_DAYS} days`
+          : null;
 
   function apply() {
+    if (dateError) return;
     const next = new URLSearchParams();
-    if (from) next.set("from", from);
-    if (to) next.set("to", to);
+    if (ranged) {
+      if (!singleDate && from) next.set("from", from);
+      if (to) next.set("to", to);
+    }
     if (roomTypeId) next.set("roomTypeId", roomTypeId);
     if (risk) next.set("risk", risk);
     router.replace(`${pathname}?${next.toString()}` as Route);
+  }
+
+  function clearRoomType() {
+    const next = new URLSearchParams(search.toString());
+    next.delete("roomTypeId");
+    next.delete("offset");
+    const qs = next.toString();
+    router.replace(`${pathname}${qs ? `?${qs}` : ""}` as Route);
   }
 
   function goToOffset(offset: number) {
@@ -68,39 +139,12 @@ export function ReportView({ reportKey }: { reportKey: string }) {
     router.replace(`${pathname}?${next.toString()}` as Route);
   }
 
-  const back = (
-    <nav className="text-sm print:hidden">
-      <Link className="text-brand hover:underline" href={`/${property.code}/reports` as Route}>
-        ← Reports
-      </Link>
-    </nav>
-  );
-
-  if (report.isLoading) {
-    return (
-      <div className="flex flex-col gap-3">
-        {back}
-        <StatusPanel kind="loading" title="Running the report" />
-      </div>
-    );
-  }
-  if (report.isError || !report.data) {
-    const error = toClientApiError(report.error);
-    return (
-      <div className="flex flex-col gap-3">
-        {back}
-        <StatusPanel
-          kind={error?.status === 403 ? "forbidden" : "error"}
-          title={error?.status === 403 ? "Access denied" : "Could not run the report"}
-          description={error?.message}
-          requestId={error?.requestId}
-        />
-      </div>
-    );
-  }
-  const data = report.data;
-  const cell = (column: ReportColumn, value: ReportCell | undefined) =>
-    formatCell(column, value ?? null, data.currencyCode, property.timezone);
+  const title = meta?.title ?? "Report";
+  const showRoomTypeSelect = offersRoomType && !!options.data;
+  const hiddenRoomTypeFilter = !!query.roomTypeId && !showRoomTypeSelect;
+  const showForm = meta
+    ? meta.ranged || meta.roomTypeFilter || meta.riskFilter
+    : !!error && error.status !== 403;
 
   return (
     <div className="flex flex-col gap-6">
@@ -109,67 +153,89 @@ export function ReportView({ reportKey }: { reportKey: string }) {
         breadcrumbs={[
           { label: property.code, href: `/${property.code}` },
           { label: "Reports", href: `/${property.code}/reports` },
-          { label: data.title },
+          { label: title },
         ]}
-        title={data.title}
+        title={title}
         description={
-          <>
-            {property.name} ·{" "}
-            {data.ranged
-              ? data.params.from === data.params.to
-                ? formatDate(data.params.from)
-                : `${formatDate(data.params.from)} – ${formatDate(data.params.to)}`
-              : "Now"}{" "}
-            · business date {data.businessDate}
-          </>
+          current ? (
+            <>
+              {property.name} ·{" "}
+              {current.ranged
+                ? singleDate
+                  ? `As of ${formatDate(current.params.to)}`
+                  : current.params.from === current.params.to
+                    ? formatDate(current.params.from)
+                    : `${formatDate(current.params.from)} – ${formatDate(current.params.to)}`
+                : "Now"}{" "}
+              · business date {current.businessDate}
+            </>
+          ) : (
+            property.name
+          )
         }
         actions={
-          <div className="flex flex-wrap gap-2 print:hidden">
-            <Button size="sm" variant="secondary" onClick={() => window.print()}>
-              Print
-            </Button>
-            {data.canExport ? (
-              <a
-                className={buttonClass("secondary", "sm")}
-                href={reportExportUrl(property.id, reportKey, {
-                  ...data.params,
-                  roomTypeId: data.params.roomTypeId ?? undefined,
-                  risk: (data.params.risk as ReportQuery["risk"]) ?? undefined,
-                })}
-                download
-              >
-                Export CSV
-              </a>
-            ) : null}
-          </div>
+          current ? (
+            <div className="flex flex-wrap gap-2 print:hidden">
+              <Button size="sm" variant="secondary" onClick={() => window.print()}>
+                Print
+              </Button>
+              {current.canExport ? (
+                <a
+                  className={buttonClass("secondary", "sm")}
+                  href={reportExportUrl(property.id, reportKey, {
+                    ...current.params,
+                    roomTypeId: current.params.roomTypeId ?? undefined,
+                    risk: (current.params.risk as ReportQuery["risk"]) ?? undefined,
+                  })}
+                  download
+                >
+                  Export CSV
+                </a>
+              ) : null}
+            </div>
+          ) : undefined
         }
       />
 
-      {data.ranged || data.roomTypeFilter || data.riskFilter ? (
+      {showForm ? (
         <form
           className="flex flex-wrap items-end gap-2 rounded-lg border border-border-subtle bg-surface p-3 print:hidden"
+          noValidate
           onSubmit={(event) => {
             event.preventDefault();
             apply();
           }}
         >
-          {data.ranged ? (
-            <>
+          {ranged ? (
+            singleDate ? (
               <TextField
-                label="From"
+                label="As of"
                 type="date"
-                value={from || data.params.from}
-                onChange={(e) => setFrom(e.target.value)}
+                value={to}
+                onChange={(e) => setField("to", e.target.value)}
               />
-              <TextField
-                label="To"
-                type="date"
-                value={to || data.params.to}
-                onChange={(e) => setTo(e.target.value)}
-              />
-            </>
+            ) : (
+              <>
+                <TextField
+                  label="From"
+                  type="date"
+                  value={from}
+                  max={to || undefined}
+                  onChange={(e) => setField("from", e.target.value)}
+                />
+                <TextField
+                  label="To"
+                  type="date"
+                  value={to}
+                  min={from || undefined}
+                  max={from ? addDays(from, MAX_REPORT_DAYS - 1) : undefined}
+                  errors={dateError ? [dateError] : undefined}
+                  onChange={(e) => setField("to", e.target.value)}
+                />
+              </>
+            )
           ) : null}
-          {data.roomTypeFilter && options.data ? (
+          {showRoomTypeSelect && options.data ? (
             <Select
               label="Room type"
               placeholder="All room types"
@@ -178,10 +244,10 @@ export function ReportView({ reportKey }: { reportKey: string }) {
                 label: `${rt.code} · ${rt.name}`,
               }))}
               value={roomTypeId}
-              onChange={(e) => setRoomTypeId(e.target.value)}
+              onChange={(e) => setField("roomTypeId", e.target.value)}
             />
           ) : null}
-          {data.riskFilter ? (
+          {offersRisk ? (
             <Select
               label="Risk"
               placeholder="Any risk"
@@ -191,15 +257,80 @@ export function ReportView({ reportKey }: { reportKey: string }) {
                 { value: "LOW", label: "Low" },
               ]}
               value={risk}
-              onChange={(e) => setRisk(e.target.value)}
+              onChange={(e) => setField("risk", e.target.value)}
             />
           ) : null}
-          <Button type="submit" size="md" variant="secondary" pending={report.isFetching}>
+          <Button
+            type="submit"
+            size="md"
+            variant="secondary"
+            pending={report.isFetching}
+            disabled={!!dateError}
+          >
             Run
           </Button>
         </form>
       ) : null}
 
+      {hiddenRoomTypeFilter ? (
+        <div className="flex flex-wrap items-center gap-2 text-sm print:hidden">
+          <span className="inline-flex items-center gap-2 rounded-md border border-border-subtle bg-surface px-2.5 py-1">
+            Room type filter active
+            <button
+              type="button"
+              className="font-medium text-brand hover:underline"
+              onClick={clearRoomType}
+            >
+              Clear
+            </button>
+          </span>
+        </div>
+      ) : null}
+
+      {report.isFetching && !current ? (
+        <StatusPanel kind="loading" title="Running the report" />
+      ) : error ? (
+        <StatusPanel
+          kind={error.status === 403 ? "forbidden" : "error"}
+          title={error.status === 403 ? "Access denied" : "Could not run the report"}
+          description={Object.values(error.fieldErrors).flat()[0] ?? error.message}
+          requestId={error.requestId}
+          action={
+            error.status === 403 ? undefined : (
+              <Button size="sm" variant="secondary" onClick={() => void report.refetch()}>
+                Retry
+              </Button>
+            )
+          }
+        />
+      ) : current ? (
+        <ReportBody
+          data={current}
+          timezone={property.timezone}
+          fetching={report.isFetching}
+          onPage={goToOffset}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function ReportBody({
+  data,
+  timezone,
+  fetching,
+  onPage,
+}: {
+  data: ReportResult;
+  timezone: string;
+  fetching: boolean;
+  onPage: (offset: number) => void;
+}) {
+  const cell = (column: ReportColumn, value: ReportCell | undefined) =>
+    formatCell(column, value ?? null, data.currencyCode, timezone);
+
+  return (
+    <>
       {data.notes.length > 0 ? (
         <Alert tone="info">
           <ul className="list-disc ps-4">
@@ -274,28 +405,25 @@ export function ReportView({ reportKey }: { reportKey: string }) {
           <Button
             size="sm"
             variant="secondary"
-            disabled={data.page.offset === 0 || report.isFetching}
-            onClick={() => goToOffset(Math.max(0, data.page.offset - data.page.limit))}
+            disabled={data.page.offset === 0 || fetching}
+            onClick={() => onPage(Math.max(0, data.page.offset - data.page.limit))}
           >
             Previous
           </Button>
           <Button
             size="sm"
             variant="secondary"
-            disabled={
-              data.page.offset + data.page.limit >= data.page.totalRows || report.isFetching
-            }
-            onClick={() => goToOffset(data.page.offset + data.page.limit)}
+            disabled={data.page.offset + data.page.limit >= data.page.totalRows || fetching}
+            onClick={() => onPage(data.page.offset + data.page.limit)}
           >
             Next
           </Button>
         </nav>
       ) : null}
       <p className="text-xs text-fg-muted">
-        Generated {formatDateTime(data.generatedAt, property.timezone)} · amounts in{" "}
-        {data.currencyCode}
+        Generated {formatDateTime(data.generatedAt, timezone)} · amounts in {data.currencyCode}
       </p>
-    </div>
+    </>
   );
 }
 

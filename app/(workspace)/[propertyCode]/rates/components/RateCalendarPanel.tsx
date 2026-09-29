@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Badge } from "@/components/ui/Badge";
+import { Button } from "@/components/ui/Button";
 import { Select } from "@/components/ui/Select";
 import { StatusPanel } from "@/components/ui/StatusPanel";
 import { TextField } from "@/components/ui/TextField";
@@ -48,7 +49,16 @@ export function RateCalendarPanel({ initialPlanId }: { initialPlanId?: string })
     { skip: !plan || !roomType || !start },
   );
   const error = toClientApiError(query.error);
-  const data = query.data;
+  const optionsError = toClientApiError(options.error);
+  // `currentData` belongs to the current plan, room type and period only; a
+  // filter change must never show the previous selection's prices.
+  const data = query.currentData;
+  const noPlan = !!o && !plan;
+  const noRoomType = !!o && !roomType;
+  const loading =
+    !optionsError &&
+    !error &&
+    (options.isLoading || (!!plan && !!roomType && (!start || (query.isFetching && !data))));
   const money = (value: string | null) =>
     value === null ? "—" : formatCurrency(value, property.currencyCode, "en", o?.minorUnits);
 
@@ -80,14 +90,52 @@ export function RateCalendarPanel({ initialPlanId }: { initialPlanId?: string })
           onChange={(e) => setFrom(e.target.value)}
         />
       </div>
-      {query.isLoading || options.isLoading ? (
-        <StatusPanel kind="loading" title="Loading prices" />
+      {optionsError ? (
+        <StatusPanel
+          kind="error"
+          title="Could not load rate plans and room types"
+          description={optionsError.message}
+          requestId={optionsError.requestId}
+          action={
+            <Button size="touch" variant="secondary" onClick={() => void options.refetch()}>
+              Retry
+            </Button>
+          }
+        />
       ) : null}
+      {noPlan ? (
+        <StatusPanel
+          kind="empty"
+          title="No active rate plan"
+          description="Create or activate a rate plan to see its prices here."
+        />
+      ) : null}
+      {!noPlan && noRoomType ? (
+        <StatusPanel
+          kind="empty"
+          title="No room types"
+          description="Add a room type to see prices here."
+        />
+      ) : null}
+      {loading ? <StatusPanel kind="loading" title="Loading prices" /> : null}
       {error ? (
-        <StatusPanel kind="error" title="Could not load the calendar" description={error.message} />
+        <StatusPanel
+          kind="error"
+          title="Could not load the calendar"
+          description={error.message}
+          requestId={error.requestId}
+          action={
+            <Button size="touch" variant="secondary" onClick={() => void query.refetch()}>
+              Retry
+            </Button>
+          }
+        />
       ) : null}
       {data ? (
-        <div className="relative overflow-x-auto rounded-lg border border-border-subtle bg-surface">
+        <div
+          className="relative overflow-x-auto rounded-lg border border-border-subtle bg-surface"
+          aria-busy={query.isFetching}
+        >
           <table className="w-full min-w-[560px] text-sm">
             <caption className="sr-only">
               Prices of {data.ratePlan.code} for {data.roomType.code}

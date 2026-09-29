@@ -109,7 +109,16 @@ export function FrontDeskWorkspace() {
     if (nextFilter !== "all") search.set("filter", nextFilter);
     const nextQ = next.view && next.view !== view ? "" : (next.q ?? q);
     if (nextQ && nextView !== "rooms") search.set("q", nextQ);
-    router.replace((search.size ? `${pathname}?${search.toString()}` : pathname) as Route);
+    // The room board's floor and room type stay while the view stays.
+    if (!next.view || next.view === view) {
+      for (const key of ["floor", "roomType"]) {
+        const value = params.get(key);
+        if (value) search.set(key, value);
+      }
+    }
+    router.replace((search.size ? `${pathname}?${search.toString()}` : pathname) as Route, {
+      scroll: false,
+    });
   }
 
   const counts = summary.data;
@@ -198,10 +207,22 @@ export function FrontDeskWorkspace() {
         onSearch={(value) => navigate({ q: value })}
       />
 
-      {view === "arrivals" ? <ArrivalsView filter={filter} q={q} /> : null}
-      {view === "in-house" ? <StaysView kind="in-house" filter={filter} q={q} /> : null}
-      {view === "departures" ? <StaysView kind="departures" filter={filter} q={q} /> : null}
-      {view === "rooms" ? <RoomBoardView filter={filter} /> : null}
+      {view === "arrivals" ? (
+        <ArrivalsView filter={filter} q={q} onClear={() => navigate({ filter: "all", q: "" })} />
+      ) : null}
+      {view === "in-house" || view === "departures" ? (
+        <StaysView
+          // Keyed by view: in-house and departure pages never share cursors.
+          key={view}
+          kind={view}
+          filter={filter}
+          q={q}
+          onClear={() => navigate({ filter: "all", q: "" })}
+        />
+      ) : null}
+      {view === "rooms" ? (
+        <RoomBoardView filter={filter} onClearFilter={() => navigate({ filter: "all" })} />
+      ) : null}
     </div>
   );
 }

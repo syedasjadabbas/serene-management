@@ -72,7 +72,6 @@ export function NightAuditWorkspace() {
   const { can, isLoading: permissionsLoading } = usePermissions(property.id);
   const allowed = can("nightaudit:read");
   const readiness = useNightAuditReadinessQuery(property.id, { skip: !allowed });
-  const runs = useNightAuditRunsQuery({ propertyId: property.id }, { skip: !allowed });
   const [dialog, setDialog] = useState(false);
   const crumbs = [{ label: property.code, href: `/${property.code}` }, { label: "Night audit" }];
 
@@ -197,7 +196,7 @@ export function NightAuditWorkspace() {
         </ul>
       </section>
 
-      <RunHistory runs={runs.data?.items ?? []} loading={runs.isLoading} />
+      <RunHistory />
 
       {dialog && view.businessDate ? (
         <RunDialog businessDate={view.businessDate} onClose={() => setDialog(false)} />
@@ -288,16 +287,42 @@ function RunDialog({ businessDate, onClose }: { businessDate: string; onClose: (
   );
 }
 
-export function RunHistory({ runs, loading }: { runs: RunListItem[]; loading: boolean }) {
+/**
+ * Run history, newest first. The first page decides loading / error / empty;
+ * "Load more" appends further pages, each its own cursor-keyed query.
+ */
+export function RunHistory() {
   const property = useProperty();
+  const firstPage = useNightAuditRunsQuery({ propertyId: property.id });
+  const [more, setMore] = useState<{ key: string; cursors: string[] }>({
+    key: property.id,
+    cursors: [],
+  });
+  const cursors = more.key === property.id ? more.cursors : [];
+  const addPage = (cursor: string) => setMore({ key: property.id, cursors: [...cursors, cursor] });
+  const data = firstPage.currentData;
+  const error = toClientApiError(firstPage.error);
+
   return (
     <section aria-labelledby="history-heading" className="flex flex-col gap-2">
       <h2 id="history-heading" className="text-sm font-semibold">
         Run history
       </h2>
-      {loading ? (
+      {error ? (
+        <StatusPanel
+          kind="error"
+          title="Could not load the run history"
+          description={error.message}
+          requestId={error.requestId}
+          action={
+            <Button variant="secondary" onClick={() => void firstPage.refetch()}>
+              Retry
+            </Button>
+          }
+        />
+      ) : !data ? (
         <StatusPanel kind="loading" title="Loading runs" />
-      ) : runs.length === 0 ? (
+      ) : data.items.length === 0 ? (
         <StatusPanel kind="empty" title="No night audit has run yet" />
       ) : (
         <div className="overflow-x-auto rounded-lg border border-border-subtle">
@@ -325,32 +350,144 @@ export function RunHistory({ runs, loading }: { runs: RunListItem[]; loading: bo
                 </th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-border-subtle">
-              {runs.map((run) => (
-                <tr key={run.id} className="bg-surface">
-                  <td className="px-3 py-2 font-mono">
-                    <Link
-                      className="text-brand hover:underline"
-                      href={`/${property.code}/night-audit/${run.id}` as Route}
-                    >
-                      {run.businessDate}
-                    </Link>
-                  </td>
-                  <td className="px-3 py-2">{run.attempt}</td>
-                  <td className="px-3 py-2">
-                    <Badge tone={RUN_TONE[run.status]}>{run.status.toLowerCase()}</Badge>
-                  </td>
-                  <td className="px-3 py-2 whitespace-nowrap">
-                    {formatDateTime(run.startedAt, property.timezone)}
-                  </td>
-                  <td className="px-3 py-2">{run.startedBy?.name ?? "—"}</td>
-                  <td className="px-3 py-2 font-mono text-xs">{run.errorCode ?? ""}</td>
-                </tr>
-              ))}
-            </tbody>
+            <RunRows
+              runs={data.items}
+              nextCursor={cursors.length === 0 ? data.meta.nextCursor : null}
+              fetching={firstPage.isFetching}
+              onMore={addPage}
+            />
+            {cursors.map((cursor, index) => (
+              <RunPage
+                key={cursor}
+                cursor={cursor}
+                isLast={index === cursors.length - 1}
+                onMore={addPage}
+              />
+            ))}
           </table>
         </div>
       )}
     </section>
+  );
+}
+
+const RUN_COLUMNS = 6;
+
+/** A further page of runs, as its own table body. */
+function RunPage({
+  cursor,
+  isLast,
+  onMore,
+}: {
+  cursor: string;
+  isLast: boolean;
+  onMore: (cursor: string) => void;
+}) {
+  const property = useProperty();
+  const query = useNightAuditRunsQuery({ propertyId: property.id, cursor });
+  const error = toClientApiError(query.error);
+  const data = query.currentData;
+  if (error) {
+    return (
+      <tbody>
+        <tr>
+          <td colSpan={RUN_COLUMNS} className="bg-surface p-3">
+            <StatusPanel
+              kind="error"
+              title="Could not load more runs"
+              description={error.message}
+              requestId={error.requestId}
+              action={
+                <Button variant="secondary" onClick={() => void query.refetch()}>
+                  Retry
+                </Button>
+              }
+            />
+          </td>
+        </tr>
+      </tbody>
+    );
+  }
+  if (!data) {
+    return (
+      <tbody>
+        <tr>
+          <td colSpan={RUN_COLUMNS} className="bg-surface p-3">
+            <StatusPanel kind="loading" title="Loading more runs" />
+          </td>
+        </tr>
+      </tbody>
+    );
+  }
+  return (
+    <RunRows
+      runs={data.items}
+      nextCursor={isLast ? data.meta.nextCursor : null}
+      fetching={query.isFetching}
+      onMore={onMore}
+      continued
+    />
+  );
+}
+
+function RunRows({
+  runs,
+  nextCursor,
+  fetching,
+  onMore,
+  continued = false,
+}: {
+  runs: RunListItem[];
+  nextCursor: string | null | undefined;
+  fetching: boolean;
+  onMore: (cursor: string) => void;
+  continued?: boolean;
+}) {
+  const property = useProperty();
+  return (
+    <tbody
+      className={
+        continued
+          ? "divide-y divide-border-subtle border-t border-border-subtle"
+          : "divide-y divide-border-subtle"
+      }
+    >
+      {runs.map((run) => (
+        <tr key={run.id} className="bg-surface">
+          <td className="px-3 py-2 font-mono">
+            <Link
+              className="text-brand hover:underline"
+              href={`/${property.code}/night-audit/${run.id}` as Route}
+            >
+              {run.businessDate}
+            </Link>
+          </td>
+          <td className="px-3 py-2">{run.attempt}</td>
+          <td className="px-3 py-2">
+            <Badge tone={RUN_TONE[run.status]}>{run.status.toLowerCase()}</Badge>
+          </td>
+          <td className="px-3 py-2 whitespace-nowrap">
+            {formatDateTime(run.startedAt, property.timezone)}
+          </td>
+          <td className="px-3 py-2">{run.startedBy?.name ?? "—"}</td>
+          <td className="px-3 py-2 font-mono text-xs">{run.errorCode ?? ""}</td>
+        </tr>
+      ))}
+      {nextCursor ? (
+        <tr className="bg-surface">
+          <td colSpan={RUN_COLUMNS} className="p-3 text-center">
+            <Button
+              variant="secondary"
+              size="sm"
+              pending={fetching}
+              disabled={fetching}
+              onClick={() => onMore(nextCursor)}
+            >
+              Load more
+            </Button>
+          </td>
+        </tr>
+      ) : null}
+    </tbody>
   );
 }

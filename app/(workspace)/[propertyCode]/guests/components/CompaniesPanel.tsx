@@ -37,7 +37,18 @@ export function CompaniesPanel() {
     cursor: cursors.at(-1),
   });
   const error = toClientApiError(query.error);
+  // `currentData` belongs to the current filter only; `data` would keep the
+  // previous filter's rows on screen while the new page loads.
+  const data = query.currentData;
+  const loading = query.isFetching && !data && !error;
+  const filtered = term.length >= 2 || type !== "" || status !== "ACTIVE";
   const restart = () => setCursors([undefined]);
+  const clearFilters = () => {
+    setQ("");
+    setType("");
+    setStatus("ACTIVE");
+    restart();
+  };
 
   return (
     <section className="flex flex-col gap-3" aria-label="Companies">
@@ -46,6 +57,7 @@ export function CompaniesPanel() {
           label="Search"
           placeholder="Name or code"
           value={q}
+          maxLength={100}
           onChange={(e) => {
             setQ(e.target.value);
             restart();
@@ -80,16 +92,49 @@ export function CompaniesPanel() {
           </Button>
         ) : null}
       </div>
-      {query.isLoading ? <StatusPanel kind="loading" title="Loading companies" /> : null}
+      {q.trim().length === 1 ? (
+        <p className="text-xs text-fg-muted">Type at least 2 characters to search.</p>
+      ) : null}
+      {loading ? <StatusPanel kind="loading" title="Loading companies" /> : null}
       {error ? (
-        <StatusPanel kind="error" title="Could not load companies" description={error.message} />
+        <StatusPanel
+          kind="error"
+          title="Could not load companies"
+          description={error.message}
+          requestId={error.requestId}
+          action={
+            <Button size="touch" variant="secondary" onClick={() => void query.refetch()}>
+              Retry
+            </Button>
+          }
+        />
       ) : null}
-      {query.data && query.data.items.length === 0 ? (
-        <StatusPanel kind="empty" title="No companies here" />
+      {data && data.items.length === 0 ? (
+        filtered ? (
+          <StatusPanel
+            kind="empty"
+            title="No company matches"
+            description="No company or travel agent matches these filters."
+            action={
+              <Button size="touch" variant="secondary" onClick={clearFilters}>
+                Clear filters
+              </Button>
+            }
+          />
+        ) : (
+          <StatusPanel
+            kind="empty"
+            title="No companies yet"
+            description="Company and travel-agent profiles you add appear here."
+          />
+        )
       ) : null}
-      {query.data && query.data.items.length > 0 ? (
-        <ul className="divide-y divide-border-subtle overflow-hidden rounded-lg border border-border-subtle bg-surface">
-          {query.data.items.map((a) => (
+      {data && data.items.length > 0 ? (
+        <ul
+          className="divide-y divide-border-subtle overflow-hidden rounded-lg border border-border-subtle bg-surface"
+          aria-busy={query.isFetching}
+        >
+          {data.items.map((a) => (
             <li key={a.id}>
               <Link
                 href={`/${property.code}/companies/${a.id}` as Route}
@@ -114,7 +159,7 @@ export function CompaniesPanel() {
           ))}
         </ul>
       ) : null}
-      {cursors.length > 1 || query.data?.meta.nextCursor ? (
+      {cursors.length > 1 || data?.meta.nextCursor ? (
         <div className="flex justify-between gap-2">
           <Button
             size="touch"
@@ -127,8 +172,11 @@ export function CompaniesPanel() {
           <Button
             size="touch"
             variant="secondary"
-            disabled={!query.data?.meta.nextCursor}
-            onClick={() => setCursors((c) => [...c, query.data!.meta.nextCursor!])}
+            disabled={!data?.meta.nextCursor}
+            onClick={() => {
+              const next = data?.meta.nextCursor;
+              if (next) setCursors((c) => [...c, next]);
+            }}
           >
             Next
           </Button>

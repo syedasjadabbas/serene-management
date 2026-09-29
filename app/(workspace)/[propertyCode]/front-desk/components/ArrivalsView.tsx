@@ -21,7 +21,16 @@ const PAGE_SIZE = 50;
 const COLUMNS = 9;
 
 /** Due-in list for the business date, with inline check-in. */
-export function ArrivalsView({ filter, q }: { filter: string; q: string }) {
+export function ArrivalsView({
+  filter,
+  q,
+  onClear,
+}: {
+  filter: string;
+  q: string;
+  /** Clears the list filter and search (shown on a filtered empty list). */
+  onClear: () => void;
+}) {
   const property = useProperty();
   const { cursors, loadMore } = useCursorPages(`${filter}|${q}`);
   const [target, setTarget] = useState<CheckInTarget | null>(null);
@@ -80,12 +89,15 @@ export function ArrivalsView({ filter, q }: { filter: string; q: string }) {
           </thead>
           {cursors.map((cursor, index) => (
             <ArrivalsPage
-              key={cursor ?? "first"}
+              // Keyed by the list too: a filter or search change remounts the pages
+              // rather than showing the previous list's rows or cursor.
+              key={`${filter}|${q}|${cursor ?? "first"}`}
               filter={filter}
               q={q}
               cursor={cursor}
               isLast={index === cursors.length - 1}
               onLoadMore={loadMore}
+              onClear={onClear}
               onCheckIn={(row) => {
                 setDone(null);
                 setTarget(toTarget(row));
@@ -130,23 +142,30 @@ function ArrivalsPage({
   isLast,
   onLoadMore,
   onCheckIn,
+  onClear,
 }: {
   filter: string;
   q: string;
   cursor: string | undefined;
   isLast: boolean;
   onLoadMore: (cursor: string) => void;
+  onClear: () => void;
   onCheckIn: (row: ArrivalRow) => void;
 }) {
   const property = useProperty();
   const { can } = usePermissions(property.id);
-  const { data, isLoading, isFetching, error, refetch } = useArrivalsQuery(
+  // currentData belongs to these exact arguments, never to a previous filter.
+  const {
+    currentData: data,
+    isFetching,
+    error,
+    refetch,
+  } = useArrivalsQuery(
     { propertyId: property.id, filter, q: q || undefined, cursor, limit: String(PAGE_SIZE) },
     { pollingInterval: cursor ? 0 : POLL_MS, skipPollingIfUnfocused: true },
   );
   const apiError = toClientApiError(error);
 
-  if (isLoading) return <MessageRow>{<Spinner label="Loading arrivals" />}</MessageRow>;
   if (apiError) {
     return (
       <MessageRow tone="danger">
@@ -157,10 +176,21 @@ function ArrivalsPage({
       </MessageRow>
     );
   }
-  if (!data || (data.items.length === 0 && !cursor)) {
+  // No rows for these arguments yet: loading, never the previous list.
+  if (!data) return <MessageRow>{<Spinner label="Loading arrivals" />}</MessageRow>;
+  if (data.items.length === 0 && !cursor) {
     return (
       <MessageRow>
-        {q || filter !== "all" ? "No arrivals match." : "No arrivals for the business date."}
+        {q || filter !== "all" ? (
+          <>
+            No arrivals match.{" "}
+            <Button size="sm" variant="secondary" onClick={onClear}>
+              Clear filters
+            </Button>
+          </>
+        ) : (
+          "No arrivals for the business date."
+        )}
       </MessageRow>
     );
   }

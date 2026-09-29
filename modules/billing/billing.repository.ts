@@ -1,4 +1,5 @@
 import "server-only";
+import { confirmationMatchSql } from "@/modules/properties/confirmation-number.sql";
 import { Prisma } from "@/generated/prisma/client";
 import type { Tx } from "@/lib/db/prisma";
 
@@ -548,8 +549,8 @@ export function findFolioListPage(
               " AND ",
             )
           : Prisma.sql`FALSE`
-      }) OR res."confirmation_number" LIKE ${`${options.search.raw}%`}
-          OR rm."number" = ${options.search.raw})`
+      }) OR ${confirmationMatchSql(Prisma.sql`res."confirmation_number"`, options.search.raw)}
+          OR upper(rm."number") = ${options.search.raw.trim().toUpperCase()})`
     : Prisma.empty;
   const cursor = options.cursor
     ? Prisma.sql`AND (g."search_name", rr."id") > (${options.cursor.v}, ${options.cursor.i}::uuid)`

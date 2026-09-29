@@ -1,12 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { Button } from "@/components/ui/Button";
+import { GuestPicker } from "@/components/guests/GuestPicker";
 import { FormDialog } from "@/components/ui/FormDialog";
 import { Select } from "@/components/ui/Select";
 import { TextArea } from "@/components/ui/TextArea";
 import { TextField } from "@/components/ui/TextField";
-import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useProperty } from "@/hooks/useProperty";
 import {
@@ -18,7 +17,6 @@ import {
   useReleaseBlockMutation,
   useSetAllocationMutation,
 } from "@/lib/api/endpoints/groups.api";
-import { useSearchGuestsQuery } from "@/lib/api/endpoints/guests.api";
 import { toClientApiError } from "@/lib/api/errors";
 import { addDays } from "@/modules/business-date/business-date.policy";
 import type { BlockView, GroupDetail } from "@/modules/groups/groups.types";
@@ -453,9 +451,6 @@ export function PickupDialog({ block, onClose }: { block: BlockView; onClose: ()
   const property = useProperty();
   const [pickup, state] = usePickupMutation();
   const [idempotencyKey] = useState(() => crypto.randomUUID());
-  const [search, setSearch] = useState("");
-  const debounced = useDebouncedValue(search.trim(), 300);
-  const guests = useSearchGuestsQuery(debounced, { skip: debounced.length < 2 });
   const [guest, setGuest] = useState<{ id: string; label: string } | null>(null);
   const [roomTypeId, setRoomTypeId] = useState(block.roomTypes[0]?.roomType.id ?? "");
   const [arrival, setArrival] = useState(block.startDate);
@@ -524,51 +519,7 @@ export function PickupDialog({ block, onClose }: { block: BlockView; onClose: ()
       pending={state.isLoading}
       error={error}
     >
-      {guest ? (
-        <p className="flex flex-wrap items-center gap-2 text-sm">
-          Guest: <span className="font-medium">{guest.label}</span>
-          <Button size="sm" variant="ghost" onClick={() => setGuest(null)}>
-            Change
-          </Button>
-        </p>
-      ) : (
-        <div className="flex flex-col gap-2">
-          <TextField
-            label="Find guest"
-            placeholder="Name, email, phone or profile number"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            autoFocus
-          />
-          <div aria-live="polite" className="max-h-48 overflow-y-auto">
-            {debounced.length < 2 ? (
-              <p className="text-sm text-fg-muted">Type at least 2 characters.</p>
-            ) : guests.data && guests.data.length === 0 ? (
-              <p className="text-sm text-fg-secondary">No guest found.</p>
-            ) : (
-              <ul className="divide-y divide-border-subtle rounded-md border border-border-subtle">
-                {(guests.data ?? []).map((g) => (
-                  <li key={g.id}>
-                    <button
-                      type="button"
-                      className="flex min-h-11 w-full flex-col items-start px-3 py-1.5 text-left text-sm hover:bg-surface-sunken"
-                      onClick={() =>
-                        setGuest({ id: g.id, label: `${g.fullName} · ${g.profileNumber}` })
-                      }
-                    >
-                      <span className="font-medium">{g.fullName}</span>
-                      <span className="text-xs text-fg-muted">
-                        {g.profileNumber}
-                        {g.email ? ` · ${g.email}` : ""}
-                      </span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </div>
-      )}
+      <GuestPicker value={guest} onChange={setGuest} />
       <div className="grid gap-3 sm:grid-cols-2">
         <Select
           label="Room type"

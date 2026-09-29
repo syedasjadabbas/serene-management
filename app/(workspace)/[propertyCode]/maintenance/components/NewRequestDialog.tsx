@@ -1,5 +1,6 @@
 "use client";
 
+import { BedDouble } from "lucide-react";
 import { useRouter } from "next/navigation";
 import type { Route } from "next";
 import { useState } from "react";
@@ -110,7 +111,9 @@ export function NewRequestDialog({ onClose }: { onClose: () => void }) {
             placeholder={rooms.data ? "Public area (no room)" : "Loading rooms…"}
             options={(rooms.data ?? []).map((r) => ({
               value: r.id,
-              label: `${r.number} · ${r.roomTypeCode}`,
+              label: `Room ${r.number}`,
+              description: r.roomTypeCode,
+              icon: BedDouble,
             }))}
             value={roomId}
             onChange={(e) => {

@@ -4,7 +4,7 @@ import { ToggleGroup } from "@/components/ui/ToggleGroup";
 import { UsersRound } from "lucide-react";
 import Link from "next/link";
 import type { Route } from "next";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -53,10 +53,17 @@ export function GroupsWorkspace() {
   const property = useProperty();
   const { can, isLoading } = usePermissions(property.id);
   const router = useRouter();
-  const [status, setStatus] = useState<string>("ACTIVE");
+  const pathname = usePathname();
+  const params = useSearchParams();
+  // The status tab lives in the URL (?status=), like the other workspaces;
+  // Active is the default and keeps the URL clean.
+  const requested = params.get("status");
+  const status = STATUSES.some(([value]) => value === requested) ? requested! : "ACTIVE";
+  const setStatus = (next: string) =>
+    router.replace((next === "ACTIVE" ? pathname : `${pathname}?status=${next}`) as Route, {
+      scroll: false,
+    });
   const [creating, setCreating] = useState(false);
-  const query = useGroupsQuery({ propertyId: property.id, status }, { skip: !can("groups:read") });
-  const error = toClientApiError(query.error);
 
   if (isLoading) return <PageSkeleton title="Loading groups" />;
   if (!can("groups:read")) {
@@ -89,60 +96,13 @@ export function GroupsWorkspace() {
         value={status}
         onChange={setStatus}
       />
-      {query.isLoading ? (
-        <div className="overflow-hidden rounded-lg border border-border-subtle bg-surface">
-          <SkeletonRows rows={4} columns={4} label="Loading groups" />
-        </div>
-      ) : null}
-      {error ? (
-        <StatusPanel
-          kind="error"
-          title="Could not load groups"
-          description={error.message}
-          requestId={error.requestId}
-        />
-      ) : null}
-      {query.data && query.data.items.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-border bg-surface">
-          <StatusPanel
-            kind="empty"
-            title={EMPTY[status]?.title ?? "No groups here"}
-            description={EMPTY[status]?.description}
-            action={
-              status === "ACTIVE" && can("groups:manage") ? (
-                <Button variant="secondary" onClick={() => setCreating(true)}>
-                  New group
-                </Button>
-              ) : undefined
-            }
-          />
-        </div>
-      ) : null}
-      {query.data && query.data.items.length > 0 ? (
-        <section
-          aria-label="Groups"
-          className="overflow-hidden rounded-lg border border-border-subtle bg-surface"
-        >
-          <div
-            aria-hidden="true"
-            className={`hidden items-center gap-x-4 border-b border-border-subtle bg-surface-sunken px-4 py-2 text-xs font-medium text-fg-secondary md:grid ${ROW_GRID}`}
-          >
-            <span>Group</span>
-            <span>Stay</span>
-            <span>Pickup</span>
-            <span className="justify-self-end">Remaining</span>
-          </div>
-          <ul className="divide-y divide-border-subtle">
-            {query.data.items.map((group) => (
-              <GroupRow key={group.id} group={group} />
-            ))}
-          </ul>
-          <p className="border-t border-border-subtle px-4 py-2 text-xs text-fg-muted">
-            Showing {query.data.items.length} {query.data.items.length === 1 ? "group" : "groups"}
-            {query.data.meta.nextCursor ? " (first page)" : ""}
-          </p>
-        </section>
-      ) : null}
+      {/* Keyed by status: a new status starts again at its first page. */}
+      <GroupList
+        key={status}
+        status={status}
+        canManage={can("groups:manage")}
+        onCreate={() => setCreating(true)}
+      />
       {creating ? (
         <NewGroupDialog
           onClose={() => setCreating(false)}
@@ -150,6 +110,144 @@ export function GroupsWorkspace() {
         />
       ) : null}
     </div>
+  );
+}
+
+/**
+ * The groups of one status, a cursor page at a time ("Load more" appends
+ * the next page). Every page is its own query, so a later page never
+ * replaces an earlier one and a status change never shows the old rows.
+ */
+function GroupList({
+  status,
+  canManage,
+  onCreate,
+}: {
+  status: string;
+  canManage: boolean;
+  onCreate: () => void;
+}) {
+  const [cursors, setCursors] = useState<(string | undefined)[]>([undefined]);
+  return (
+    <section
+      aria-label="Groups"
+      className="overflow-hidden rounded-lg border border-border-subtle bg-surface"
+    >
+      <div
+        aria-hidden="true"
+        className={`hidden items-center gap-x-4 border-b border-border-subtle bg-surface-sunken px-4 py-2 text-xs font-medium text-fg-secondary md:grid ${ROW_GRID}`}
+      >
+        <span>Group</span>
+        <span>Stay</span>
+        <span>Pickup</span>
+        <span className="justify-self-end">Remaining</span>
+      </div>
+      {cursors.map((cursor, index) => (
+        <GroupPage
+          key={cursor ?? "first"}
+          status={status}
+          cursor={cursor}
+          first={index === 0}
+          last={index === cursors.length - 1}
+          loadedBefore={index}
+          canManage={canManage}
+          onCreate={onCreate}
+          onMore={(next) => setCursors((list) => [...list, next])}
+        />
+      ))}
+    </section>
+  );
+}
+
+function GroupPage({
+  status,
+  cursor,
+  first,
+  last,
+  loadedBefore,
+  canManage,
+  onCreate,
+  onMore,
+}: {
+  status: string;
+  cursor: string | undefined;
+  first: boolean;
+  last: boolean;
+  loadedBefore: number;
+  canManage: boolean;
+  onCreate: () => void;
+  onMore: (cursor: string) => void;
+}) {
+  const property = useProperty();
+  const query = useGroupsQuery({ propertyId: property.id, status, cursor });
+  const error = toClientApiError(query.error);
+  if (query.isLoading)
+    return <SkeletonRows rows={first ? 4 : 2} columns={4} label="Loading groups" />;
+  if (error || !query.data) {
+    return (
+      <StatusPanel
+        kind="error"
+        title="Could not load groups"
+        description={error?.message}
+        requestId={error?.requestId}
+        action={
+          <Button variant="secondary" onClick={() => void query.refetch()}>
+            Retry
+          </Button>
+        }
+      />
+    );
+  }
+  if (first && query.data.items.length === 0) {
+    return (
+      <StatusPanel
+        kind="empty"
+        title={EMPTY[status]?.title ?? "No groups here"}
+        description={EMPTY[status]?.description}
+        action={
+          status === "ACTIVE" && canManage ? (
+            <Button variant="secondary" onClick={onCreate}>
+              New group
+            </Button>
+          ) : undefined
+        }
+      />
+    );
+  }
+  const next = query.data.meta.nextCursor;
+  return (
+    <>
+      <ul
+        className={
+          first
+            ? "divide-y divide-border-subtle"
+            : "divide-y divide-border-subtle border-t border-border-subtle"
+        }
+      >
+        {query.data.items.map((group) => (
+          <GroupRow key={group.id} group={group} />
+        ))}
+      </ul>
+      {last ? (
+        <div className="flex items-center justify-between gap-3 border-t border-border-subtle px-4 py-2 text-xs text-fg-muted">
+          <span aria-live="polite">
+            {loadedBefore > 0 || next
+              ? `Showing ${query.data.items.length} more`
+              : `Showing ${query.data.items.length} ${query.data.items.length === 1 ? "group" : "groups"}`}
+          </span>
+          {next ? (
+            <Button
+              size="sm"
+              variant="secondary"
+              pending={query.isFetching}
+              onClick={() => onMore(next)}
+            >
+              Load more
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+    </>
   );
 }
 

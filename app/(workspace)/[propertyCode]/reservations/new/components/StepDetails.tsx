@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import { availableRoomOptions } from "@/components/rooms/roomOptions";
 import { Button } from "@/components/ui/Button";
 import { Select } from "@/components/ui/Select";
 import { StatusPanel } from "@/components/ui/StatusPanel";
@@ -118,13 +119,10 @@ export function StepDetails() {
             placeholder={
               rooms.isLoading ? "Loading rooms…" : walkIn ? "Select a room" : "Assign later"
             }
-            options={(rooms.data ?? [])
+            options={availableRoomOptions(
               // A walk-in goes into the room now: only vacant rooms qualify.
-              .filter((r) => !walkIn || r.frontOfficeStatus === "VACANT")
-              .map((r) => ({
-                value: r.id,
-                label: `${r.number}${r.floor ? ` · ${r.floor}` : ""} · ${r.housekeepingStatus.toLowerCase()}`,
-              }))}
+              (rooms.data ?? []).filter((r) => !walkIn || r.frontOfficeStatus === "VACANT"),
+            )}
             value={details.roomId}
             onChange={set("roomId")}
             hint={rooms.data ? `${rooms.data.length} free for the whole stay` : undefined}

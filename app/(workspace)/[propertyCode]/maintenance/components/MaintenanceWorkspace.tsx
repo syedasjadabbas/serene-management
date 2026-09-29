@@ -22,6 +22,7 @@ import {
 import { toClientApiError } from "@/lib/api/errors";
 import { formatDateTime } from "@/lib/utils/format";
 import {
+  MAINTENANCE_PRIORITIES,
   MAINTENANCE_VIEWS,
   PRIORITY_LABELS,
   type MaintenanceView,
@@ -72,7 +73,11 @@ export function MaintenanceWorkspace() {
   const requested = params.get("view") as MaintenanceView | null;
   const view: MaintenanceView =
     requested && MAINTENANCE_VIEWS.includes(requested) ? requested : "open";
-  const priority = params.get("priority") ?? "";
+  // A stale or hand-edited priority falls back to "all" instead of a 400.
+  const requestedPriority = params.get("priority") ?? "";
+  const priority = (MAINTENANCE_PRIORITIES as readonly string[]).includes(requestedPriority)
+    ? requestedPriority
+    : "";
   const q = params.get("q") ?? "";
 
   if (isLoading) return <PageSkeleton title="Loading maintenance" />;
@@ -145,7 +150,12 @@ export function MaintenanceWorkspace() {
         onSearch={(value) => navigate({ q: value })}
       />
 
-      <RequestList view={view} priority={priority} q={q} />
+      <RequestList
+        view={view}
+        priority={priority}
+        q={q}
+        onClearFilters={() => navigate({ priority: "", q: "" })}
+      />
 
       {reporting ? <NewRequestDialog onClose={() => setReporting(false)} /> : null}
     </div>
@@ -164,44 +174,77 @@ function Toolbar({
   onSearch: (value: string) => void;
 }) {
   const [text, setText] = useState(q);
+  const [tooShort, setTooShort] = useState(false);
   const submit = (event: FormEvent) => {
     event.preventDefault();
     const value = text.trim();
-    if (value.length === 1) return;
+    if (value.length === 1) {
+      setTooShort(true);
+      return;
+    }
+    setTooShort(false);
     onSearch(value);
   };
   return (
     <div className="flex flex-wrap items-center justify-between gap-2">
       <ToggleGroup
         label="Priority"
-        options={["", "URGENT", "HIGH", "NORMAL", "LOW"].map((value) => ({
+        options={["", ...MAINTENANCE_PRIORITIES].map((value) => ({
           value,
           label: value ? PRIORITY_LABELS[value as keyof typeof PRIORITY_LABELS] : "All priorities",
         }))}
         value={priority}
         onChange={onPriority}
       />
-      <form role="search" onSubmit={submit} className="flex gap-2">
-        <label htmlFor="maintenance-search" className="sr-only">
-          Search by title, request number or room
-        </label>
-        <input
-          id="maintenance-search"
-          type="search"
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          placeholder="Title, number or room"
-          className="h-control w-56 max-w-full rounded-md border border-border bg-surface px-2 text-sm"
-        />
-        <Button type="submit" variant="secondary">
-          Search
-        </Button>
+      <form role="search" onSubmit={submit} className="flex flex-col gap-1">
+        <div className="flex gap-2">
+          <label htmlFor="maintenance-search" className="sr-only">
+            Search by title, request number or room
+          </label>
+          <input
+            id="maintenance-search"
+            type="search"
+            value={text}
+            maxLength={100}
+            onChange={(e) => {
+              setText(e.target.value);
+              if (tooShort) setTooShort(false);
+            }}
+            placeholder="Title, number or room"
+            aria-invalid={tooShort || undefined}
+            aria-describedby={tooShort ? "maintenance-search-hint" : undefined}
+            className="h-control w-56 max-w-full rounded-md border border-border bg-surface px-2 text-sm"
+          />
+          <Button type="submit" variant="secondary">
+            Search
+          </Button>
+          {q ? (
+            <Button type="button" variant="ghost" onClick={() => onSearch("")}>
+              Clear
+            </Button>
+          ) : null}
+        </div>
+        {tooShort ? (
+          <p id="maintenance-search-hint" role="alert" className="text-xs text-fg-muted">
+            Type at least 2 characters.
+          </p>
+        ) : null}
       </form>
     </div>
   );
 }
 
-function RequestList({ view, priority, q }: { view: string; priority: string; q: string }) {
+function RequestList({
+  view,
+  priority,
+  q,
+  onClearFilters,
+}: {
+  view: string;
+  priority: string;
+  q: string;
+  onClearFilters: () => void;
+}) {
   const key = `${view}|${priority}|${q}`;
   const [pages, setPages] = useState<{ key: string; cursors: (string | undefined)[] }>({
     key,
@@ -220,6 +263,7 @@ function RequestList({ view, priority, q }: { view: string; priority: string; q:
           first={index === 0}
           isLast={index === cursors.length - 1}
           onLoadMore={(next) => setPages({ key, cursors: [...cursors, next] })}
+          onClearFilters={onClearFilters}
         />
       ))}
     </div>
@@ -234,6 +278,7 @@ function RequestPage({
   first,
   isLast,
   onLoadMore,
+  onClearFilters,
 }: {
   view: string;
   priority: string;
@@ -242,6 +287,7 @@ function RequestPage({
   first: boolean;
   isLast: boolean;
   onLoadMore: (cursor: string) => void;
+  onClearFilters: () => void;
 }) {
   const property = useProperty();
   const { data, isLoading, isFetching, error, refetch } = useMaintenanceRequestsQuery(
@@ -289,6 +335,13 @@ function RequestPage({
             filtered
               ? "Try another priority or search, or clear the filters."
               : EMPTY_TEXT[view as MaintenanceView]
+          }
+          action={
+            filtered ? (
+              <Button variant="secondary" onClick={onClearFilters}>
+                Clear filters
+              </Button>
+            ) : undefined
           }
         />
       </div>

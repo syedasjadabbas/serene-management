@@ -1,4 +1,5 @@
 import "server-only";
+import { confirmationMatchSql } from "@/modules/properties/confirmation-number.sql";
 import { Prisma } from "@/generated/prisma/client";
 import type { Tx } from "@/lib/db/prisma";
 
@@ -166,8 +167,8 @@ function searchCondition(search: { tokens: string[]; raw: string } | null): Pris
         )})`
       : Prisma.sql`FALSE`;
   return Prisma.sql`AND (${nameMatch}
-    OR res."confirmation_number" LIKE ${`${search.raw}%`}
-    OR r."number" = ${search.raw})`;
+    OR ${confirmationMatchSql(Prisma.sql`res."confirmation_number"`, search.raw)}
+    OR upper(r."number") = ${search.raw.trim().toUpperCase()})`;
 }
 
 function cursorCondition(cursor: { v: string; i: string } | null, idColumn: Prisma.Sql) {

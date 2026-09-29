@@ -24,6 +24,37 @@ type Filters = {
 
 const EMPTY: Filters = { scope: "", risk: "", resourceType: "", from: "", to: "" };
 
+/**
+ * Record types the application writes to the audit trail (the server
+ * matches the type exactly, so the filter offers the real names).
+ */
+const RESOURCE_TYPES: { value: string; label: string; group: string }[] = [
+  ["Reservation", "Reservation", "Front office"],
+  ["ReservationRoom", "Reservation room", "Front office"],
+  ["Stay", "Stay", "Front office"],
+  ["Guest", "Guest", "Profiles"],
+  ["AccountProfile", "Company / agent", "Profiles"],
+  ["Group", "Group", "Profiles"],
+  ["Block", "Group block", "Profiles"],
+  ["LoyaltyProgram", "Loyalty program", "Profiles"],
+  ["LoyaltyMembership", "Loyalty membership", "Profiles"],
+  ["Room", "Room", "Rooms"],
+  ["HousekeepingTask", "Housekeeping task", "Rooms"],
+  ["MaintenanceRequest", "Maintenance request", "Rooms"],
+  ["RatePlan", "Rate plan", "Revenue"],
+  ["Package", "Package", "Revenue"],
+  ["Restriction", "Restriction", "Revenue"],
+  ["Folio", "Folio", "Finance"],
+  ["NightAuditRun", "Night audit run", "Finance"],
+  ["BusinessDate", "Business date", "Finance"],
+  ["User", "User", "Administration"],
+  ["UserRoleAssignment", "Role assignment", "Administration"],
+  ["AuthSession", "Sign-in session", "Administration"],
+  ["Property", "Property", "Administration"],
+  ["PropertyConfiguration", "Property settings", "Administration"],
+  ["Organization", "Organization", "Administration"],
+].map(([value, label, group]) => ({ value: value!, label: label!, group: group! }));
+
 function summarize(value: unknown): string {
   if (!value || typeof value !== "object") return "";
   return Object.entries(value as Record<string, unknown>)
@@ -53,7 +84,17 @@ export function OrganizationAuditTrail() {
     ...(filters.to ? { to: filters.to } : {}),
   };
   const logs = useOrganizationAuditLogsQuery(query);
+  // Rows of the current filters and page only: never the previous result.
+  const rows = logs.currentData;
   const error = toClientApiError(logs.error);
+  const invalidRange = Boolean(draft.from && draft.to && draft.from > draft.to);
+  const filtered = Object.values(filters).some(Boolean);
+  const dirty = Object.values(draft).some(Boolean) || filtered;
+  const reset = () => {
+    setDraft(EMPTY);
+    setFilters(EMPTY);
+    setCursors([undefined]);
+  };
   const timezones = new Map((me?.properties ?? []).map((p) => [p.id, p.timezone]));
   const auditable = (me?.properties ?? []).filter(
     (p) => me?.user.isSuperAdmin || p.permissions.includes("audit:read"),
@@ -76,6 +117,7 @@ export function OrganizationAuditTrail() {
         className="grid grid-cols-2 items-end gap-2 rounded-lg border border-border-subtle bg-surface p-3 md:flex md:flex-wrap"
         onSubmit={(event) => {
           event.preventDefault();
+          if (invalidRange) return;
           setFilters(draft);
           setCursors([undefined]);
         }}
@@ -101,21 +143,41 @@ export function OrganizationAuditTrail() {
             { value: "LOW", label: "Low" },
           ]}
         />
-        <TextField
+        <Select
           label="Resource type"
+          placeholder="Any type"
           value={draft.resourceType}
           onChange={set("resourceType")}
-          placeholder="e.g. Reservation"
-          maxLength={60}
+          options={RESOURCE_TYPES}
         />
-        <TextField label="From (UTC)" type="date" value={draft.from} onChange={set("from")} />
-        <TextField label="To (UTC)" type="date" value={draft.to} onChange={set("to")} />
-        <Button type="submit" size="touch" className="col-span-2 md:h-control md:text-sm">
-          Apply
-        </Button>
+        <TextField
+          label="From (UTC)"
+          type="date"
+          value={draft.from}
+          max={draft.to || undefined}
+          onChange={set("from")}
+        />
+        <TextField
+          label="To (UTC)"
+          type="date"
+          value={draft.to}
+          min={draft.from || undefined}
+          onChange={set("to")}
+          errors={invalidRange ? ["To must be on or after From"] : undefined}
+        />
+        <div className="col-span-2 flex gap-2 md:col-span-1">
+          <Button type="submit" disabled={invalidRange} className="flex-1 md:flex-none">
+            Apply
+          </Button>
+          {dirty ? (
+            <Button variant="ghost" onClick={reset}>
+              Reset
+            </Button>
+          ) : null}
+        </div>
       </form>
 
-      {logs.isLoading ? (
+      {logs.isLoading || (logs.isFetching && !rows) ? (
         <StatusPanel kind="loading" title="Loading the audit trail" />
       ) : error ? (
         <StatusPanel
@@ -124,12 +186,25 @@ export function OrganizationAuditTrail() {
           description={Object.values(error.fieldErrors).flat()[0] ?? error.message}
           requestId={error.requestId}
         />
-      ) : logs.data && logs.data.items.length === 0 ? (
-        <StatusPanel kind="empty" title="No audit records match" />
-      ) : logs.data ? (
+      ) : rows && rows.items.length === 0 ? (
+        filtered ? (
+          <StatusPanel
+            kind="empty"
+            title="No audit records match these filters"
+            description="Widen the dates or choose another place, risk or type."
+            action={
+              <Button variant="secondary" onClick={reset}>
+                Reset filters
+              </Button>
+            }
+          />
+        ) : (
+          <StatusPanel kind="empty" title="No audit records yet" />
+        )
+      ) : rows ? (
         <section className="rounded-lg border border-border-subtle bg-surface">
           <ol className="flex flex-col divide-y divide-border-subtle text-sm">
-            {logs.data.items.map((row) => (
+            {rows.items.map((row) => (
               <li key={row.id} className="flex flex-col gap-0.5 px-4 py-2.5">
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge tone={row.property ? "neutral" : "brand"}>
@@ -173,12 +248,12 @@ export function OrganizationAuditTrail() {
                 Newer
               </Button>
             ) : null}
-            {logs.data.meta.nextCursor ? (
+            {rows.meta.nextCursor ? (
               <Button
                 size="sm"
                 variant="secondary"
                 className="ms-auto min-h-11 md:min-h-0"
-                onClick={() => setCursors([...cursors, logs.data!.meta.nextCursor!])}
+                onClick={() => setCursors([...cursors, rows.meta.nextCursor!])}
                 pending={logs.isFetching}
               >
                 Older

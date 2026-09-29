@@ -7,6 +7,7 @@ import { Alert } from "@/components/ui/Alert";
 import { Badge } from "@/components/ui/Badge";
 import { Building2 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
+import { GuestPicker } from "@/components/guests/GuestPicker";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { FormDialog } from "@/components/ui/FormDialog";
 import { Select } from "@/components/ui/Select";
@@ -14,7 +15,6 @@ import { StatusPanel } from "@/components/ui/StatusPanel";
 import { PageSkeleton } from "@/components/ui/PageSkeleton";
 import { TextArea } from "@/components/ui/TextArea";
 import { TextField } from "@/components/ui/TextField";
-import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { useProperty } from "@/hooks/useProperty";
 import {
   useAccountQuery,
@@ -22,7 +22,6 @@ import {
   useSetAccountContactMutation,
   useUpdateAccountMutation,
 } from "@/lib/api/endpoints/accounts.api";
-import { useSearchGuestsQuery } from "@/lib/api/endpoints/guests.api";
 import { toClientApiError } from "@/lib/api/errors";
 import { formatDate, formatDateTime, formatShortDate } from "@/lib/utils/format";
 import type { AccountContactView, AccountDetail } from "@/modules/accounts/accounts.types";
@@ -467,9 +466,6 @@ function RelationshipDialog({
   const [guest, setGuest] = useState<{ id: string; label: string } | null>(
     contact ? { id: contact.guest.id, label: contact.guest.fullName } : null,
   );
-  const [search, setSearch] = useState("");
-  const debounced = useDebouncedValue(search.trim(), 300);
-  const results = useSearchGuestsQuery(debounced, { skip: debounced.length < 2 || !!guest });
   const [kind, setKind] = useState<AccountContactView["kind"]>(contact?.kind ?? "EMPLOYEE");
   const [role, setRole] = useState(contact?.role ?? "");
   const [isPrimary, setIsPrimary] = useState(contact?.isPrimary ?? false);
@@ -492,55 +488,12 @@ function RelationshipDialog({
       pending={state.isLoading}
       error={toClientApiError(state.error)}
     >
-      {guest ? (
-        <p className="flex flex-wrap items-center gap-2 text-sm">
-          Guest: <span className="font-medium">{guest.label}</span>
-          {!contact ? (
-            <Button size="sm" variant="ghost" onClick={() => setGuest(null)}>
-              Change
-            </Button>
-          ) : null}
-        </p>
-      ) : (
-        <div className="flex flex-col gap-2">
-          <TextField
-            label="Find guest"
-            placeholder="Name, e-mail, phone or profile number"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            autoFocus
-          />
-          <div aria-live="polite" className="max-h-48 overflow-y-auto">
-            {debounced.length < 2 ? (
-              <p className="text-sm text-fg-muted">Type at least 2 characters.</p>
-            ) : results.data && results.data.length === 0 ? (
-              <p className="text-sm text-fg-secondary">
-                No guest found. Create the profile in Guests first.
-              </p>
-            ) : (
-              <ul className="divide-y divide-border-subtle rounded-md border border-border-subtle">
-                {(results.data ?? []).map((g) => (
-                  <li key={g.id}>
-                    <button
-                      type="button"
-                      className="flex min-h-11 w-full flex-col items-start px-3 py-1.5 text-left text-sm hover:bg-surface-sunken"
-                      onClick={() =>
-                        setGuest({ id: g.id, label: `${g.fullName} · ${g.profileNumber}` })
-                      }
-                    >
-                      <span className="font-medium">{g.fullName}</span>
-                      <span className="text-xs text-fg-muted">
-                        {g.profileNumber}
-                        {g.email ? ` · ${g.email}` : ""}
-                      </span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </div>
-      )}
+      <GuestPicker
+        value={guest}
+        onChange={setGuest}
+        disabled={Boolean(contact)}
+        emptyText="No guest found. Create the profile in Guests first."
+      />
       <div className="grid gap-3 sm:grid-cols-2">
         <Select
           label="Relationship"

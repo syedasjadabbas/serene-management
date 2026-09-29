@@ -54,8 +54,14 @@ export function HousekeepingWorkspace() {
     skipPollingIfUnfocused: true,
   });
   const summaryError = toClientApiError(summary.error);
+  // The room board needs rooms:read; a housekeeping-only user starts on their tasks.
+  const canBoard = can("rooms:read");
+  const defaultView: View = canBoard ? "board" : "mine";
   const requested = params.get("view") as View | null;
-  const view: View = requested && VIEWS.includes(requested) ? requested : "board";
+  const view: View =
+    requested && VIEWS.includes(requested) && (requested !== "board" || canBoard)
+      ? requested
+      : defaultView;
   const filter = BOARD_FILTERS.some((f) => f.value === params.get("filter"))
     ? params.get("filter")!
     : "all";
@@ -83,15 +89,24 @@ export function HousekeepingWorkspace() {
   function navigate(next: { view?: View; filter?: string }) {
     const search = new URLSearchParams();
     const nextView = next.view ?? view;
-    if (nextView !== "board") search.set("view", nextView);
+    if (nextView !== defaultView) search.set("view", nextView);
     const nextFilter = next.view && next.view !== view ? "all" : (next.filter ?? filter);
     if (nextView === "board" && nextFilter !== "all") search.set("filter", nextFilter);
-    router.replace((search.size ? `${pathname}?${search.toString()}` : pathname) as Route);
+    // The room board's floor and room type stay while the view stays.
+    if (!next.view || next.view === view) {
+      for (const key of ["floor", "roomType"]) {
+        const value = params.get(key);
+        if (value) search.set(key, value);
+      }
+    }
+    router.replace((search.size ? `${pathname}?${search.toString()}` : pathname) as Route, {
+      scroll: false,
+    });
   }
 
   const counts = summary.data?.tasks;
   const tabs: ViewNavItem<View>[] = [
-    { key: "board", label: "Room board", count: undefined },
+    ...(canBoard ? [{ key: "board" as const, label: "Room board", count: undefined }] : []),
     { key: "mine", label: "My tasks", count: counts?.mine },
     { key: "open", label: "Open tasks", count: counts?.open },
     { key: "inspections", label: "Inspections", count: counts?.awaitingInspection },
@@ -132,7 +147,7 @@ export function HousekeepingWorkspace() {
             value={filter}
             onChange={(value) => navigate({ filter: value })}
           />
-          <RoomBoardPanel filter={filter} />
+          <RoomBoardPanel filter={filter} onClearFilter={() => navigate({ filter: "all" })} />
         </>
       ) : (
         <TaskList view={view} />

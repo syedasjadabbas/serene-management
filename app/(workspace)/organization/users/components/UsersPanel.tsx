@@ -38,6 +38,8 @@ export function UsersPanel() {
   const users = useUsersQuery({ page, pageSize: PAGE_SIZE, ...(search ? { q: search } : {}) });
   const roles = useRolesQuery();
   const error = toClientApiError(users.error);
+  // Only the page for the current search; `data` keeps the previous one.
+  const list = users.currentData;
 
   const orgManage =
     !!me && (me.user.isSuperAdmin || me.organizationPermissions.includes("users:manage"));
@@ -73,12 +75,17 @@ export function UsersPanel() {
           maxLength={100}
           className="min-w-0 flex-1 basis-56"
         />
-        <Button type="submit" size="touch" className="md:h-control md:text-sm">
+        <Button
+          type="submit"
+          size="touch"
+          className="md:h-control md:text-sm"
+          pending={users.isFetching}
+        >
           Search
         </Button>
       </form>
 
-      {users.isLoading ? (
+      {users.isFetching && !list ? (
         <StatusPanel kind="loading" title="Loading users" />
       ) : error ? (
         <StatusPanel
@@ -87,12 +94,37 @@ export function UsersPanel() {
           description={error.message}
           requestId={error.requestId}
         />
-      ) : users.data && users.data.items.length === 0 ? (
-        <StatusPanel kind="empty" title="No users match" />
-      ) : users.data ? (
+      ) : list && list.items.length === 0 ? (
+        search ? (
+          <StatusPanel
+            kind="empty"
+            title={`No users match “${search}”`}
+            description="Try another name or e-mail."
+            action={
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => {
+                  setQ("");
+                  setSearch("");
+                  setPage(1);
+                }}
+              >
+                Clear search
+              </Button>
+            }
+          />
+        ) : (
+          <StatusPanel
+            kind="empty"
+            title="No users yet"
+            description="Users are invited outside this workspace; once invited they appear here."
+          />
+        )
+      ) : list ? (
         <section className="rounded-lg border border-border-subtle bg-surface">
           <ul className="flex flex-col divide-y divide-border-subtle">
-            {users.data.items.map((user) => (
+            {list.items.map((user) => (
               <li
                 key={user.id}
                 className="flex flex-col gap-2 px-4 py-3 md:flex-row md:items-start"
@@ -198,9 +230,9 @@ export function UsersPanel() {
           </ul>
           <div className="flex flex-wrap items-center gap-2 border-t border-border-subtle px-4 py-2.5 text-sm">
             <span className="text-fg-muted">
-              Page {users.data.meta.page} of{" "}
-              {Math.max(1, Math.ceil(users.data.meta.total / users.data.meta.pageSize))} ·{" "}
-              {users.data.meta.total} users
+              Page {list.meta.page} of{" "}
+              {Math.max(1, Math.ceil(list.meta.total / list.meta.pageSize))} · {list.meta.total}{" "}
+              users
             </span>
             <Button
               size="sm"
@@ -215,7 +247,7 @@ export function UsersPanel() {
               size="sm"
               variant="secondary"
               className="min-h-11 md:min-h-0"
-              disabled={page * PAGE_SIZE >= users.data.meta.total}
+              disabled={page * PAGE_SIZE >= list.meta.total}
               onClick={() => setPage(page + 1)}
             >
               Next

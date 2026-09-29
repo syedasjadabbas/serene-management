@@ -1,8 +1,11 @@
 "use client";
 
+import { Search } from "lucide-react";
 import Link from "next/link";
 import type { Route } from "next";
 import { usePathname } from "next/navigation";
+import { type ReactNode, useState } from "react";
+import { highlight, matches } from "@/components/ui/listbox";
 import { useMeQuery } from "@/lib/api/endpoints/session.api";
 import { Disclosure } from "./Disclosure";
 import { canUseOrganizationWorkspace, switchHref } from "./sections";
@@ -48,43 +51,82 @@ export function WorkspaceSwitcher({
   if (!me || (properties.length <= 1 && !organization))
     return <div className={pill + " flex min-w-0 items-center hover:bg-surface"}>{label}</div>;
 
+  const searchable = properties.length > 6;
   const itemClass =
     "flex items-baseline gap-2 rounded-md px-2.5 py-2 text-sm hover:bg-surface-sunken aria-[current=page]:bg-brand-subtle aria-[current=page]:font-semibold aria-[current=page]:text-brand";
   return (
     <Disclosure label={label} buttonClassName={pill}>
       {(close) => (
-        <nav aria-label="Switch workspace">
-          <ul className="flex flex-col">
-            {organization ? (
-              <li className="mb-1 border-b border-border-subtle pb-1">
-                <Link
-                  href={"/organization" as Route}
-                  onClick={close}
-                  aria-current={current === null ? "page" : undefined}
-                  className={itemClass}
-                >
-                  <span className="w-12 font-mono text-xs text-fg-muted">ORG</span>
-                  <span>{me.organization.name}</span>
-                </Link>
-              </li>
-            ) : null}
-            {properties.map((p) => (
-              <li key={p.id}>
-                <Link
-                  href={(current ? switchHref(me, p, pathname) : `/${p.code}`) as Route}
-                  onClick={close}
-                  aria-current={p.id === current?.id ? "page" : undefined}
-                  className={itemClass}
-                >
-                  <span className="w-12 font-mono text-xs text-fg-muted">{p.code}</span>
-                  <span>{p.name}</span>
-                  <span className="ms-auto ps-3 text-2xs text-fg-muted">{p.currencyCode}</span>
-                </Link>
-              </li>
-            ))}
-          </ul>
-        </nav>
+        <PropertyList searchable={searchable}>
+          {(filter, query) => (
+            <nav aria-label="Switch workspace">
+              <ul className="flex flex-col">
+                {organization ? (
+                  <li className="mb-1 border-b border-border-subtle pb-1">
+                    <Link
+                      href={"/organization" as Route}
+                      onClick={close}
+                      aria-current={current === null ? "page" : undefined}
+                      className={itemClass}
+                    >
+                      <span className="w-12 font-mono text-xs text-fg-muted">ORG</span>
+                      <span>{me.organization.name}</span>
+                    </Link>
+                  </li>
+                ) : null}
+                {properties
+                  .filter((p) => filter(p.code, p.name))
+                  .map((p) => (
+                    <li key={p.id}>
+                      <Link
+                        href={(current ? switchHref(me, p, pathname) : `/${p.code}`) as Route}
+                        onClick={close}
+                        aria-current={p.id === current?.id ? "page" : undefined}
+                        className={itemClass}
+                      >
+                        <span className="w-12 font-mono text-xs text-fg-muted">
+                          {highlight(p.code, query)}
+                        </span>
+                        <span>{highlight(p.name, query)}</span>
+                        <span className="ms-auto ps-3 text-2xs text-fg-muted">
+                          {p.currencyCode}
+                        </span>
+                      </Link>
+                    </li>
+                  ))}
+              </ul>
+            </nav>
+          )}
+        </PropertyList>
       )}
     </Disclosure>
+  );
+}
+
+/** Adds the family search field above the list once there are many properties. */
+function PropertyList({
+  searchable,
+  children,
+}: {
+  searchable: boolean;
+  children: (filter: (...texts: string[]) => boolean, query: string) => ReactNode;
+}) {
+  const [query, setQuery] = useState("");
+  if (!searchable) return <>{children(() => true, "")}</>;
+  return (
+    <div className="flex w-80 max-w-[calc(100vw-2rem)] flex-col gap-1.5">
+      <label className="flex h-10 items-center gap-2 rounded-md border border-border bg-surface px-3 shadow-card focus-within:border-brand">
+        <Search aria-hidden="true" className="size-4 text-fg-muted" />
+        <span className="sr-only">Find a property</span>
+        <input
+          type="search"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Find a property…"
+          className="h-full min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-fg-muted"
+        />
+      </label>
+      {children((...texts) => !query.trim() || matches(query, ...texts), query)}
+    </div>
   );
 }

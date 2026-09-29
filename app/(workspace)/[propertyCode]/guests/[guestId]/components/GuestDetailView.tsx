@@ -433,8 +433,18 @@ function HistoryPanel({ guestId }: { guestId: string }) {
     cursor: cursors.at(-1),
   });
   const error = toClientApiError(query.error);
-  const rows = query.data?.items ?? [];
-  const properties = query.data?.meta.properties ?? [];
+  // Rows come from `currentData` so a filter change never shows the previous
+  // filter's rows; the property options may keep the last known list.
+  const data = query.currentData;
+  const loading = query.isFetching && !data && !error;
+  const rows = data?.items ?? [];
+  const properties = (data ?? query.data)?.meta.properties ?? [];
+  const filtered = propertyId !== "" || status !== "";
+  const clearFilters = () => {
+    setPropertyId("");
+    setStatus("");
+    setCursors([undefined]);
+  };
   return (
     <section className="rounded-lg border border-border-subtle bg-surface p-4">
       <div className="mb-2 flex flex-wrap items-end gap-3">
@@ -464,13 +474,41 @@ function HistoryPanel({ guestId }: { guestId: string }) {
           }}
         />
       </div>
-      {error ? <p className="text-sm text-danger">{error.message}</p> : null}
-      {query.isLoading ? <p className="text-sm text-fg-muted">Loading…</p> : null}
-      {!query.isLoading && rows.length === 0 ? (
-        <p className="text-sm text-fg-secondary">No reservations.</p>
+      {error ? (
+        <StatusPanel
+          kind="error"
+          title="Could not load reservations"
+          description={error.message}
+          requestId={error.requestId}
+          action={
+            <Button size="touch" variant="secondary" onClick={() => void query.refetch()}>
+              Retry
+            </Button>
+          }
+        />
+      ) : null}
+      {loading ? <StatusPanel kind="loading" title="Loading reservations" /> : null}
+      {data && rows.length === 0 ? (
+        filtered ? (
+          <StatusPanel
+            kind="empty"
+            title="No reservations match these filters"
+            action={
+              <Button size="touch" variant="secondary" onClick={clearFilters}>
+                Clear filters
+              </Button>
+            }
+          />
+        ) : (
+          <StatusPanel
+            kind="empty"
+            title="No reservations yet"
+            description="Reservations and stays of this guest appear here."
+          />
+        )
       ) : null}
       {rows.length > 0 ? (
-        <div className="relative overflow-x-auto">
+        <div className="relative overflow-x-auto" aria-busy={query.isFetching}>
           <table className="w-full min-w-[720px] text-sm">
             <caption className="sr-only">Reservations of the guest</caption>
             <thead className="text-left text-xs text-fg-muted">
@@ -554,7 +592,7 @@ function HistoryPanel({ guestId }: { guestId: string }) {
           </table>
         </div>
       ) : null}
-      {cursors.length > 1 || query.data?.meta.nextCursor ? (
+      {cursors.length > 1 || data?.meta.nextCursor ? (
         <div className="mt-2 flex justify-between gap-2">
           <Button
             size="touch"
@@ -567,8 +605,11 @@ function HistoryPanel({ guestId }: { guestId: string }) {
           <Button
             size="touch"
             variant="secondary"
-            disabled={!query.data?.meta.nextCursor}
-            onClick={() => setCursors((c) => [...c, query.data!.meta.nextCursor!])}
+            disabled={!data?.meta.nextCursor}
+            onClick={() => {
+              const next = data?.meta.nextCursor;
+              if (next) setCursors((c) => [...c, next]);
+            }}
           >
             Older
           </Button>

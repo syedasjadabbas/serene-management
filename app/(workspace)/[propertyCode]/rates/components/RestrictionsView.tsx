@@ -28,19 +28,36 @@ import { RESTRICTION_LABELS } from "./RateCalendarPanel";
  */
 export function RestrictionsView() {
   const property = useProperty();
-  const { can } = usePermissions(property.id);
+  const { can, isLoading: permissionsLoading } = usePermissions(property.id);
+  // The restrictions API is gated by availability:read, not the tab's rates:read.
+  const canRead = can("availability:read");
   const options = useRateOptionsQuery(property.id);
+  const optionsError = toClientApiError(options.error);
   const [from, setFrom] = useState("");
   const start = from || options.data?.businessDate || "";
   const query = useRestrictionsQuery(
     { propertyId: property.id, from: start, to: start ? addDays(start, 30) : "" },
-    { skip: !start },
+    { skip: !start || !canRead },
   );
   const error = toClientApiError(query.error);
   const [editing, setEditing] = useState(false);
-  const rows = query.data ?? [];
-  const byDate = new Map<string, typeof rows>();
-  for (const row of rows) byDate.set(row.stayDate, [...(byDate.get(row.stayDate) ?? []), row]);
+  // `currentData` belongs to the current period only; never show another period's rows.
+  const rows = query.currentData;
+  const loading =
+    !optionsError && !error && (options.isLoading || !start || (query.isFetching && !rows));
+  const byDate = new Map<string, NonNullable<typeof rows>>();
+  for (const row of rows ?? [])
+    byDate.set(row.stayDate, [...(byDate.get(row.stayDate) ?? []), row]);
+
+  if (permissionsLoading) return <StatusPanel kind="loading" title="Loading restrictions" />;
+  if (!canRead)
+    return (
+      <StatusPanel
+        kind="forbidden"
+        title="Restrictions unavailable"
+        description="You need the availability:read permission to see restrictions."
+      />
+    );
 
   return (
     <section className="flex flex-col gap-3">
@@ -58,11 +75,34 @@ export function RestrictionsView() {
           </Button>
         ) : null}
       </div>
-      {query.isLoading ? <StatusPanel kind="loading" title="Loading restrictions" /> : null}
-      {error ? (
-        <StatusPanel kind="error" title="Could not load restrictions" description={error.message} />
+      {optionsError ? (
+        <StatusPanel
+          kind="error"
+          title="Could not load the business date"
+          description={optionsError.message}
+          requestId={optionsError.requestId}
+          action={
+            <Button size="touch" variant="secondary" onClick={() => void options.refetch()}>
+              Retry
+            </Button>
+          }
+        />
       ) : null}
-      {!query.isLoading && !error && rows.length === 0 ? (
+      {loading ? <StatusPanel kind="loading" title="Loading restrictions" /> : null}
+      {error ? (
+        <StatusPanel
+          kind="error"
+          title="Could not load restrictions"
+          description={error.message}
+          requestId={error.requestId}
+          action={
+            <Button size="touch" variant="secondary" onClick={() => void query.refetch()}>
+              Retry
+            </Button>
+          }
+        />
+      ) : null}
+      {query.isSuccess && rows && rows.length === 0 ? (
         <StatusPanel
           kind="empty"
           title="No restrictions in this period"

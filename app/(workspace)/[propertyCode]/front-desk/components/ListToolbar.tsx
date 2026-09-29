@@ -49,6 +49,7 @@ export function ListToolbar({
               type="search"
               value={text}
               onChange={(e) => setText(e.target.value)}
+              maxLength={100}
               placeholder="Guest, confirmation or room"
               aria-invalid={error ? true : undefined}
               aria-describedby={error ? "front-desk-search-error" : undefined}

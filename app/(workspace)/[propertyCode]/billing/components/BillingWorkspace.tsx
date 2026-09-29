@@ -38,8 +38,14 @@ export function BillingWorkspace() {
     ? (params.get("view") as FolioListView)
     : "in_house";
   const q = params.get("q") ?? "";
-  const [search, setSearch] = useState(q);
-  const [cursors, setCursors] = useState<(string | undefined)[]>([undefined]);
+  // Load-more cursors belong to one query; any URL change (tab, search, Back,
+  // a nav link) starts again from the first page.
+  const listKey = `${view}|${q}`;
+  const [pages, setPages] = useState<{ key: string; cursors: (string | undefined)[] }>({
+    key: listKey,
+    cursors: [undefined],
+  });
+  const cursors = pages.key === listKey ? pages.cursors : [undefined];
 
   const setParam = (updates: Record<string, string>) => {
     const next = new URLSearchParams(params);
@@ -47,8 +53,8 @@ export function BillingWorkspace() {
       if (value) next.set(key, value);
       else next.delete(key);
     }
-    setCursors([undefined]);
-    router.replace(`${pathname}?${next.toString()}` as Route);
+    const search = next.toString();
+    router.replace((search ? `${pathname}?${search}` : pathname) as Route);
   };
 
   if (permissionsLoading) return <PageSkeleton title="Loading billing" />;
@@ -69,26 +75,7 @@ export function BillingWorkspace() {
         breadcrumbs={[{ label: property.code, href: `/${property.code}` }, { label: "Billing" }]}
         title="Billing"
         description={`Guest folios in ${property.currencyCode}. Open a stay to post charges and take payments.`}
-        actions={
-          <form
-            className="flex w-full items-end gap-2 sm:w-auto"
-            onSubmit={(event) => {
-              event.preventDefault();
-              setParam({ q: search.trim() });
-            }}
-            role="search"
-          >
-            <TextField
-              label="Guest, confirmation or room"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="min-w-0 flex-1 sm:w-64"
-            />
-            <Button type="submit" variant="secondary">
-              Search
-            </Button>
-          </form>
-        }
+        actions={<SearchForm key={q} q={q} onSearch={(value) => setParam({ q: value })} />}
       />
 
       <ToggleGroup
@@ -101,17 +88,49 @@ export function BillingWorkspace() {
       <section className="overflow-hidden rounded-lg border border-border-subtle bg-surface">
         {cursors.map((cursor, index) => (
           <FolioPage
-            key={cursor ?? "first"}
+            key={`${listKey}-${cursor ?? "first"}`}
             view={view}
             q={q}
             cursor={cursor}
             first={index === 0}
             last={index === cursors.length - 1}
-            onMore={(next) => setCursors((list) => [...list, next])}
+            onMore={(next) => setPages({ key: listKey, cursors: [...cursors, next] })}
+            onClearSearch={() => setParam({ q: "" })}
           />
         ))}
       </section>
     </div>
+  );
+}
+
+/** Search box; keyed by `q` so it re-initialises whenever the URL search changes. */
+function SearchForm({ q, onSearch }: { q: string; onSearch: (value: string) => void }) {
+  const [search, setSearch] = useState(q);
+  return (
+    <form
+      className="flex w-full items-end gap-2 sm:w-auto"
+      onSubmit={(event) => {
+        event.preventDefault();
+        onSearch(search.trim());
+      }}
+      role="search"
+    >
+      <TextField
+        label="Guest, confirmation or room"
+        value={search}
+        maxLength={100}
+        onChange={(e) => setSearch(e.target.value)}
+        className="min-w-0 flex-1 sm:w-64"
+      />
+      <Button type="submit" variant="secondary">
+        Search
+      </Button>
+      {q ? (
+        <Button type="button" variant="ghost" onClick={() => onSearch("")}>
+          Clear
+        </Button>
+      ) : null}
+    </form>
   );
 }
 
@@ -122,6 +141,7 @@ function FolioPage({
   first,
   last,
   onMore,
+  onClearSearch,
 }: {
   view: FolioListView;
   q: string;
@@ -129,11 +149,13 @@ function FolioPage({
   first: boolean;
   last: boolean;
   onMore: (cursor: string) => void;
+  onClearSearch: () => void;
 }) {
   const property = useProperty();
   const query = useFoliosQuery({ propertyId: property.id, view, q: q || undefined, cursor });
   const error = toClientApiError(query.error);
-  if (query.isLoading) return <StatusPanel kind="loading" title="Loading folios" />;
+  // currentData is only ever this page's args; never show another query's rows.
+  const data = query.currentData;
   if (error) {
     return (
       <StatusPanel
@@ -141,16 +163,35 @@ function FolioPage({
         title="Could not load folios"
         description={error.message}
         requestId={error.requestId}
+        action={
+          <Button variant="secondary" onClick={() => void query.refetch()}>
+            Retry
+          </Button>
+        }
       />
     );
   }
-  const rows = query.data?.items ?? [];
+  if (!data) return <StatusPanel kind="loading" title="Loading folios" />;
+  const rows = data.items;
   if (first && rows.length === 0) {
     return (
       <StatusPanel
         kind="empty"
         title={q ? "No matching guests" : "No folios in this view"}
-        description={view === "open_balance" ? "Every account is settled." : undefined}
+        description={
+          q
+            ? "Try another name, confirmation or room number."
+            : view === "open_balance"
+              ? "Every account is settled."
+              : undefined
+        }
+        action={
+          q ? (
+            <Button variant="secondary" onClick={onClearSearch}>
+              Clear search
+            </Button>
+          ) : undefined
+        }
       />
     );
   }
@@ -163,9 +204,14 @@ function FolioPage({
           <FolioRow key={row.reservationRoomId} row={row} />
         ))}
       </ul>
-      {last && query.data?.meta.nextCursor ? (
+      {last && data.meta.nextCursor ? (
         <div className="border-t border-border-subtle p-3 text-center">
-          <Button variant="secondary" onClick={() => onMore(query.data!.meta.nextCursor!)}>
+          <Button
+            variant="secondary"
+            pending={query.isFetching}
+            disabled={query.isFetching}
+            onClick={() => onMore(data.meta.nextCursor!)}
+          >
             Load more
           </Button>
         </div>

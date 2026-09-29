@@ -8,7 +8,7 @@ const MANAGED_TYPES = ["COMPANY", "TRAVEL_AGENT"] as const;
 export function findAccountsPage(
   tx: Tx,
   organizationId: string,
-  filters: { q?: string; type?: string; status: "ACTIVE" | "INACTIVE" },
+  filters: { q?: string; code?: string; type?: string; status: "ACTIVE" | "INACTIVE" },
   after: { name: string; id: string } | null,
   limit: number,
 ) {
@@ -25,7 +25,7 @@ export function findAccountsPage(
     and.push({
       OR: [
         { AND: words.map((w) => ({ searchName: { contains: w } })) },
-        { code: filters.q.toUpperCase() },
+        { code: filters.code ?? filters.q.toUpperCase() },
       ],
     });
   }

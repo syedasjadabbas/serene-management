@@ -35,7 +35,18 @@ function stayState(row: StayRow): { label: string; tone: BadgeTone } {
 }
 
 /** In-house guests, or departures (due out and departed on the business date). */
-export function StaysView({ kind, filter, q }: { kind: Kind; filter: string; q: string }) {
+export function StaysView({
+  kind,
+  filter,
+  q,
+  onClear,
+}: {
+  kind: Kind;
+  filter: string;
+  q: string;
+  /** Clears the list filter and search (shown on a filtered empty list). */
+  onClear: () => void;
+}) {
   const { cursors, loadMore } = useCursorPages(`${kind}|${filter}|${q}`);
   const [checkingOut, setCheckingOut] = useState<string | null>(null);
   const [done, setDone] = useState<StayDetail | null>(null);
@@ -87,13 +98,16 @@ export function StaysView({ kind, filter, q }: { kind: Kind; filter: string; q: 
           </thead>
           {cursors.map((cursor, index) => (
             <StaysPage
-              key={cursor ?? "first"}
+              // Keyed by the list too: a filter or search change remounts the pages
+              // rather than showing the previous list's rows or cursor.
+              key={`${kind}|${filter}|${q}|${cursor ?? "first"}`}
               kind={kind}
               filter={filter}
               q={q}
               cursor={cursor}
               isLast={index === cursors.length - 1}
               onLoadMore={loadMore}
+              onClear={onClear}
               onCheckOut={(stayId) => {
                 setDone(null);
                 setCheckingOut(stayId);
@@ -123,6 +137,7 @@ function StaysPage({
   isLast,
   onLoadMore,
   onCheckOut,
+  onClear,
 }: {
   kind: Kind;
   filter: string;
@@ -130,6 +145,7 @@ function StaysPage({
   cursor: string | undefined;
   isLast: boolean;
   onLoadMore: (cursor: string) => void;
+  onClear: () => void;
   onCheckOut: (stayId: string) => void;
 }) {
   const property = useProperty();
@@ -144,11 +160,15 @@ function StaysPage({
   const polling = { pollingInterval: cursor ? 0 : POLL_MS, skipPollingIfUnfocused: true };
   const inHouse = useInHouseQuery(args, { ...polling, skip: kind !== "in-house" });
   const departures = useDeparturesQuery(args, { ...polling, skip: kind !== "departures" });
-  const { data, isLoading, isFetching, error, refetch } =
-    kind === "in-house" ? inHouse : departures;
+  // currentData belongs to these exact arguments, never to a previous filter.
+  const {
+    currentData: data,
+    isFetching,
+    error,
+    refetch,
+  } = kind === "in-house" ? inHouse : departures;
   const apiError = toClientApiError(error);
 
-  if (isLoading) return <MessageRow>{<Spinner label="Loading guests" />}</MessageRow>;
   if (apiError) {
     return (
       <MessageRow tone="danger">
@@ -159,14 +179,23 @@ function StaysPage({
       </MessageRow>
     );
   }
-  if (!data || (data.items.length === 0 && !cursor)) {
+  // No rows for these arguments yet: loading, never the previous list.
+  if (!data) return <MessageRow>{<Spinner label="Loading guests" />}</MessageRow>;
+  if (data.items.length === 0 && !cursor) {
     return (
       <MessageRow>
-        {q || filter !== "all"
-          ? "No guests match."
-          : kind === "in-house"
-            ? "No guests in house."
-            : "No departures for the business date."}
+        {q || filter !== "all" ? (
+          <>
+            No guests match.{" "}
+            <Button size="sm" variant="secondary" onClick={onClear}>
+              Clear filters
+            </Button>
+          </>
+        ) : kind === "in-house" ? (
+          "No guests in house."
+        ) : (
+          "No departures for the business date."
+        )}
       </MessageRow>
     );
   }

@@ -658,9 +658,14 @@ export async function listTasks(
   const businessDate = requireBusinessDate(ctx);
   const date = fromDateOnly(businessDate);
   const open = { in: [...OPEN_TASK_STATUSES] };
+  // Inspections are scoped by the awaiting-inspection rule alone: a cleaned
+  // task waits for inspection whatever its date (night audit leaves it), so
+  // the list shows exactly what the summary's awaitingInspection counts.
   const where: Prisma.HousekeepingTaskWhereInput = {
     propertyId: ctx.propertyId,
-    OR: [{ businessDate: date }, { businessDate: { lt: date }, status: open }],
+    ...(query.view === "inspections"
+      ? {}
+      : { OR: [{ businessDate: date }, { businessDate: { lt: date }, status: open }] }),
     ...(query.roomId ? { roomId: query.roomId } : {}),
   };
   const and: Prisma.HousekeepingTaskWhereInput[] = [];

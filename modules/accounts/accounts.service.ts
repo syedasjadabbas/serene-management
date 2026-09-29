@@ -70,6 +70,9 @@ export async function listAccounts(
     ctx.organizationId,
     {
       q: query.q ? normalizeName(query.q) : undefined,
+      // Codes may contain "_" and other characters that name normalisation
+      // turns into spaces: match them against the raw text.
+      code: query.q ? query.q.trim().toUpperCase() : undefined,
       type: query.type,
       status: query.status,
     },

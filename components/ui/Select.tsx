@@ -1,69 +1,77 @@
-import { type SelectHTMLAttributes, forwardRef, useId } from "react";
-import { cn } from "./cn";
-import { controlClass, fieldErrorClass, fieldHintClass, fieldLabelClass } from "./field";
+"use client";
+
+import type { LucideIcon } from "lucide-react";
+import { SearchableSelect } from "./SearchableSelect";
 
 export interface SelectOption {
   value: string;
   label: string;
+  /** One line under the label in the list. */
+  description?: string;
+  /** Options with the same group are listed under one heading. */
+  group?: string;
+  icon?: LucideIcon;
+  disabled?: boolean;
 }
 
-export interface SelectProps extends Omit<SelectHTMLAttributes<HTMLSelectElement>, "id"> {
+/** The change event Select emits (the shape handlers read: `e.target.value`). */
+export interface SelectChangeEvent {
+  target: { value: string };
+  currentTarget: { value: string };
+}
+
+export interface SelectProps {
   label: string;
   options: readonly SelectOption[];
+  value?: string;
+  onChange?: (event: SelectChangeEvent) => void;
+  /**
+   * First, empty choice ("All floors", "Select"): shown when nothing is
+   * selected and selectable to go back to nothing, as with a native select.
+   */
   placeholder?: string;
   errors?: string[];
   hint?: string;
+  disabled?: boolean;
+  className?: string;
+  /** Search field in the list; by default when there are more than 7 options. */
+  searchable?: boolean;
 }
 
-/** Native select (keyboard and screen-reader friendly) with label, hint and error. */
-export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select(
-  {
-    label,
-    options,
-    placeholder,
-    errors,
-    hint,
-    className,
-    "aria-describedby": describedByProp,
-    ...props
-  },
-  ref,
-) {
-  const id = useId();
-  const error = errors?.[0];
-  const describedBy = [describedByProp, hint ? `${id}-hint` : null, error ? `${id}-error` : null]
-    .filter(Boolean)
-    .join(" ");
+/**
+ * Form and filter dropdown with label, hint and error: the SERENE
+ * SearchableSelect (branded listbox, search on longer lists, full keyboard
+ * support) behind the simple `options` / `value` / `onChange(e)` API every
+ * screen uses.
+ */
+export function Select({
+  label,
+  options,
+  value = "",
+  onChange,
+  placeholder,
+  errors,
+  hint,
+  disabled,
+  className,
+  searchable,
+}: SelectProps) {
+  const items =
+    placeholder !== undefined
+      ? [{ value: "", label: placeholder }, ...options.filter((o) => o.value !== "")]
+      : options;
   return (
-    <div className={cn("flex flex-col gap-1", className)}>
-      <label htmlFor={id} className={fieldLabelClass}>
-        {label}
-      </label>
-      <select
-        ref={ref}
-        {...props}
-        id={id}
-        aria-invalid={error ? true : undefined}
-        aria-describedby={describedBy || undefined}
-        className={controlClass(Boolean(error), "h-control px-2.5")}
-      >
-        {placeholder !== undefined ? <option value="">{placeholder}</option> : null}
-        {options.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
-      {hint ? (
-        <p id={`${id}-hint`} className={fieldHintClass}>
-          {hint}
-        </p>
-      ) : null}
-      {error ? (
-        <p id={`${id}-error`} className={fieldErrorClass}>
-          {error}
-        </p>
-      ) : null}
-    </div>
+    <SearchableSelect
+      label={label}
+      items={items}
+      value={value}
+      onChange={(next) => onChange?.({ target: { value: next }, currentTarget: { value: next } })}
+      placeholder={placeholder ?? "Select"}
+      searchable={searchable}
+      disabled={disabled}
+      errors={errors}
+      hint={hint}
+      className={className}
+    />
   );
-});
+}

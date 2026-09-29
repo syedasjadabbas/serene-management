@@ -3,11 +3,11 @@ import { AppShell } from "@/components/workspace/AppShell";
 import { UserMenu } from "@/components/workspace/UserMenu";
 import { BusinessDateBadge } from "./BusinessDateBadge";
 import { PropertySwitcher } from "./PropertySwitcher";
-import { ReservationQuickSearch } from "./ReservationQuickSearch";
+import { PropertyGlobalSearch } from "./PropertyGlobalSearch";
 import { WorkspaceNav } from "./WorkspaceNav";
 
 /**
- * Property workspace frame: property context, reservation search, business
+ * Property workspace frame: property context, global search, business
  * date and account in the header, the property navigation under it (in the
  * drawer below lg). The navigation reads `?tab=` to mark tab destinations
  * (Companies, Loyalty, Packages), hence the Suspense boundaries.
@@ -27,7 +27,7 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
       }
       account={<UserMenu variant="panel" />}
       context={<PropertySwitcher />}
-      search={<ReservationQuickSearch />}
+      search={<PropertyGlobalSearch />}
       actions={
         <>
           <BusinessDateBadge />

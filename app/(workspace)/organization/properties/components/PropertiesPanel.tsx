@@ -4,6 +4,7 @@ import Link from "next/link";
 import type { Route } from "next";
 import { useState } from "react";
 import { Hotel } from "lucide-react";
+import { Alert } from "@/components/ui/Alert";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -32,17 +33,27 @@ export function PropertiesPanel() {
   const dates = new Map(
     (overview.data?.properties ?? []).map((p) => [p.property.id, p.businessDate]),
   );
-  const error = toClientApiError(properties.error ?? overview.error);
+  const error = toClientApiError(properties.error);
+  // The overview only adds business dates and the manage flag; when it fails
+  // the list is still shown, with dates as "—".
+  const overviewFailed = !!overview.error && !overview.data;
 
   if (properties.isLoading || overview.isLoading)
     return <PageSkeleton title="Loading properties" />;
   if (error || !properties.data) {
     return (
       <StatusPanel
-        kind="error"
-        title="Could not load properties"
+        kind={error?.status === 403 ? "forbidden" : "error"}
+        title={error?.status === 403 ? "Access denied" : "Could not load properties"}
         description={error?.message}
         requestId={error?.requestId}
+        action={
+          error?.status === 403 ? undefined : (
+            <Button size="sm" variant="secondary" onClick={() => void properties.refetch()}>
+              Retry
+            </Button>
+          )
+        }
       />
     );
   }
@@ -67,78 +78,111 @@ export function PropertiesPanel() {
           ) : undefined
         }
       />
-      <section className="rounded-lg border border-border-subtle bg-surface">
-        <div className="relative overflow-x-auto">
-          <table className="w-full min-w-[640px] text-sm">
-            <caption className="sr-only">Properties you can access</caption>
-            <thead className="text-left text-xs text-fg-muted">
-              <tr>
-                <th scope="col" className="px-4 py-2 font-medium">
-                  Property
-                </th>
-                <th scope="col" className="py-2 pe-3 font-medium">
-                  Currency
-                </th>
-                <th scope="col" className="py-2 pe-3 font-medium">
-                  Time zone
-                </th>
-                <th scope="col" className="py-2 pe-3 font-medium">
-                  Prefix
-                </th>
-                <th scope="col" className="py-2 pe-3 font-medium">
-                  Business date
-                </th>
-                <th scope="col" className="py-2 pe-4">
-                  <span className="sr-only">Actions</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border-subtle">
-              {list.map((p) => {
-                const businessDate = dates.get(p.id) ?? null;
-                return (
-                  <tr key={p.id}>
-                    <th scope="row" className="px-4 py-2 text-left font-medium">
-                      <span className="me-2 font-mono text-xs text-fg-muted">{p.code}</span>
-                      {p.name}
-                    </th>
-                    <td className="py-2 pe-3">{p.currencyCode}</td>
-                    <td className="py-2 pe-3 text-fg-secondary">{p.timezone}</td>
-                    <td className="py-2 pe-3 font-mono text-xs">{p.confirmationPrefix}</td>
-                    <td className="py-2 pe-3">
-                      {businessDate ? (
-                        <span className="font-mono text-xs">{businessDate}</span>
-                      ) : (
-                        <Badge tone="warning">Not live</Badge>
-                      )}
-                    </td>
-                    <td className="py-2 pe-4">
-                      <span className="flex justify-end gap-1.5">
-                        {manage && !businessDate && list.length > 1 ? (
-                          <Button
-                            size="sm"
-                            variant="secondary"
-                            className="min-h-11 md:min-h-0"
-                            onClick={() => setDialog({ kind: "copy", target: p })}
+      {overviewFailed ? (
+        <Alert tone="warning">
+          Business dates could not be loaded, so they show as “—”.{" "}
+          <button
+            type="button"
+            className="font-medium underline"
+            onClick={() => void overview.refetch()}
+          >
+            Retry
+          </button>
+        </Alert>
+      ) : null}
+      {list.length === 0 ? (
+        <StatusPanel
+          kind="empty"
+          title="No properties yet"
+          description={
+            manage
+              ? "Create the first property to start setting it up."
+              : "You have not been given access to any property."
+          }
+          action={
+            manage ? (
+              <Button size="sm" onClick={() => setDialog({ kind: "create" })}>
+                New property
+              </Button>
+            ) : undefined
+          }
+        />
+      ) : (
+        <section className="rounded-lg border border-border-subtle bg-surface">
+          <div className="relative overflow-x-auto">
+            <table className="w-full min-w-[640px] text-sm">
+              <caption className="sr-only">Properties you can access</caption>
+              <thead className="text-left text-xs text-fg-muted">
+                <tr>
+                  <th scope="col" className="px-4 py-2 font-medium">
+                    Property
+                  </th>
+                  <th scope="col" className="py-2 pe-3 font-medium">
+                    Currency
+                  </th>
+                  <th scope="col" className="py-2 pe-3 font-medium">
+                    Time zone
+                  </th>
+                  <th scope="col" className="py-2 pe-3 font-medium">
+                    Prefix
+                  </th>
+                  <th scope="col" className="py-2 pe-3 font-medium">
+                    Business date
+                  </th>
+                  <th scope="col" className="py-2 pe-4">
+                    <span className="sr-only">Actions</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border-subtle">
+                {list.map((p) => {
+                  const businessDate = dates.get(p.id) ?? null;
+                  return (
+                    <tr key={p.id}>
+                      <th scope="row" className="px-4 py-2 text-left font-medium">
+                        <span className="me-2 font-mono text-xs text-fg-muted">{p.code}</span>
+                        {p.name}
+                      </th>
+                      <td className="py-2 pe-3">{p.currencyCode}</td>
+                      <td className="py-2 pe-3 text-fg-secondary">{p.timezone}</td>
+                      <td className="py-2 pe-3 font-mono text-xs">{p.confirmationPrefix}</td>
+                      <td className="py-2 pe-3">
+                        {overviewFailed ? (
+                          <span className="text-fg-muted">—</span>
+                        ) : businessDate ? (
+                          <span className="font-mono text-xs">{businessDate}</span>
+                        ) : (
+                          <Badge tone="warning">Not live</Badge>
+                        )}
+                      </td>
+                      <td className="py-2 pe-4">
+                        <span className="flex justify-end gap-1.5">
+                          {manage && !businessDate && list.length > 1 ? (
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              className="min-h-11 md:min-h-0"
+                              onClick={() => setDialog({ kind: "copy", target: p })}
+                            >
+                              Copy setup
+                            </Button>
+                          ) : null}
+                          <Link
+                            href={`/${p.code}` as Route}
+                            className="inline-flex min-h-11 items-center px-2 text-sm font-medium text-brand hover:underline md:min-h-0"
                           >
-                            Copy setup
-                          </Button>
-                        ) : null}
-                        <Link
-                          href={`/${p.code}` as Route}
-                          className="inline-flex min-h-11 items-center px-2 text-sm font-medium text-brand hover:underline md:min-h-0"
-                        >
-                          Open
-                        </Link>
-                      </span>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </section>
+                            Open
+                          </Link>
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
       {dialog?.kind === "create" ? <CreatePropertyDialog onClose={() => setDialog(null)} /> : null}
       {dialog?.kind === "copy" ? (
         <CopySetupDialog

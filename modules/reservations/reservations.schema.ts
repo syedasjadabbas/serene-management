@@ -234,7 +234,21 @@ export const listReservationsQuerySchema = cursorPageQuerySchema
     guestId: idSchema.optional(),
     sort: z.enum(RESERVATION_SORTS).default("arrival"),
   })
-  .strict();
+  .strict()
+  .superRefine((value, ctx) => {
+    // A range whose start is after its end can match nothing: say so.
+    for (const [from, to] of [
+      ["arrivalFrom", "arrivalTo"],
+      ["departureFrom", "departureTo"],
+      ["createdFrom", "createdTo"],
+    ] as const) {
+      const start = value[from];
+      const end = value[to];
+      if (start && end && start > end) {
+        ctx.addIssue({ code: "custom", path: [to], message: "Must be on or after the start date" });
+      }
+    }
+  });
 
 export type ListReservationsQuery = z.infer<typeof listReservationsQuerySchema>;
 

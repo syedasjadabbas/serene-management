@@ -1,8 +1,8 @@
 "use client";
 
+import { Building2 } from "lucide-react";
 import { useState } from "react";
-import { Button } from "@/components/ui/Button";
-import { TextField } from "@/components/ui/TextField";
+import { SearchableSelect } from "@/components/ui/SearchableSelect";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { useAccountsQuery } from "@/lib/api/endpoints/accounts.api";
 
@@ -12,8 +12,10 @@ export interface PickedCompany {
 }
 
 /**
- * Debounced server-side company search (active companies only). The server
- * re-validates the chosen company wherever it is used.
+ * Company selector: the SERENE searchable dropdown over a debounced
+ * server-side search of active companies. Restricted companies are listed
+ * but cannot be chosen. The server re-validates the chosen company wherever
+ * it is used.
  */
 export function CompanyPicker({
   value,
@@ -25,60 +27,49 @@ export function CompanyPicker({
   label?: string;
 }) {
   const [search, setSearch] = useState("");
-  const debounced = useDebouncedValue(search.trim(), 300);
+  const debounced = useDebouncedValue(search.trim(), 250);
   const results = useAccountsQuery(
     { q: debounced, type: "COMPANY", status: "ACTIVE", limit: 8 },
-    { skip: debounced.length < 2 || value !== null },
+    { skip: debounced.length < 2 },
   );
-  if (value) {
-    return (
-      <div className="flex flex-col gap-1">
-        <span className="text-xs font-medium text-fg-secondary">{label}</span>
-        <p className="flex min-h-11 flex-wrap items-center gap-2 text-sm">
-          <span className="font-medium">{value.label}</span>
-          <Button size="sm" variant="ghost" onClick={() => onChange(null)}>
-            Remove
-          </Button>
-        </p>
-      </div>
-    );
-  }
+  const companies = debounced.length >= 2 ? (results.data?.items ?? []) : [];
+
   return (
-    <div className="relative flex flex-col gap-1">
-      <TextField
-        label={label}
-        placeholder="Search by name or code"
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-      />
-      {debounced.length >= 2 && results.data ? (
-        <ul
-          className="max-h-56 overflow-y-auto rounded-md border border-border-subtle bg-surface"
-          aria-label="Matching companies"
-        >
-          {results.data.items.length === 0 ? (
-            <li className="px-3 py-2 text-sm text-fg-secondary">No company found.</li>
-          ) : null}
-          {results.data.items.map((a) => (
-            <li key={a.id}>
-              <button
-                type="button"
-                disabled={a.isRestricted}
-                className="flex min-h-11 w-full items-center justify-between gap-2 px-3 py-1.5 text-left text-sm hover:bg-surface-sunken disabled:opacity-60"
-                onClick={() => {
-                  onChange({ id: a.id, label: `${a.name}${a.code ? ` (${a.code})` : ""}` });
-                  setSearch("");
-                }}
-              >
-                <span>
-                  {a.name} <span className="text-xs text-fg-muted">{a.code}</span>
-                </span>
-                {a.isRestricted ? <span className="text-xs text-danger">Restricted</span> : null}
-              </button>
-            </li>
-          ))}
-        </ul>
-      ) : null}
-    </div>
+    <SearchableSelect
+      label={label}
+      items={companies.map((company) => ({
+        value: company.id,
+        label: company.name,
+        description: [
+          company.code,
+          [company.city, company.countryCode].filter(Boolean).join(", "),
+          company.isRestricted ? "Restricted" : null,
+        ]
+          .filter(Boolean)
+          .join(" · "),
+        icon: Building2,
+        disabled: company.isRestricted,
+      }))}
+      value={value?.id ?? ""}
+      selectedLabel={value?.label}
+      onChange={(id) => {
+        const company = companies.find((c) => c.id === id);
+        onChange(
+          company
+            ? {
+                id: company.id,
+                label: `${company.name}${company.code ? ` (${company.code})` : ""}`,
+              }
+            : null,
+        );
+      }}
+      onSearchChange={setSearch}
+      loading={results.isFetching || debounced !== search.trim()}
+      minSearchLength={2}
+      searchPlaceholder="Company name or code"
+      placeholder="Search for a company"
+      clearable
+      emptyText="No company found"
+    />
   );
 }

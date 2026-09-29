@@ -66,6 +66,25 @@ const STATE_OPTIONS = [
   ).map((value) => ({ value, label: BOOKING_STATE_LABELS[value] })),
 ];
 
+/** Paired date inputs; "from" must not be after "to" (the API rejects it). */
+const DATE_RANGES = [
+  ["arrivalFrom", "arrivalTo", "Arrival"],
+  ["departureFrom", "departureTo", "Departure"],
+  ["createdFrom", "createdTo", "Booked"],
+] as const;
+
+/** Inline errors keyed by the "to" field of each inverted date range. */
+function rangeErrors(values: ReservationFilterValues): Partial<Record<string, string>> {
+  const errors: Partial<Record<string, string>> = {};
+  for (const [from, to, label] of DATE_RANGES) {
+    const start = values[from];
+    const end = values[to];
+    // YYYY-MM-DD strings compare correctly as text.
+    if (start && end && start > end) errors[to] = `${label} "to" must be on or after "from"`;
+  }
+  return errors;
+}
+
 const SORT_OPTIONS = [
   { value: "arrival", label: "Arrival (earliest first)" },
   { value: "-arrival", label: "Arrival (latest first)" },
@@ -92,7 +111,11 @@ export function ReservationFilters({
   const set = (key: keyof ReservationFilterValues) => (event: { target: { value: string } }) =>
     setValues((current) => ({ ...current, [key]: event.target.value || undefined }));
 
+  const dateErrors = rangeErrors(values);
+
   function apply(next: ReservationFilterValues) {
+    // An inverted date range would only earn a validation error from the server.
+    if (Object.keys(rangeErrors(next)).length > 0) return;
     const q = next.q?.trim() || undefined;
     // The server needs at least two characters; say so instead of failing.
     if (q && q.length < 2) {
@@ -130,6 +153,7 @@ export function ReservationFilters({
           placeholder="Confirmation number, guest name or room"
           value={values.q ?? ""}
           onChange={set("q")}
+          maxLength={100}
           hint={tooShort ? "Type at least 2 characters" : undefined}
         />
       }
@@ -152,37 +176,46 @@ export function ReservationFilters({
             label="Arrival from"
             type="date"
             value={values.arrivalFrom ?? ""}
+            max={values.arrivalTo}
             onChange={set("arrivalFrom")}
           />
           <TextField
             label="Arrival to"
             type="date"
             value={values.arrivalTo ?? ""}
+            min={values.arrivalFrom}
             onChange={set("arrivalTo")}
+            errors={dateErrors.arrivalTo ? [dateErrors.arrivalTo] : undefined}
           />
           <TextField
             label="Departure from"
             type="date"
             value={values.departureFrom ?? ""}
+            max={values.departureTo}
             onChange={set("departureFrom")}
           />
           <TextField
             label="Departure to"
             type="date"
             value={values.departureTo ?? ""}
+            min={values.departureFrom}
             onChange={set("departureTo")}
+            errors={dateErrors.departureTo ? [dateErrors.departureTo] : undefined}
           />
           <TextField
             label="Booked from"
             type="date"
             value={values.createdFrom ?? ""}
+            max={values.createdTo}
             onChange={set("createdFrom")}
           />
           <TextField
             label="Booked to"
             type="date"
             value={values.createdTo ?? ""}
+            min={values.createdFrom}
             onChange={set("createdTo")}
+            errors={dateErrors.createdTo ? [dateErrors.createdTo] : undefined}
           />
           <Select
             label="Room type"

@@ -29,6 +29,8 @@ export function ReservationResultsPage({
   filters,
   cursor,
   isLast,
+  hasFilters,
+  onClearFilters,
   onLoadMore,
 }: {
   variant: "table" | "list";
@@ -37,9 +39,18 @@ export function ReservationResultsPage({
   filters: ReservationFilterValues;
   cursor: string | undefined;
   isLast: boolean;
+  /** Whether any narrowing filter is set (sort alone is not one). */
+  hasFilters: boolean;
+  onClearFilters: () => void;
   onLoadMore: (cursor: string) => void;
 }) {
-  const { data, isLoading, isFetching, error, refetch } = useReservationsQuery({
+  // currentData is only ever for these exact arguments, never a previous query's rows.
+  const {
+    currentData: data,
+    isFetching,
+    error,
+    refetch,
+  } = useReservationsQuery({
     propertyId,
     ...filters,
     cursor,
@@ -64,7 +75,8 @@ export function ReservationResultsPage({
       </li>
     );
 
-  if (isLoading) {
+  // No rows for these exact arguments yet: loading, never the previous query.
+  if (!data && !apiError) {
     return variant === "table" ? (
       <tbody className="divide-y divide-border-subtle">
         {Array.from({ length: 6 }, (_, row) => (
@@ -99,18 +111,26 @@ export function ReservationResultsPage({
       "danger",
     );
   }
-  if (!data || (data.items.length === 0 && !cursor)) {
-    return message("No reservations match these filters. Clear a filter or widen the dates.");
+  if (!data) return null;
+  if (data.items.length === 0 && !cursor) {
+    return message(
+      hasFilters ? (
+        <>
+          No reservations match these filters.{" "}
+          <Button size="sm" variant="secondary" onClick={onClearFilters}>
+            Clear filters
+          </Button>
+        </>
+      ) : (
+        "No reservations yet."
+      ),
+    );
   }
 
+  // Hidden while this page refreshes so a stale cursor is never appended.
   const more =
-    isLast && data.meta.nextCursor ? (
-      <Button
-        variant="secondary"
-        size="sm"
-        pending={isFetching}
-        onClick={() => onLoadMore(data.meta.nextCursor!)}
-      >
+    isLast && data.meta.nextCursor && !isFetching ? (
+      <Button variant="secondary" size="sm" onClick={() => onLoadMore(data.meta.nextCursor!)}>
         Load more
       </Button>
     ) : null;

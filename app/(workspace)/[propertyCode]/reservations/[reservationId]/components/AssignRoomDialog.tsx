@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { availableRoomOptions } from "@/components/rooms/roomOptions";
 import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
 import { Dialog } from "@/components/ui/Dialog";
@@ -78,10 +79,7 @@ export function AssignRoomDialog({
         <Select
           label="Room"
           placeholder={rooms.isLoading ? "Loading free rooms…" : "Select a room"}
-          options={(rooms.data ?? []).map((r) => ({
-            value: r.id,
-            label: `${r.number}${r.floor ? ` · ${r.floor}` : ""} · ${r.housekeepingStatus.toLowerCase()}${r.isAccessible ? " · accessible" : ""}`,
-          }))}
+          options={availableRoomOptions(rooms.data ?? [])}
           value={roomId}
           onChange={(e) => setRoomId(e.target.value)}
           hint={rooms.data ? `${rooms.data.length} room(s) free for the whole stay` : undefined}

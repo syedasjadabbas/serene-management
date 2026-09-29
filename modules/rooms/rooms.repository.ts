@@ -291,6 +291,9 @@ export function findRoomBoard(
       SELECT b."id", b."kind", b."to_date", b."reason_code_id" FROM "room_service_blocks" b
       WHERE b."room_id" = r."id" AND b."status" IN ('SCHEDULED', 'ACTIVE')
         AND b."from_date" <= ${businessDate}::date AND b."to_date" > ${businessDate}::date
+      -- Overlapping blocks: out of order wins, then the longer one, so a room
+      -- always shows under the same status filter.
+      ORDER BY (b."kind" = 'OUT_OF_ORDER') DESC, b."to_date" DESC, b."id"
       LIMIT 1) blk ON TRUE
     LEFT JOIN "reason_codes" rc ON rc."id" = blk."reason_code_id"
     LEFT JOIN LATERAL (

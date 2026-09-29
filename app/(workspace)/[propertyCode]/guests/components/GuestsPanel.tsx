@@ -35,7 +35,23 @@ export function GuestsPanel() {
     limit: 20,
   });
   const error = toClientApiError(query.error);
+  // `currentData` belongs to the current filter only; `data` would keep the
+  // previous filter's rows on screen while the new page loads.
+  const data = query.currentData;
+  const loading = query.isFetching && !data && !error;
+  const searching = term.length >= 2;
+  const filtered = searching || status !== "ACTIVE";
   const restart = () => setCursors([undefined]);
+  const clearFilters = () => {
+    setQ("");
+    setStatus("ACTIVE");
+    restart();
+  };
+  const emptyTitle = searching
+    ? "No guest matches"
+    : status === "INACTIVE"
+      ? "No inactive guests"
+      : "No guest profiles";
 
   return (
     <section className="flex flex-col gap-3" aria-label="Guest profiles">
@@ -44,6 +60,7 @@ export function GuestsPanel() {
           label="Search"
           placeholder="Name, e-mail, phone, profile or confirmation number"
           value={q}
+          maxLength={100}
           onChange={(e) => {
             setQ(e.target.value);
             restart();
@@ -71,28 +88,40 @@ export function GuestsPanel() {
       {q.trim().length === 1 ? (
         <p className="text-xs text-fg-muted">Type at least 2 characters to search.</p>
       ) : null}
-      {query.isLoading ? <StatusPanel kind="loading" title="Loading guests" /> : null}
+      {loading ? <StatusPanel kind="loading" title="Loading guests" /> : null}
       {error ? (
         <StatusPanel
           kind="error"
           title="Could not load guests"
           description={error.message}
           requestId={error.requestId}
+          action={
+            <Button size="touch" variant="secondary" onClick={() => void query.refetch()}>
+              Retry
+            </Button>
+          }
         />
       ) : null}
-      {query.data && query.data.items.length === 0 ? (
+      {data && data.items.length === 0 ? (
         <StatusPanel
           kind="empty"
-          title={term.length >= 2 ? "No guest matches" : "No guest profiles"}
-          description={term.length >= 2 ? "Try another name, e-mail or phone." : undefined}
+          title={emptyTitle}
+          description={searching ? "Try another name, e-mail or phone." : undefined}
+          action={
+            filtered ? (
+              <Button size="touch" variant="secondary" onClick={clearFilters}>
+                Clear filters
+              </Button>
+            ) : undefined
+          }
         />
       ) : null}
-      {query.data && query.data.items.length > 0 ? (
+      {data && data.items.length > 0 ? (
         <ul
           className="divide-y divide-border-subtle overflow-hidden rounded-lg border border-border-subtle bg-surface"
           aria-busy={query.isFetching}
         >
-          {query.data.items.map((guest) => (
+          {data.items.map((guest) => (
             <li key={guest.id}>
               <Link
                 href={`/${property.code}/guests/${guest.id}` as Route}
@@ -117,7 +146,7 @@ export function GuestsPanel() {
           ))}
         </ul>
       ) : null}
-      {cursors.length > 1 || query.data?.meta.nextCursor ? (
+      {cursors.length > 1 || data?.meta.nextCursor ? (
         <div className="flex justify-between gap-2">
           <Button
             size="touch"
@@ -130,8 +159,11 @@ export function GuestsPanel() {
           <Button
             size="touch"
             variant="secondary"
-            disabled={!query.data?.meta.nextCursor}
-            onClick={() => setCursors((c) => [...c, query.data!.meta.nextCursor!])}
+            disabled={!data?.meta.nextCursor}
+            onClick={() => {
+              const next = data?.meta.nextCursor;
+              if (next) setCursors((c) => [...c, next]);
+            }}
           >
             Next
           </Button>

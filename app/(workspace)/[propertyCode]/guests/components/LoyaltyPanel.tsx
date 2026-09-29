@@ -170,6 +170,7 @@ export function LoyaltyPanel() {
       ))}
       {programs.length > 0 && can("guests:read") ? (
         <MembersList
+          key={programId}
           programs={programs}
           programId={programId!}
           onProgramChange={setSelected}
@@ -200,6 +201,10 @@ function MembersList({
 }) {
   const [cursors, setCursors] = useState<(string | undefined)[]>([undefined]);
   const members = useLoyaltyMembersQuery({ programId, cursor: cursors.at(-1) });
+  const membersError = toClientApiError(members.error);
+  // `currentData` belongs to the current page only; never show another page's rows.
+  const data = members.currentData;
+  const loading = members.isFetching && !data && !membersError;
   return (
     <section className="flex flex-col gap-2 rounded-lg border border-border-subtle bg-surface p-4">
       <div className="flex flex-wrap items-end gap-3">
@@ -215,11 +220,25 @@ function MembersList({
           className="ms-auto"
         />
       </div>
-      {members.data && members.data.items.length === 0 ? (
+      {loading ? <StatusPanel kind="loading" title="Loading members" /> : null}
+      {membersError ? (
+        <StatusPanel
+          kind="error"
+          title="Could not load members"
+          description={membersError.message}
+          requestId={membersError.requestId}
+          action={
+            <Button size="touch" variant="secondary" onClick={() => void members.refetch()}>
+              Retry
+            </Button>
+          }
+        />
+      ) : null}
+      {data && data.items.length === 0 ? (
         <p className="text-sm text-fg-secondary">No members yet.</p>
       ) : null}
-      {members.data && members.data.items.length > 0 ? (
-        <div className="relative overflow-x-auto">
+      {data && data.items.length > 0 ? (
+        <div className="relative overflow-x-auto" aria-busy={members.isFetching}>
           <table className="w-full min-w-[560px] text-sm">
             <caption className="sr-only">Members of the program</caption>
             <thead className="text-left text-xs text-fg-muted">
@@ -245,7 +264,7 @@ function MembersList({
               </tr>
             </thead>
             <tbody className="divide-y divide-border-subtle">
-              {members.data.items.map((m) => (
+              {data.items.map((m) => (
                 <tr key={m.membershipId}>
                   <td className="py-2 pr-3">
                     <Link
@@ -268,7 +287,7 @@ function MembersList({
           </table>
         </div>
       ) : null}
-      {cursors.length > 1 || members.data?.meta.nextCursor ? (
+      {cursors.length > 1 || data?.meta.nextCursor ? (
         <div className="flex justify-between gap-2">
           <Button
             size="touch"
@@ -281,8 +300,11 @@ function MembersList({
           <Button
             size="touch"
             variant="secondary"
-            disabled={!members.data?.meta.nextCursor}
-            onClick={() => setCursors((c) => [...c, members.data!.meta.nextCursor!])}
+            disabled={!data?.meta.nextCursor}
+            onClick={() => {
+              const next = data?.meta.nextCursor;
+              if (next) setCursors((c) => [...c, next]);
+            }}
           >
             Next
           </Button>

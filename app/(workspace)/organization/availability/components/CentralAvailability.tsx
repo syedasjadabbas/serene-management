@@ -95,6 +95,17 @@ export function CentralAvailability() {
 
   if (overview.isLoading) return <PageSkeleton title="Loading" />;
   const error = toClientApiError(result.error);
+  // Only the result for the current criteria; `data` keeps the previous search.
+  const data = result.currentData;
+  // Mirrors the server: at least one night.
+  const stayError =
+    values.arrival &&
+    values.departure &&
+    isDateOnly(values.arrival) &&
+    isDateOnly(values.departure) &&
+    values.departure <= values.arrival
+      ? "Departure must be after arrival"
+      : null;
   const stayQuery = criteria
     ? new URLSearchParams({
         arrival: criteria.arrival,
@@ -117,6 +128,7 @@ export function CentralAvailability() {
         className="grid grid-cols-2 items-end gap-2 rounded-lg border border-border-subtle bg-surface p-3 sm:flex sm:flex-wrap"
         onSubmit={(event) => {
           event.preventDefault();
+          if (stayError) return;
           router.replace(`${pathname}?${new URLSearchParams(values).toString()}` as Route);
         }}
       >
@@ -131,7 +143,9 @@ export function CentralAvailability() {
           label="Departure"
           type="date"
           value={values.departure}
+          min={values.arrival ? addDays(values.arrival, 1) : undefined}
           onChange={set("departure")}
+          errors={stayError ? [stayError] : undefined}
           required
         />
         <TextField
@@ -154,18 +168,24 @@ export function CentralAvailability() {
           label="Rooms"
           type="number"
           min={1}
-          max={9}
+          max={20}
           value={values.rooms}
           onChange={set("rooms")}
         />
-        <Button type="submit" size="touch" className="col-span-2 md:h-control md:text-sm">
+        <Button
+          type="submit"
+          size="touch"
+          className="col-span-2 md:h-control md:text-sm"
+          pending={result.isFetching}
+          disabled={!!stayError}
+        >
           Search
         </Button>
       </form>
 
       {!criteria ? (
         <StatusPanel kind="empty" title="Enter a stay to search" />
-      ) : result.isFetching && !result.data ? (
+      ) : result.isFetching && !result.currentData ? (
         <StatusPanel kind="loading" title="Searching properties" />
       ) : error ? (
         <StatusPanel
@@ -174,17 +194,16 @@ export function CentralAvailability() {
           description={Object.values(error.fieldErrors).flat()[0] ?? error.message}
           requestId={error.requestId}
         />
-      ) : result.data ? (
+      ) : data ? (
         <>
           <p className="text-sm text-fg-secondary">
-            {formatDate(result.data.arrival)} – {formatDate(result.data.departure)} ·{" "}
-            {result.data.nights} {result.data.nights === 1 ? "night" : "nights"} ·{" "}
-            {result.data.adults} adults
-            {result.data.children ? `, ${result.data.children} children` : ""} · {result.data.rooms}{" "}
-            {result.data.rooms === 1 ? "room" : "rooms"}
+            {formatDate(data.arrival)} – {formatDate(data.departure)} · {data.nights}{" "}
+            {data.nights === 1 ? "night" : "nights"} · {data.adults} adults
+            {data.children ? `, ${data.children} children` : ""} · {data.rooms}{" "}
+            {data.rooms === 1 ? "room" : "rooms"}
           </p>
           <ul className="flex flex-col gap-3">
-            {result.data.properties.map((row) => {
+            {data.properties.map((row) => {
               const [tone, label] = STATUS[row.status];
               const handoff = row.canBook
                 ? `/${row.property.code}/reservations/new?${stayQuery}`
@@ -272,7 +291,7 @@ export function CentralAvailability() {
             })}
           </ul>
           <ul className="list-disc ps-5 text-xs text-fg-secondary">
-            {result.data.notes.map((note) => (
+            {data.notes.map((note) => (
               <li key={note}>{note}</li>
             ))}
           </ul>

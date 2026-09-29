@@ -19,7 +19,7 @@ import {
 import { useMeQuery } from "@/lib/api/endpoints/session.api";
 import { toClientApiError } from "@/lib/api/errors";
 import { formatCurrency, formatDate } from "@/lib/utils/format";
-import { addDays, isDateOnly } from "@/modules/business-date/business-date.policy";
+import { addDays, daysBetween, isDateOnly } from "@/modules/business-date/business-date.policy";
 import type { PerformanceFigures } from "@/modules/organization/organization.types";
 
 type Counts = Pick<
@@ -33,6 +33,9 @@ type Counts = Pick<
   | "noShows"
   | "cancellations"
 >;
+
+/** Mirrors the server's range limit (reports.policy MAX_REPORT_DAYS). */
+const MAX_REPORT_DAYS = 366;
 
 const COUNT_COLUMNS: [string, (f: Counts) => string][] = [
   ["Nights", (f) => String(f.nights)],
@@ -87,6 +90,24 @@ export function PerformanceReport() {
 
   if (overview.isLoading) return <PageSkeleton title="Loading" />;
   if (!from || !to) {
+    const overviewError = toClientApiError(overview.error);
+    if (overviewError) {
+      return (
+        <StatusPanel
+          kind={overviewError.status === 403 ? "forbidden" : "error"}
+          title={overviewError.status === 403 ? "Access denied" : "Could not load properties"}
+          description={overviewError.message}
+          requestId={overviewError.requestId}
+          action={
+            overviewError.status === 403 ? undefined : (
+              <Button size="sm" variant="secondary" onClick={() => void overview.refetch()}>
+                Retry
+              </Button>
+            )
+          }
+        />
+      );
+    }
     return (
       <StatusPanel
         kind="empty"
@@ -97,7 +118,20 @@ export function PerformanceReport() {
   }
   const error = toClientApiError(report.error);
   const canExport = me ? holdsAnywhere(me, "reports:export") : false;
-  const data = report.data;
+  // Only the figures for the range in the URL; `data` would keep the
+  // previous range's tables under the new header while this one runs.
+  const data = report.currentData;
+  const valueFrom = draftFrom ?? from;
+  const valueTo = draftTo ?? to;
+  // Mirrors the server's range rules so Run never sends a range it rejects.
+  const rangeError =
+    !valueFrom || !valueTo
+      ? null
+      : valueTo < valueFrom
+        ? "Must be on or after the start date"
+        : daysBetween(valueFrom, valueTo) + 1 > MAX_REPORT_DAYS
+          ? `A report covers at most ${MAX_REPORT_DAYS} days`
+          : null;
 
   return (
     <div className="flex flex-col gap-6">
@@ -131,23 +165,34 @@ export function PerformanceReport() {
         className="flex flex-wrap items-end gap-2 rounded-lg border border-border-subtle bg-surface p-3 print:hidden"
         onSubmit={(event) => {
           event.preventDefault();
-          const next = new URLSearchParams({ from: draftFrom ?? from, to: draftTo ?? to });
+          if (rangeError || !valueFrom || !valueTo) return;
+          const next = new URLSearchParams({ from: valueFrom, to: valueTo });
           router.replace(`${pathname}?${next.toString()}` as Route);
         }}
       >
         <TextField
           label="From"
           type="date"
-          value={draftFrom ?? from}
+          value={valueFrom}
+          max={valueTo || undefined}
           onChange={(e) => setDraftFrom(e.target.value)}
         />
         <TextField
           label="To"
           type="date"
-          value={draftTo ?? to}
+          value={valueTo}
+          min={valueFrom || undefined}
+          max={valueFrom ? addDays(valueFrom, MAX_REPORT_DAYS - 1) : undefined}
+          errors={rangeError ? [rangeError] : undefined}
           onChange={(e) => setDraftTo(e.target.value)}
         />
-        <Button type="submit" size="touch" className="md:h-control md:text-sm">
+        <Button
+          type="submit"
+          size="touch"
+          className="md:h-control md:text-sm"
+          pending={report.isFetching}
+          disabled={!!rangeError || !valueFrom || !valueTo}
+        >
           Run
         </Button>
       </form>
@@ -160,6 +205,28 @@ export function PerformanceReport() {
           title={error.status === 403 ? "Access denied" : "Could not run the report"}
           description={Object.values(error.fieldErrors).flat()[0] ?? error.message}
           requestId={error.requestId}
+          action={
+            error.status === 403 ? undefined : (
+              <Button size="sm" variant="secondary" onClick={() => void report.refetch()}>
+                Retry
+              </Button>
+            )
+          }
+        />
+      ) : data && data.properties.length === 0 ? (
+        <StatusPanel
+          kind="empty"
+          title="No property has figures for this range"
+          description={
+            data.excluded.length > 0
+              ? `Not included: ${data.excluded
+                  .map(
+                    (e) =>
+                      `${e.property.code} (${e.reason === "NOT_LIVE" ? "not live" : "range after its business date"})`,
+                  )
+                  .join(", ")}. Choose a range on or before each property's business date.`
+              : "Choose a range on or before each property's business date."
+          }
         />
       ) : data ? (
         <>
