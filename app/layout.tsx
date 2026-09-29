@@ -1,14 +1,14 @@
 import type { Metadata } from "next";
 import { connection } from "next/server";
-import { IBM_Plex_Mono, IBM_Plex_Sans, IBM_Plex_Sans_Arabic } from "next/font/google";
+import { Geist, Geist_Mono, IBM_Plex_Sans_Arabic } from "next/font/google";
 import { DEFAULT_LOCALE, directionOf } from "@/lib/i18n/config";
 import { Providers } from "./providers";
 import "./globals.css";
 
-const plexSans = IBM_Plex_Sans({
-  variable: "--font-plex-sans",
+// Geist is the SERENE family typeface (shared with SALESTORM).
+const geist = Geist({
+  variable: "--font-geist",
   subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
 });
 
 const plexArabic = IBM_Plex_Sans_Arabic({
@@ -17,10 +17,9 @@ const plexArabic = IBM_Plex_Sans_Arabic({
   weight: ["400", "500", "600", "700"],
 });
 
-const plexMono = IBM_Plex_Mono({
-  variable: "--font-plex-mono",
+const geistMono = Geist_Mono({
+  variable: "--font-geist-mono",
   subsets: ["latin"],
-  weight: ["400", "500"],
 });
 
 export const metadata: Metadata = {
@@ -39,7 +38,7 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
     <html
       lang={locale}
       dir={directionOf(locale)}
-      className={`${plexSans.variable} ${plexArabic.variable} ${plexMono.variable} h-full antialiased`}
+      className={`${geist.variable} ${plexArabic.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full">
         <Providers>{children}</Providers>

@@ -2,8 +2,8 @@ import { type ReactNode, useId } from "react";
 import { cn } from "./cn";
 
 /**
- * A working surface: white on the neutral canvas, hairline border, soft
- * shadow, 12px radius. With `title` it renders a header row (title, description,
+ * A working surface: white on the neutral canvas, hairline border, almost
+ * no shadow, 16px radius (the SERENE family surface). With `title` it renders a header row (title, description,
  * actions) and is labelled by it. `flush` removes body padding for tables
  * and lists that run edge to edge. Never nest cards; use dividers inside.
  */
@@ -41,16 +41,16 @@ export function Card({
       {title ? (
         <div
           className={cn(
-            "flex flex-wrap items-start gap-x-3 gap-y-2 px-5 pt-4",
-            flush ? "border-b border-border-subtle pb-3" : "pb-0",
+            "flex flex-wrap items-start gap-x-3 gap-y-2 px-5 pt-5 sm:px-6",
+            flush ? "border-b border-border-subtle pb-4" : "pb-0",
           )}
         >
           <div className="min-w-0 flex-1">
-            <Heading id={titleId} className="text-lg font-semibold text-fg">
+            <Heading id={titleId} className="text-lg font-semibold tracking-[-0.01em] text-fg">
               {title}
             </Heading>
             {description ? (
-              <div className="mt-0.5 text-xs text-fg-secondary">{description}</div>
+              <div className="mt-0.5 text-sm text-fg-secondary">{description}</div>
             ) : null}
           </div>
           {actions ? (
@@ -58,7 +58,12 @@ export function Card({
           ) : null}
         </div>
       ) : null}
-      <div className={cn(!flush && (title ? "px-5 pt-3 pb-5" : "p-5"), bodyClassName)}>
+      <div
+        className={cn(
+          !flush && (title ? "px-5 pt-4 pb-5 sm:px-6 sm:pb-6" : "p-5 sm:p-6"),
+          bodyClassName,
+        )}
+      >
         {children}
       </div>
     </Tag>

@@ -24,7 +24,7 @@ export function FactList({
   return (
     <dl
       className={cn(
-        "grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2",
+        "grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2",
         columns === 3 && "xl:grid-cols-3",
         className,
       )}
@@ -38,8 +38,8 @@ export function FactList({
             item.wide && columns === 3 && "xl:col-span-3",
           )}
         >
-          <dt className="text-xs text-fg-muted">{item.label}</dt>
-          <dd className="mt-0.5 text-sm break-words text-fg">{item.value}</dd>
+          <dt className="label-caps">{item.label}</dt>
+          <dd className="mt-1 text-sm font-medium break-words text-fg">{item.value}</dd>
         </div>
       ))}
     </dl>

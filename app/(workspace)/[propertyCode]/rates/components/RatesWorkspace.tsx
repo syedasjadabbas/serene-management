@@ -1,8 +1,11 @@
 "use client";
 
+import { Tags } from "lucide-react";
 import type { Route } from "next";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { StatusPanel } from "@/components/ui/StatusPanel";
+import { PageSkeleton } from "@/components/ui/PageSkeleton";
 import { Tab, TabList } from "@/components/ui/TabList";
 import { useTabs } from "@/components/ui/tabs";
 import { usePermissions } from "@/hooks/usePermissions";
@@ -37,7 +40,7 @@ export function RatesWorkspace() {
     (id) => router.replace(`${pathname}?tab=${id}` as Route),
   );
 
-  if (isLoading) return <StatusPanel kind="loading" title="Loading rates" />;
+  if (isLoading) return <PageSkeleton title="Loading rates" />;
   if (!can("rates:read")) {
     return (
       <StatusPanel
@@ -48,14 +51,13 @@ export function RatesWorkspace() {
     );
   }
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-4">
-      <div>
-        <h1 className="text-xl font-semibold">Rates</h1>
-        <p className="text-sm text-fg-muted">
-          Rate plans, seasons, restrictions and packages in {property.currencyCode}. Bookings are
-          always priced by the server from this configuration.
-        </p>
-      </div>
+    <div className="flex flex-col gap-6">
+      <PageHeader
+        icon={Tags}
+        breadcrumbs={[{ label: property.code, href: `/${property.code}` }, { label: "Rates" }]}
+        title="Rates"
+        description={`Rate plans, seasons, restrictions and packages in ${property.currencyCode}. Bookings are always priced by the server from this configuration.`}
+      />
       <TabList label="Rate administration">
         {TABS.map(([id, label]) => (
           <Tab

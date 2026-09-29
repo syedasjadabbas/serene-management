@@ -1,13 +1,13 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
-import { StatusPanel } from "@/components/ui/StatusPanel";
+import { PageSkeleton } from "@/components/ui/PageSkeleton";
 import { NewReservationWorkflow } from "./components/NewReservationWorkflow";
 
 export const metadata: Metadata = { title: "New reservation" };
 
 export default function NewReservationPage() {
   return (
-    <Suspense fallback={<StatusPanel kind="loading" title="Loading" />}>
+    <Suspense fallback={<PageSkeleton title="Loading" layout="detail" />}>
       <NewReservationWorkflow />
     </Suspense>
   );

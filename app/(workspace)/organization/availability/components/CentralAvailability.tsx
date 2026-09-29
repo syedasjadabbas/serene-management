@@ -5,9 +5,12 @@ import Link from "next/link";
 import type { Route } from "next";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
+import { CalendarRange } from "lucide-react";
 import { Badge, type BadgeTone } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { StatusPanel } from "@/components/ui/StatusPanel";
+import { PageSkeleton } from "@/components/ui/PageSkeleton";
 import { TextField } from "@/components/ui/TextField";
 import {
   type CentralAvailabilityArgs,
@@ -90,7 +93,7 @@ export function CentralAvailability() {
   const set = (key: keyof CentralAvailabilityArgs) => (e: { target: { value: string } }) =>
     setForm({ ...values, [key]: e.target.value });
 
-  if (overview.isLoading) return <StatusPanel kind="loading" title="Loading" />;
+  if (overview.isLoading) return <PageSkeleton title="Loading" />;
   const error = toClientApiError(result.error);
   const stayQuery = criteria
     ? new URLSearchParams({
@@ -103,14 +106,13 @@ export function CentralAvailability() {
     : "";
 
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-3">
-      <header>
-        <h1 className="text-xl font-semibold">Central availability</h1>
-        <p className="text-sm text-fg-secondary">
-          Search your properties at once, then book in one of them. Prices are in each
-          property&apos;s own currency.
-        </p>
-      </header>
+    <div className="flex flex-col gap-6">
+      <PageHeader
+        icon={CalendarRange}
+        breadcrumbs={[{ label: "Organization", href: "/organization" }, { label: "Availability" }]}
+        title="Central availability"
+        description="Search your properties at once, then book in one of them. Prices are in each property's own currency."
+      />
       <form
         className="grid grid-cols-2 items-end gap-2 rounded-lg border border-border-subtle bg-surface p-3 sm:flex sm:flex-wrap"
         onSubmit={(event) => {

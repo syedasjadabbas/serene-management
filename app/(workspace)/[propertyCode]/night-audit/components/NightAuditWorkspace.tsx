@@ -1,5 +1,6 @@
 "use client";
 
+import { MoonStar } from "lucide-react";
 import Link from "next/link";
 import type { Route } from "next";
 import { useRouter } from "next/navigation";
@@ -8,7 +9,10 @@ import { Alert } from "@/components/ui/Alert";
 import { Badge, type BadgeTone } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { FormDialog } from "@/components/ui/FormDialog";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { StatusPanel } from "@/components/ui/StatusPanel";
+import { PageSkeleton } from "@/components/ui/PageSkeleton";
+import { Skeleton } from "@/components/ui/Skeleton";
 import { TextArea } from "@/components/ui/TextArea";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useProperty } from "@/hooks/useProperty";
@@ -70,8 +74,9 @@ export function NightAuditWorkspace() {
   const readiness = useNightAuditReadinessQuery(property.id, { skip: !allowed });
   const runs = useNightAuditRunsQuery({ propertyId: property.id }, { skip: !allowed });
   const [dialog, setDialog] = useState(false);
+  const crumbs = [{ label: property.code, href: `/${property.code}` }, { label: "Night audit" }];
 
-  if (permissionsLoading) return <StatusPanel kind="loading" title="Loading night audit" />;
+  if (permissionsLoading) return <PageSkeleton title="Loading night audit" />;
   if (!allowed) {
     return (
       <StatusPanel
@@ -81,7 +86,35 @@ export function NightAuditWorkspace() {
       />
     );
   }
-  if (readiness.isLoading) return <StatusPanel kind="loading" title="Checking the business date" />;
+  if (readiness.isLoading) {
+    // The page keeps its heading while the checks are computed.
+    return (
+      <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
+        <PageHeader
+          icon={MoonStar}
+          breadcrumbs={crumbs}
+          title="Night audit"
+          description="Checking the business date…"
+        />
+        <section role="status" className="flex flex-col gap-2">
+          <span className="sr-only">Checking the business date</span>
+          <Skeleton className="h-3.5 w-28" />
+          <ul aria-hidden="true" className="flex flex-col gap-2">
+            {[0, 1, 2, 3, 4].map((i) => (
+              <li
+                key={i}
+                className="flex items-center gap-3 rounded-lg border border-border-subtle bg-surface px-3 py-3"
+              >
+                <Skeleton className="h-5 w-16 rounded-sm" />
+                <Skeleton className="h-3.5 w-40" />
+                <Skeleton className="h-3 flex-1" />
+              </li>
+            ))}
+          </ul>
+        </section>
+      </div>
+    );
+  }
   if (readiness.isError || !readiness.data) {
     const error = toClientApiError(readiness.error);
     return (
@@ -103,31 +136,35 @@ export function NightAuditWorkspace() {
   const warnings = view.checks.filter((c) => c.outcome === "WARNING").length;
 
   return (
-    <div className="mx-auto flex max-w-5xl flex-col gap-4">
-      <header className="flex flex-wrap items-end gap-3">
-        <div className="me-auto">
-          <h1 className="text-xl font-semibold">Night audit</h1>
-          <p className="text-sm text-fg-secondary">
-            {view.businessDate ? (
-              <>
-                Closes business date <strong className="font-mono">{view.businessDate}</strong> (
-                {formatDate(view.businessDate)}) and opens the next. Hotel date{" "}
-                <span className="font-mono">{view.propertyLocalDate}</span>.
-              </>
-            ) : (
-              "The property is not live yet."
-            )}
-          </p>
-        </div>
-        <Button variant="secondary" size="sm" onClick={() => void readiness.refetch()}>
-          Recheck
-        </Button>
-        {view.actions.run ? (
-          <Button onClick={() => setDialog(true)} disabled={!view.canStart}>
-            Run night audit
-          </Button>
-        ) : null}
-      </header>
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
+      <PageHeader
+        icon={MoonStar}
+        breadcrumbs={crumbs}
+        title="Night audit"
+        description={
+          view.businessDate ? (
+            <>
+              Closes business date <strong className="font-mono">{view.businessDate}</strong> (
+              {formatDate(view.businessDate)}) and opens the next. Hotel date{" "}
+              <span className="font-mono">{view.propertyLocalDate}</span>.
+            </>
+          ) : (
+            "The property is not live yet."
+          )
+        }
+        actions={
+          <>
+            <Button variant="secondary" onClick={() => void readiness.refetch()}>
+              Recheck
+            </Button>
+            {view.actions.run ? (
+              <Button onClick={() => setDialog(true)} disabled={!view.canStart}>
+                Run night audit
+              </Button>
+            ) : null}
+          </>
+        }
+      />
 
       {view.running ? (
         <Alert tone="info">

@@ -5,9 +5,12 @@ import type { Route } from "next";
 import { useState } from "react";
 import { Alert } from "@/components/ui/Alert";
 import { Badge, type BadgeTone } from "@/components/ui/Badge";
+import { MoonStar } from "lucide-react";
 import { Button } from "@/components/ui/Button";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { FormDialog } from "@/components/ui/FormDialog";
 import { StatusPanel } from "@/components/ui/StatusPanel";
+import { PageSkeleton } from "@/components/ui/PageSkeleton";
 import { TextArea } from "@/components/ui/TextArea";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useProperty } from "@/hooks/useProperty";
@@ -50,7 +53,7 @@ export function NightAuditRunView({ runId }: { runId: string }) {
   );
   const [recovering, setRecovering] = useState(false);
 
-  if (permissionsLoading) return <StatusPanel kind="loading" title="Loading the run" />;
+  if (permissionsLoading) return <PageSkeleton title="Loading the run" layout="detail" />;
   if (!allowed) {
     return (
       <StatusPanel
@@ -60,7 +63,7 @@ export function NightAuditRunView({ runId }: { runId: string }) {
       />
     );
   }
-  if (query.isLoading) return <StatusPanel kind="loading" title="Loading the run" />;
+  if (query.isLoading) return <PageSkeleton title="Loading the run" layout="detail" />;
   if (query.isError || !query.data) {
     const error = toClientApiError(query.error);
     return (
@@ -76,31 +79,35 @@ export function NightAuditRunView({ runId }: { runId: string }) {
   const summary = run.summary;
 
   return (
-    <div className="mx-auto flex max-w-5xl flex-col gap-4">
-      <nav className="text-sm">
-        <Link
-          className="text-brand hover:underline"
-          href={`/${property.code}/night-audit` as Route}
-        >
-          ← Night audit
-        </Link>
-      </nav>
-      <header className="flex flex-wrap items-center gap-2">
-        <h1 className="me-auto text-xl font-semibold">
-          Business date <span className="font-mono">{run.businessDate}</span> · attempt{" "}
-          {run.attempt}
-        </h1>
-        <Badge tone={RUN_TONE[run.status]}>{run.status.toLowerCase()}</Badge>
-        {run.actions.recover ? (
-          <Button size="sm" variant="danger" onClick={() => setRecovering(true)}>
-            Recover stale run
-          </Button>
-        ) : null}
-      </header>
-      <p className="text-sm text-fg-secondary">
-        Started {formatDateTime(run.startedAt, property.timezone)} by {run.startedBy?.name ?? "—"}
-        {run.finishedAt ? ` · finished ${formatDateTime(run.finishedAt, property.timezone)}` : ""}
-      </p>
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
+      <PageHeader
+        back={{ href: `/${property.code}/night-audit`, label: "Night audit" }}
+        icon={MoonStar}
+        eyebrow="Night audit run"
+        title={
+          <>
+            Business date <span className="font-mono">{run.businessDate}</span> · attempt{" "}
+            {run.attempt}
+          </>
+        }
+        meta={<Badge tone={RUN_TONE[run.status]}>{run.status.toLowerCase()}</Badge>}
+        description={
+          <>
+            Started {formatDateTime(run.startedAt, property.timezone)} by{" "}
+            {run.startedBy?.name ?? "—"}
+            {run.finishedAt
+              ? ` · finished ${formatDateTime(run.finishedAt, property.timezone)}`
+              : ""}
+          </>
+        }
+        actions={
+          run.actions.recover ? (
+            <Button variant="danger" onClick={() => setRecovering(true)}>
+              Recover stale run
+            </Button>
+          ) : undefined
+        }
+      />
 
       {run.status === "FAILED" ? (
         <Alert tone="danger">

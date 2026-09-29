@@ -80,7 +80,11 @@ export function StaySearchForm({
     <form
       onSubmit={submit}
       noValidate
-      className="grid grid-cols-2 items-end gap-3 sm:grid-cols-3 lg:grid-cols-[repeat(6,minmax(0,1fr))_auto]"
+      // One row from xl; the date columns get room for a full mm/dd/yyyy
+      // value and the picker button, the counters stay compact. Fields align
+      // at the top so a hint under one field does not lift it; the button
+      // steps down by one label height to sit on the field line.
+      className="grid grid-cols-2 items-start gap-3 sm:grid-cols-3 xl:grid-cols-[minmax(10.5rem,1.5fr)_minmax(4.5rem,0.8fr)_minmax(8.5rem,1.3fr)_repeat(3,minmax(4.5rem,0.8fr))_auto]"
     >
       <TextField
         label="Arrival"
@@ -142,7 +146,7 @@ export function StaySearchForm({
         errors={errors.rooms}
         readOnly={walkIn}
       />
-      <Button type="submit" pending={pending} className="col-span-2 sm:col-span-1">
+      <Button type="submit" pending={pending} className="col-span-2 sm:col-span-1 sm:mt-5">
         {submitLabel}
       </Button>
     </form>

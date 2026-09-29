@@ -7,11 +7,21 @@ export interface TextFieldProps extends Omit<InputHTMLAttributes<HTMLInputElemen
   /** Validation messages; the first is shown and announced. */
   errors?: string[];
   hint?: string;
+  /** `lg` (44px, 15px text) for sign-in and other single-purpose forms. */
+  controlSize?: "md" | "lg";
 }
 
 /** Labelled input with hint and error wired through aria-describedby. */
 export const TextField = forwardRef<HTMLInputElement, TextFieldProps>(function TextField(
-  { label, errors, hint, className, "aria-describedby": describedByProp, ...props },
+  {
+    label,
+    errors,
+    hint,
+    controlSize = "md",
+    className,
+    "aria-describedby": describedByProp,
+    ...props
+  },
   ref,
 ) {
   const id = useId();
@@ -30,7 +40,11 @@ export const TextField = forwardRef<HTMLInputElement, TextFieldProps>(function T
         id={id}
         aria-invalid={error ? true : undefined}
         aria-describedby={describedBy || undefined}
-        className={controlClass(Boolean(error), "h-control px-3")}
+        className={
+          controlSize === "lg"
+            ? controlClass(Boolean(error), "h-11 px-3.5", "text-[0.9375rem]")
+            : controlClass(Boolean(error), "h-control px-3")
+        }
       />
       {hint ? (
         <p id={`${id}-hint`} className={fieldHintClass}>

@@ -13,8 +13,10 @@ export interface ToggleOption<T extends string> {
  * Single-choice filter as a segmented control: one bordered group whose
  * selected segment is raised (white, hairline ring, soft shadow). It is a
  * group of aria-pressed buttons, not tabs: it filters one list rather than
- * switching views. Scrolls horizontally on narrow screens instead of
- * wrapping; segments grow to finger size on touch screens.
+ * switching views. On phones a long set scrolls sideways by touch (no
+ * visible scrollbar); from md it wraps onto further rows so every option
+ * stays in view. Segments grow to finger size on touch
+ * screens.
  */
 export function ToggleGroup<T extends string>({
   label,
@@ -30,11 +32,13 @@ export function ToggleGroup<T extends string>({
   className?: string;
 }) {
   return (
-    <div className={cn("max-w-full overflow-x-auto", className)}>
+    <div
+      className={cn("scrollbar-hidden max-w-full overflow-x-auto md:overflow-visible", className)}
+    >
       <div
         role="group"
         aria-label={label}
-        className="inline-flex gap-0.5 rounded-md border border-border-subtle bg-surface-sunken p-0.5"
+        className="inline-flex gap-0.5 rounded-md border border-border-subtle bg-surface-sunken p-0.5 md:flex-wrap"
       >
         {options.map((option) => {
           const pressed = option.value === value;
@@ -45,10 +49,10 @@ export function ToggleGroup<T extends string>({
               aria-pressed={pressed}
               onClick={() => onChange(option.value)}
               className={cn(
-                "inline-flex h-8 items-center gap-2 rounded-[6px] px-3 text-sm whitespace-nowrap transition-colors duration-150",
+                "inline-flex h-8 items-center gap-2 rounded-[7px] px-3 text-sm font-medium whitespace-nowrap transition-colors duration-150",
                 "pointer-coarse:h-10",
                 pressed
-                  ? "bg-surface font-medium text-fg shadow-raised ring-1 ring-border-subtle"
+                  ? "bg-surface font-semibold text-fg shadow-raised ring-1 ring-border-subtle"
                   : "text-fg-secondary hover:bg-surface/60 hover:text-fg",
               )}
             >

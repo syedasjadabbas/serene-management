@@ -1,9 +1,13 @@
 "use client";
 
+import { ConciergeBell } from "lucide-react";
 import Link from "next/link";
 import type { Route } from "next";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { buttonClass } from "@/components/ui/Button";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { StatusPanel } from "@/components/ui/StatusPanel";
+import { PageSkeleton } from "@/components/ui/PageSkeleton";
 import { cn } from "@/components/ui/cn";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useProperty } from "@/hooks/useProperty";
@@ -77,7 +81,7 @@ export function FrontDeskWorkspace() {
     : "all";
   const q = params.get("q") ?? "";
 
-  if (isLoading) return <StatusPanel kind="loading" title="Loading front desk" />;
+  if (isLoading) return <PageSkeleton title="Loading front desk" />;
   if (!allowed) {
     return (
       <StatusPanel
@@ -140,23 +144,23 @@ export function FrontDeskWorkspace() {
   const canWalkIn = can("reservations:create") && can("frontdesk:checkin") && can("rooms:assign");
 
   return (
-    <div className="mx-auto flex max-w-7xl flex-col gap-4">
-      <header className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h1 className="text-xl font-semibold">Front desk</h1>
-          <p className="text-xs text-fg-muted">
-            Business date {counts ? formatDate(counts.businessDate) : "…"}
-          </p>
-        </div>
-        {canWalkIn ? (
-          <Link
-            href={`/${property.code}/reservations/new?walkIn=1` as Route}
-            className="inline-flex h-control items-center rounded-md bg-brand px-3 text-sm font-medium text-brand-fg hover:bg-brand-hover"
-          >
-            Walk-in
-          </Link>
-        ) : null}
-      </header>
+    <div className="flex flex-col gap-6">
+      <PageHeader
+        icon={ConciergeBell}
+        breadcrumbs={[{ label: property.code, href: `/${property.code}` }, { label: "Front desk" }]}
+        title="Front desk"
+        description={`Business date ${counts ? formatDate(counts.businessDate) : "…"}`}
+        actions={
+          canWalkIn ? (
+            <Link
+              href={`/${property.code}/reservations/new?walkIn=1` as Route}
+              className={buttonClass("primary")}
+            >
+              Walk-in
+            </Link>
+          ) : undefined
+        }
+      />
 
       <nav aria-label="Front desk views">
         <ul className="grid grid-cols-2 gap-2 lg:grid-cols-4">

@@ -24,24 +24,34 @@ export function WorkspaceSwitcher({
   const properties = me?.properties ?? [];
   const organization = me ? canUseOrganizationWorkspace(me) : false;
 
-  const label = current ? (
-    <span className="flex min-w-0 items-baseline gap-2 whitespace-nowrap">
-      <span className="font-mono text-xs text-fg-muted">{current.code}</span>
-      <span className="truncate font-medium">{current.name}</span>
-    </span>
-  ) : (
-    <span className="truncate font-medium whitespace-nowrap">
-      {me?.organization.name ?? "Organization"}
+  // SERENE family selector (SALESTORM's project picker): micro-label, a
+  // hairline divider, then the workspace.
+  const label = (
+    <span className="flex min-w-0 items-center gap-2.5 whitespace-nowrap">
+      <span className="hidden label-caps md:inline">{current ? "Property" : "Workspace"}</span>
+      <span aria-hidden="true" className="hidden h-4 w-px bg-border md:block" />
+      {current ? (
+        <span className="flex min-w-0 items-baseline gap-2">
+          <span className="font-mono text-xs font-medium text-fg-muted">{current.code}</span>
+          <span className="hidden truncate font-semibold text-fg sm:inline">{current.name}</span>
+        </span>
+      ) : (
+        <span className="truncate font-semibold text-fg">
+          {me?.organization.name ?? "Organization"}
+        </span>
+      )}
     </span>
   );
+  const pill =
+    "h-10 rounded-md border border-border bg-surface px-2.5 text-sm shadow-card hover:bg-surface-sunken sm:px-3";
 
   if (!me || (properties.length <= 1 && !organization))
-    return <div className="flex h-control min-w-0 items-center px-2 text-sm">{label}</div>;
+    return <div className={pill + " flex min-w-0 items-center hover:bg-surface"}>{label}</div>;
 
   const itemClass =
-    "flex items-baseline gap-2 rounded-md px-2 py-2 text-sm hover:bg-surface-sunken aria-[current=page]:bg-brand-subtle md:py-1.5";
+    "flex items-baseline gap-2 rounded-md px-2.5 py-2 text-sm hover:bg-surface-sunken aria-[current=page]:bg-brand-subtle aria-[current=page]:font-semibold aria-[current=page]:text-brand";
   return (
-    <Disclosure label={label}>
+    <Disclosure label={label} buttonClassName={pill}>
       {(close) => (
         <nav aria-label="Switch workspace">
           <ul className="flex flex-col">

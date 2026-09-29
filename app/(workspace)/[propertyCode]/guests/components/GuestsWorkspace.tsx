@@ -1,8 +1,11 @@
 "use client";
 
+import { Contact } from "lucide-react";
 import type { Route } from "next";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { StatusPanel } from "@/components/ui/StatusPanel";
+import { PageSkeleton } from "@/components/ui/PageSkeleton";
 import { Tab, TabList } from "@/components/ui/TabList";
 import { useTabs } from "@/components/ui/tabs";
 import { usePermissions } from "@/hooks/usePermissions";
@@ -35,7 +38,7 @@ export function GuestsWorkspace() {
     (id) => router.replace(`${pathname}?tab=${id}` as Route),
   );
 
-  if (isLoading) return <StatusPanel kind="loading" title="Loading guests" />;
+  if (isLoading) return <PageSkeleton title="Loading guests" />;
   if (!tab) {
     return (
       <StatusPanel
@@ -46,13 +49,13 @@ export function GuestsWorkspace() {
     );
   }
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-4">
-      <div>
-        <h1 className="text-xl font-semibold">Guests</h1>
-        <p className="text-sm text-fg-muted">
-          Guest and company profiles are shared by every property of the organization.
-        </p>
-      </div>
+    <div className="flex flex-col gap-6">
+      <PageHeader
+        icon={Contact}
+        breadcrumbs={[{ label: property.code, href: `/${property.code}` }, { label: "Guests" }]}
+        title="Guests"
+        description="Guest and company profiles are shared by every property of the organization."
+      />
       <TabList label="Profiles">
         {visible.map(([id, label]) => (
           <Tab

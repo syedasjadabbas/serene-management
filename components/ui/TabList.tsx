@@ -3,8 +3,9 @@ import { cn } from "./cn";
 
 /**
  * Visual tabs for `useTabs` (components/ui/tabs.ts, which owns the ARIA
- * wiring and keyboard behaviour). Underlined text tabs on a hairline; the
- * list scrolls horizontally on narrow screens instead of wrapping. Use tabs
+ * wiring and keyboard behaviour). A white bar of text tabs (SERENE family):
+ * the selected tab is a mint pill in brand green. The bar scrolls sideways
+ * on narrow screens (no visible scrollbar) instead of wrapping. Use tabs
  * to switch views of one subject; use ToggleGroup to filter a list.
  *
  *   const tabs = useTabs(ids, selected, select);
@@ -27,7 +28,7 @@ export function TabList({
       role="tablist"
       aria-label={label}
       className={cn(
-        "flex max-w-full gap-1 overflow-x-auto overflow-y-hidden shadow-[inset_0_-1px_0_var(--sm-border-subtle)]",
+        "scrollbar-hidden flex max-w-full gap-1 overflow-x-auto overflow-y-hidden rounded-lg border border-border-subtle bg-surface p-1 shadow-card",
         className,
       )}
     >
@@ -46,11 +47,11 @@ export const Tab = forwardRef<HTMLButtonElement, ComponentProps<"button">>(funct
       type="button"
       {...props}
       className={cn(
-        "inline-flex min-h-10 shrink-0 items-center gap-2 border-b-2 px-3 text-sm whitespace-nowrap transition-colors duration-150",
+        "inline-flex min-h-9 shrink-0 items-center gap-2 rounded-md px-3.5 text-sm font-medium whitespace-nowrap transition-colors duration-150",
         "pointer-coarse:min-h-11",
         props["aria-selected"]
-          ? "border-brand font-medium text-fg"
-          : "border-transparent text-fg-secondary hover:border-border-strong hover:text-fg",
+          ? "bg-brand-subtle font-semibold text-brand"
+          : "text-fg-secondary hover:bg-surface-sunken hover:text-fg",
         className,
       )}
     >

@@ -1,5 +1,5 @@
-import { StatusPanel } from "@/components/ui/StatusPanel";
+import { PageSkeleton } from "@/components/ui/PageSkeleton";
 
 export default function OrganizationLoading() {
-  return <StatusPanel level={1} kind="loading" title="Loading organization" />;
+  return <PageSkeleton title="Loading organization" />;
 }

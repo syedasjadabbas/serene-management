@@ -6,6 +6,7 @@ import { type FormEvent, useState } from "react";
 import { useDispatch } from "react-redux";
 import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
+import { PasswordField } from "@/components/ui/PasswordField";
 import { TextField } from "@/components/ui/TextField";
 import { baseApi } from "@/lib/api/baseApi";
 import { useLoginMutation } from "@/lib/api/endpoints/session.api";
@@ -45,7 +46,7 @@ export function LoginForm({ next }: { next: string }) {
   }
 
   return (
-    <form onSubmit={onSubmit} noValidate className="flex flex-col gap-4">
+    <form onSubmit={onSubmit} noValidate className="flex flex-col gap-5">
       {apiError ? (
         <Alert tone="danger">
           {apiError.code === "RATE_LIMITED"
@@ -59,19 +60,22 @@ export function LoginForm({ next }: { next: string }) {
         type="email"
         autoComplete="username"
         inputMode="email"
+        placeholder="name@hotel.com"
         required
         autoFocus
+        controlSize="lg"
         errors={fieldErrors.email}
       />
-      <TextField
+      <PasswordField
         label="Password"
         name="password"
-        type="password"
         autoComplete="current-password"
+        placeholder="Enter your password"
         required
+        controlSize="lg"
         errors={fieldErrors.password}
       />
-      <Button type="submit" pending={isLoading} className="w-full">
+      <Button type="submit" size="touch" pending={isLoading} className="mt-1 w-full">
         Sign in
       </Button>
     </form>

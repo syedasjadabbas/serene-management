@@ -10,9 +10,12 @@ export const fieldLabelClass = "text-xs font-medium text-fg-secondary";
 export const fieldHintClass = "text-xs text-fg-muted";
 export const fieldErrorClass = "text-xs text-danger";
 
-export function controlClass(invalid = false, className?: string) {
+/** `text` sets the control's font size (cn does not merge conflicting classes). */
+export function controlClass(invalid = false, className?: string, text = "text-sm") {
   return cn(
-    "rounded-md border bg-surface text-sm text-fg transition-colors duration-150",
+    "rounded-md border bg-surface text-fg shadow-card transition-[border-color,box-shadow] duration-150",
+    text,
+    "focus-visible:border-brand focus-visible:shadow-[0_0_0_3px_rgb(16_124_65/0.14)] focus-visible:outline-none",
     "placeholder:text-fg-muted",
     "disabled:cursor-not-allowed disabled:bg-surface-sunken disabled:text-fg-muted",
     invalid ? "border-danger" : "border-border-strong hover:border-fg-muted",

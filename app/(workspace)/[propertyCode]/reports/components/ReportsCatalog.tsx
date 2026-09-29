@@ -1,8 +1,11 @@
 "use client";
 
+import { ChartColumn } from "lucide-react";
 import Link from "next/link";
 import type { Route } from "next";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { StatusPanel } from "@/components/ui/StatusPanel";
+import { PageSkeleton } from "@/components/ui/PageSkeleton";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useProperty } from "@/hooks/useProperty";
 import { useReportCatalogQuery } from "@/lib/api/endpoints/reports.api";
@@ -35,7 +38,7 @@ export function ReportsCatalog() {
   const catalog = useReportCatalogQuery(property.id);
 
   if (permissionsLoading || catalog.isLoading) {
-    return <StatusPanel kind="loading" title="Loading reports" />;
+    return <PageSkeleton title="Loading reports" />;
   }
   if (catalog.isError || !catalog.data) {
     const error = toClientApiError(catalog.error);
@@ -59,17 +62,21 @@ export function ReportsCatalog() {
   }
 
   return (
-    <div className="mx-auto flex max-w-5xl flex-col gap-5">
-      <header>
-        <h1 className="text-xl font-semibold">Reports</h1>
-        <p className="text-sm text-fg-secondary">
-          Closed business dates come from the night-audit records and never change; the open date is
-          live.
-          {can("reports:financial")
-            ? ""
-            : " Revenue figures need the financial reports permission."}
-        </p>
-      </header>
+    <div className="flex flex-col gap-6">
+      <PageHeader
+        icon={ChartColumn}
+        breadcrumbs={[{ label: property.code, href: `/${property.code}` }, { label: "Reports" }]}
+        title="Reports"
+        description={
+          <>
+            Closed business dates come from the night-audit records and never change; the open date
+            is live.
+            {can("reports:financial")
+              ? ""
+              : " Revenue figures need the financial reports permission."}
+          </>
+        }
+      />
       {GROUPS.map(({ group, title, description }) => {
         const reports = catalog.data.reports.filter((r) => r.group === group);
         if (reports.length === 0) return null;
@@ -81,7 +88,7 @@ export function ReportsCatalog() {
               </h2>
               <p className="text-xs text-fg-muted">{description}</p>
             </div>
-            <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
               {reports.map((report) => (
                 <li key={report.key}>
                   <Link

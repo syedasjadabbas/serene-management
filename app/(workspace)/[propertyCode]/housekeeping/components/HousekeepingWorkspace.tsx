@@ -1,12 +1,14 @@
 "use client";
 
 import { ToggleGroup } from "@/components/ui/ToggleGroup";
-import { Count } from "@/components/ui/Badge";
+import { ViewNav, type ViewNavItem } from "@/components/ui/ViewNav";
+import { BedDouble } from "lucide-react";
 import type { Route } from "next";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { RoomBoardPanel } from "@/components/rooms/RoomBoardPanel";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { StatusPanel } from "@/components/ui/StatusPanel";
-import { cn } from "@/components/ui/cn";
+import { PageSkeleton } from "@/components/ui/PageSkeleton";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useProperty } from "@/hooks/useProperty";
 import { useHousekeepingSummaryQuery } from "@/lib/api/endpoints/housekeeping.api";
@@ -58,7 +60,7 @@ export function HousekeepingWorkspace() {
     ? params.get("filter")!
     : "all";
 
-  if (isLoading) return <StatusPanel kind="loading" title="Loading housekeeping" />;
+  if (isLoading) return <PageSkeleton title="Loading housekeeping" />;
   if (!allowed) {
     return (
       <StatusPanel
@@ -88,7 +90,7 @@ export function HousekeepingWorkspace() {
   }
 
   const counts = summary.data?.tasks;
-  const tabs: { key: View; label: string; count: number | undefined }[] = [
+  const tabs: ViewNavItem<View>[] = [
     { key: "board", label: "Room board", count: undefined },
     { key: "mine", label: "My tasks", count: counts?.mine },
     { key: "open", label: "Open tasks", count: counts?.open },
@@ -97,41 +99,30 @@ export function HousekeepingWorkspace() {
   ];
 
   return (
-    <div className="mx-auto flex max-w-7xl flex-col gap-4">
-      <header className="flex flex-wrap items-end justify-between gap-2">
-        <div>
-          <h1 className="text-xl font-semibold">Housekeeping</h1>
-          <p className="text-xs text-fg-muted">
+    <div className="flex flex-col gap-6">
+      <PageHeader
+        icon={BedDouble}
+        breadcrumbs={[
+          { label: property.code, href: `/${property.code}` },
+          { label: "Housekeeping" },
+        ]}
+        title="Housekeeping"
+        description={
+          <>
             Business date {summary.data ? formatDate(summary.data.businessDate) : "…"}
             {counts
               ? ` · ${counts.pending} to clean · ${counts.inProgress} in progress · ${counts.unassigned} unassigned · ${counts.completedToday} done today`
               : ""}
-          </p>
-        </div>
-      </header>
+          </>
+        }
+      />
 
-      <nav aria-label="Housekeeping views" className="-mx-1 overflow-x-auto">
-        <ul className="flex gap-1 px-1">
-          {tabs.map((tab) => (
-            <li key={tab.key}>
-              <button
-                type="button"
-                aria-current={view === tab.key ? "page" : undefined}
-                onClick={() => navigate({ view: tab.key })}
-                className={cn(
-                  "flex items-center gap-2 rounded-md border px-3 py-2 text-sm whitespace-nowrap",
-                  view === tab.key
-                    ? "border-brand bg-brand-subtle font-medium text-brand"
-                    : "border-border-subtle bg-surface hover:bg-surface-sunken",
-                )}
-              >
-                {tab.label}
-                {tab.count !== undefined ? <Count>{tab.count}</Count> : null}
-              </button>
-            </li>
-          ))}
-        </ul>
-      </nav>
+      <ViewNav
+        label="Housekeeping views"
+        items={tabs}
+        value={view}
+        onChange={(key) => navigate({ view: key })}
+      />
 
       {view === "board" ? (
         <>

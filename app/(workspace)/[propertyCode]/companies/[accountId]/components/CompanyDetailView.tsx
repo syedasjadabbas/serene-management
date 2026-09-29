@@ -5,10 +5,13 @@ import type { Route } from "next";
 import { useState } from "react";
 import { Alert } from "@/components/ui/Alert";
 import { Badge } from "@/components/ui/Badge";
+import { Building2 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { FormDialog } from "@/components/ui/FormDialog";
 import { Select } from "@/components/ui/Select";
 import { StatusPanel } from "@/components/ui/StatusPanel";
+import { PageSkeleton } from "@/components/ui/PageSkeleton";
 import { TextArea } from "@/components/ui/TextArea";
 import { TextField } from "@/components/ui/TextField";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
@@ -36,7 +39,7 @@ export function CompanyDetailView({ accountId }: { accountId: string }) {
   );
   const [remove, removeState] = useRemoveAccountContactMutation();
 
-  if (query.isLoading) return <StatusPanel kind="loading" title="Loading company" />;
+  if (query.isLoading) return <PageSkeleton title="Loading company" layout="detail" />;
   if (error || !query.data) {
     return (
       <StatusPanel
@@ -64,36 +67,29 @@ export function CompanyDetailView({ accountId }: { accountId: string }) {
   const c = query.data;
   const manage = c.actions.manage;
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-4">
-      <nav aria-label="Breadcrumb" className="text-xs text-fg-muted">
-        <Link href={`/${property.code}/guests?tab=companies` as Route} className="hover:underline">
-          Companies
-        </Link>{" "}
-        / {c.code ?? c.name}
-      </nav>
+    <div className="mx-auto flex max-w-6xl flex-col gap-6">
+      <PageHeader
+        back={{ href: `/${property.code}/guests?tab=companies`, label: "Companies" }}
+        icon={Building2}
+        eyebrow="Company"
+        title={c.name}
+        meta={
+          <>
+            <Badge>{c.type === "TRAVEL_AGENT" ? "Travel agent" : "Company"}</Badge>
+            {c.isRestricted ? <Badge tone="danger">Restricted</Badge> : null}
+            {c.status !== "ACTIVE" ? <Badge>Inactive</Badge> : null}
+          </>
+        }
+        actions={
+          manage ? <Button onClick={() => setDialog("edit")}>Edit company</Button> : undefined
+        }
+      />
+      {c.isRestricted ? (
+        <Alert tone="danger">
+          Restricted from booking{c.restrictionReason ? `: ${c.restrictionReason}` : ""}.
+        </Alert>
+      ) : null}
       <section className="rounded-lg border border-border-subtle bg-surface">
-        <div className="flex flex-wrap items-center gap-2 border-b border-border-subtle px-4 py-2.5">
-          <h1 className="text-lg font-semibold">{c.name}</h1>
-          <Badge>{c.type === "TRAVEL_AGENT" ? "Travel agent" : "Company"}</Badge>
-          {c.isRestricted ? <Badge tone="danger">Restricted</Badge> : null}
-          {c.status !== "ACTIVE" ? <Badge>Inactive</Badge> : null}
-          {manage ? (
-            <Button
-              size="sm"
-              className="ms-auto min-h-11 md:min-h-0"
-              onClick={() => setDialog("edit")}
-            >
-              Edit company
-            </Button>
-          ) : null}
-        </div>
-        {c.isRestricted ? (
-          <div className="px-4 pt-3">
-            <Alert tone="danger">
-              Restricted from booking{c.restrictionReason ? `: ${c.restrictionReason}` : ""}.
-            </Alert>
-          </div>
-        ) : null}
         <dl className="grid grid-cols-1 gap-x-6 gap-y-2 p-4 sm:grid-cols-2 lg:grid-cols-4">
           {(
             [

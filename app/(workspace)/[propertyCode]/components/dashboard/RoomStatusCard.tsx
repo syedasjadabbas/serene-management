@@ -47,7 +47,7 @@ export function RoomStatusCard({
         ) : null
       }
     >
-      <div className="flex flex-col items-center gap-5 sm:flex-row lg:flex-col xl:flex-row">
+      <div className="flex flex-col items-center gap-5 sm:flex-row lg:flex-col min-[87.5rem]:flex-row">
         <figure className="relative size-36 shrink-0">
           <div aria-hidden="true" className="absolute inset-0">
             <ResponsiveContainer width="100%" height="100%">
@@ -82,7 +82,7 @@ export function RoomStatusCard({
           <dl className="grid grid-cols-2 gap-2">
             {slices.map((slice) => (
               <div key={slice.name} className="rounded-md bg-surface-sunken px-3 py-2">
-                <dt className="flex items-center gap-1.5 text-xs text-fg-secondary">
+                <dt className="flex items-center gap-1.5 label-caps">
                   <span
                     aria-hidden="true"
                     className="size-2 rounded-full"

@@ -45,16 +45,18 @@ export function StatCard({
       <span
         aria-hidden="true"
         className={cn(
-          "hidden size-10 shrink-0 items-center justify-center rounded-md sm:flex",
+          "hidden size-10 shrink-0 items-center justify-center rounded-md border border-current/10 sm:flex",
           ICON_TONES[tone],
         )}
       >
         <Icon className="size-5" />
       </span>
       <span className="flex min-w-0 flex-1 flex-col">
-        <span className="truncate text-xs font-medium text-fg-secondary">{label}</span>
-        <span className="text-2xl leading-tight font-semibold text-fg tabular-nums">{value}</span>
-        {hint ? <span className="truncate text-xs text-fg-muted">{hint}</span> : null}
+        <span className="line-clamp-2 label-caps">{label}</span>
+        <span className="mt-1 text-2xl leading-tight font-bold tracking-[-0.02em] text-fg tabular-nums">
+          {value}
+        </span>
+        {hint ? <span className="line-clamp-2 text-xs text-fg-muted">{hint}</span> : null}
         {progress !== undefined ? (
           <span
             aria-hidden="true"
@@ -70,7 +72,7 @@ export function StatCard({
     </>
   );
   const base = cn(
-    "flex min-w-0 items-start gap-3 rounded-lg border border-border-subtle bg-surface p-3 shadow-card sm:p-4",
+    "flex min-w-0 items-start gap-3.5 rounded-lg border border-border-subtle bg-surface p-4 shadow-card sm:p-5",
     className,
   );
   return href ? (

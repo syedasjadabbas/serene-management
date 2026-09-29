@@ -104,7 +104,7 @@ function RoomTypeRow({
               id={headingId}
               className="flex flex-wrap items-center gap-2 text-base font-semibold"
             >
-              <span className="rounded-[5px] bg-surface-sunken px-1.5 font-mono text-xs text-fg-secondary">
+              <span className="rounded-sm border border-border-subtle bg-surface-sunken px-1.5 font-mono text-xs text-fg-secondary">
                 {rt.roomType.code}
               </span>
               {rt.roomType.name}
@@ -123,8 +123,8 @@ function RoomTypeRow({
           <dl className="grid grid-cols-3 gap-x-5 gap-y-2 sm:grid-cols-6">
             {figures.map(([label, value, tone]) => (
               <div key={label} className="min-w-0">
-                <dt className="text-2xs whitespace-nowrap text-fg-muted">{label}</dt>
-                <dd className={cn("text-sm font-semibold tabular-nums", tone)}>{value}</dd>
+                <dt className="label-caps whitespace-nowrap">{label}</dt>
+                <dd className={cn("mt-0.5 text-base font-semibold tabular-nums", tone)}>{value}</dd>
               </div>
             ))}
           </dl>
@@ -187,7 +187,7 @@ function RoomTypeRow({
 function NightStrip({ roomType }: { roomType: RoomTypeAvailabilityView }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <p className="text-xs font-medium text-fg-secondary">Rooms free per night</p>
+      <p className="label-caps">Rooms free per night</p>
       <ul
         aria-label={`Rooms free per night for ${roomType.roomType.name}`}
         className="flex flex-wrap gap-1.5"

@@ -5,7 +5,6 @@ import Link from "next/link";
 import type { Route } from "next";
 import { useRouter } from "next/navigation";
 import { type FormEvent, useId, useState } from "react";
-import { controlClass } from "@/components/ui/field";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useProperty } from "@/hooks/useProperty";
 
@@ -38,9 +37,9 @@ export function ReservationQuickSearch() {
         href={`/${property.code}/reservations` as Route}
         aria-label="Find a reservation"
         title="Find a reservation"
-        className="flex size-control items-center justify-center rounded-md text-fg-secondary hover:bg-surface-sunken hover:text-fg xl:hidden"
+        className="flex size-10 shrink-0 items-center justify-center rounded-md border border-border bg-surface text-fg-secondary shadow-card hover:bg-surface-sunken hover:text-fg xl:hidden"
       >
-        <Search aria-hidden="true" className="size-5" />
+        <Search aria-hidden="true" className="size-[1.125rem]" />
       </Link>
       <form role="search" onSubmit={submit} className="relative hidden w-full max-w-sm xl:block">
         <label htmlFor={id} className="sr-only">
@@ -56,10 +55,7 @@ export function ReservationQuickSearch() {
           value={text}
           onChange={(event) => setText(event.target.value)}
           placeholder="Find reservation or guest"
-          className={controlClass(
-            false,
-            "h-10 w-full border-transparent bg-surface-sunken ps-9 pe-3 hover:border-border focus:bg-surface",
-          )}
+          className="h-10 w-full rounded-md border border-border bg-surface ps-9 pe-3 text-sm text-fg shadow-card transition-[border-color,box-shadow] duration-150 placeholder:text-fg-muted hover:border-border-strong/60 focus-visible:border-brand focus-visible:shadow-[0_0_0_3px_rgb(16_124_65/0.14)] focus-visible:outline-none"
         />
       </form>
     </>

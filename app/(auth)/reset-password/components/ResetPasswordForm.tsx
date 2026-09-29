@@ -4,7 +4,7 @@ import Link from "next/link";
 import { type FormEvent, useEffect, useRef, useState } from "react";
 import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
-import { TextField } from "@/components/ui/TextField";
+import { PasswordField } from "@/components/ui/PasswordField";
 import { PASSWORD_MIN_LENGTH } from "@/lib/auth/password-policy";
 import { useCompletePasswordResetMutation } from "@/lib/api/endpoints/session.api";
 import { toClientApiError } from "@/lib/api/errors";
@@ -66,25 +66,26 @@ export function ResetPasswordForm() {
             : apiError.message}
         </Alert>
       ) : null}
-      <TextField
+      <PasswordField
         label="New password"
-        type="password"
         autoComplete="new-password"
+        controlSize="lg"
         hint={`At least ${PASSWORD_MIN_LENGTH} characters`}
         value={password}
         onChange={(e) => setPassword(e.target.value)}
         errors={apiError?.fieldErrors.newPassword}
       />
-      <TextField
+      <PasswordField
         label="Repeat the new password"
-        type="password"
         autoComplete="new-password"
+        controlSize="lg"
         value={confirm}
         onChange={(e) => setConfirm(e.target.value)}
         errors={mismatch ? ["The passwords do not match"] : undefined}
       />
       <Button
         type="submit"
+        size="touch"
         pending={isLoading}
         disabled={!token || password.length < PASSWORD_MIN_LENGTH || confirm !== password}
         className="w-full"

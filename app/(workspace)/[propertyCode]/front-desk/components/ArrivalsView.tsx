@@ -40,12 +40,16 @@ export function ArrivalsView({ filter, q }: { filter: string; q: string }) {
           </Link>
         </Alert>
       ) : null}
+      {/* Narrow screens scroll the table sideways; the guest column stays pinned. */}
       <div className="relative overflow-x-auto rounded-lg border border-border-subtle bg-surface">
-        <table className="w-full min-w-[980px] text-sm">
+        <table className="w-full min-w-[940px] text-sm">
           <caption className="sr-only">Arrivals for the business date</caption>
           <thead className="bg-surface-sunken text-left text-xs text-fg-secondary">
             <tr>
-              <th scope="col" className="px-3 py-2 font-medium">
+              <th
+                scope="col"
+                className="sticky start-0 z-[1] min-w-44 bg-surface-sunken px-3 py-2 font-medium"
+              >
                 Guest
               </th>
               <th scope="col" className="px-2 py-2 font-medium">
@@ -165,8 +169,8 @@ function ArrivalsPage({
   return (
     <tbody className="divide-y divide-border-subtle border-t border-border-subtle">
       {data.items.map((row) => (
-        <tr key={row.reservationRoomId} className="align-top hover:bg-surface-sunken/60">
-          <td className="px-3 py-2">
+        <tr key={row.reservationRoomId} className="group align-top hover:bg-surface-sunken/60">
+          <td className="sticky start-0 z-[1] bg-surface px-3 py-2 group-hover:bg-[color-mix(in_srgb,var(--sm-surface-sunken)_60%,var(--sm-surface))]">
             <span className="font-medium">{row.guest.name}</span>
             {row.guest.vip ? (
               <span className="ms-1 text-2xs font-semibold text-accent">VIP {row.guest.vip}</span>

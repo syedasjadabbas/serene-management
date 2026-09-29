@@ -183,8 +183,8 @@ export function ReservationRoomPanel({
       <dl className="mx-5 grid grid-cols-2 gap-px overflow-hidden rounded-md border border-border-subtle bg-border-subtle sm:grid-cols-3 xl:grid-cols-6">
         {stay.map(([label, value]) => (
           <div key={label} className="bg-surface-sunken px-3 py-2">
-            <dt className="text-xs text-fg-muted">{label}</dt>
-            <dd className="text-sm font-semibold tabular-nums">{value}</dd>
+            <dt className="label-caps">{label}</dt>
+            <dd className="mt-0.5 text-sm font-semibold tabular-nums">{value}</dd>
           </div>
         ))}
       </dl>
@@ -207,10 +207,10 @@ export function ReservationRoomPanel({
         </div>
       </div>
 
-      <div className="grid gap-6 p-5 lg:grid-cols-[3fr_2fr]">
+      <div className="grid gap-6 p-5 sm:px-6 2xl:grid-cols-[3fr_2fr]">
         <FactList items={facts} />
         <div className="min-w-0">
-          <h3 className="mb-2 text-sm font-semibold">Nightly rates</h3>
+          <h3 className="mb-2 label-caps">Nightly rates</h3>
           <TableFrame label={`Nightly rates for ${room.displayConfirmation}`}>
             <Table caption={`Nightly rates for ${room.displayConfirmation}`}>
               <THead>

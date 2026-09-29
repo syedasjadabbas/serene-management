@@ -1,6 +1,7 @@
 "use client";
 
 import { ToggleGroup } from "@/components/ui/ToggleGroup";
+import { UsersRound } from "lucide-react";
 import Link from "next/link";
 import type { Route } from "next";
 import { useRouter } from "next/navigation";
@@ -8,7 +9,10 @@ import { useState } from "react";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { FormDialog } from "@/components/ui/FormDialog";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { StatusPanel } from "@/components/ui/StatusPanel";
+import { PageSkeleton } from "@/components/ui/PageSkeleton";
+import { SkeletonRows } from "@/components/ui/Skeleton";
 import { TextArea } from "@/components/ui/TextArea";
 import { TextField } from "@/components/ui/TextField";
 import { usePermissions } from "@/hooks/usePermissions";
@@ -24,6 +28,26 @@ const STATUSES = [
   ["CANCELLED", "Cancelled"],
 ] as const;
 
+/** Empty-state copy per status tab: what belongs there and how it gets there. */
+const EMPTY: Record<string, { title: string; description: string }> = {
+  ACTIVE: {
+    title: "No active groups",
+    description: "Create a group for a wedding, tour or event, then add a block to hold its rooms.",
+  },
+  CLOSED: {
+    title: "No closed groups",
+    description: "Groups appear here once their stay is over and they are closed.",
+  },
+  CANCELLED: {
+    title: "No cancelled groups",
+    description: "Cancelled groups are kept here for reference.",
+  },
+};
+
+/** Row layout shared by the column headings and the rows (md and up). */
+const ROW_GRID =
+  "md:grid-cols-[minmax(0,2fr)_minmax(max-content,1.4fr)_minmax(0,2fr)_minmax(7.5rem,auto)]";
+
 /** Groups managed from this property with their block pickup. */
 export function GroupsWorkspace() {
   const property = useProperty();
@@ -34,7 +58,7 @@ export function GroupsWorkspace() {
   const query = useGroupsQuery({ propertyId: property.id, status }, { skip: !can("groups:read") });
   const error = toClientApiError(query.error);
 
-  if (isLoading) return <StatusPanel kind="loading" title="Loading groups" />;
+  if (isLoading) return <PageSkeleton title="Loading groups" />;
   if (!can("groups:read")) {
     return (
       <StatusPanel
@@ -45,27 +69,31 @@ export function GroupsWorkspace() {
     );
   }
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-4">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold">Groups</h1>
-          <p className="text-sm text-fg-muted">
-            Blocks hold rooms for a group; guests are picked up into them at the block&apos;s rate.
-          </p>
-        </div>
-        {can("groups:manage") ? (
-          <Button size="touch" onClick={() => setCreating(true)}>
-            New group
-          </Button>
-        ) : null}
-      </div>
+    <div className="flex flex-col gap-6">
+      <PageHeader
+        icon={UsersRound}
+        breadcrumbs={[{ label: property.code, href: `/${property.code}` }, { label: "Groups" }]}
+        title="Groups"
+        description="Blocks hold rooms for a group; guests are picked up into them at the block's rate."
+        actions={
+          can("groups:manage") ? (
+            <Button size="touch" onClick={() => setCreating(true)}>
+              New group
+            </Button>
+          ) : undefined
+        }
+      />
       <ToggleGroup
         label="Group status"
         options={STATUSES.map(([value, label]) => ({ value, label }))}
         value={status}
         onChange={setStatus}
       />
-      {query.isLoading ? <StatusPanel kind="loading" title="Loading groups" /> : null}
+      {query.isLoading ? (
+        <div className="overflow-hidden rounded-lg border border-border-subtle bg-surface">
+          <SkeletonRows rows={4} columns={4} label="Loading groups" />
+        </div>
+      ) : null}
       {error ? (
         <StatusPanel
           kind="error"
@@ -75,18 +103,45 @@ export function GroupsWorkspace() {
         />
       ) : null}
       {query.data && query.data.items.length === 0 ? (
-        <StatusPanel
-          kind="empty"
-          title="No groups here"
-          description="Create a group, then add a block for its rooms."
-        />
+        <div className="rounded-lg border border-dashed border-border bg-surface">
+          <StatusPanel
+            kind="empty"
+            title={EMPTY[status]?.title ?? "No groups here"}
+            description={EMPTY[status]?.description}
+            action={
+              status === "ACTIVE" && can("groups:manage") ? (
+                <Button variant="secondary" onClick={() => setCreating(true)}>
+                  New group
+                </Button>
+              ) : undefined
+            }
+          />
+        </div>
       ) : null}
       {query.data && query.data.items.length > 0 ? (
-        <ul className="divide-y divide-border-subtle overflow-hidden rounded-lg border border-border-subtle bg-surface">
-          {query.data.items.map((group) => (
-            <GroupRow key={group.id} group={group} />
-          ))}
-        </ul>
+        <section
+          aria-label="Groups"
+          className="overflow-hidden rounded-lg border border-border-subtle bg-surface"
+        >
+          <div
+            aria-hidden="true"
+            className={`hidden items-center gap-x-4 border-b border-border-subtle bg-surface-sunken px-4 py-2 text-xs font-medium text-fg-secondary md:grid ${ROW_GRID}`}
+          >
+            <span>Group</span>
+            <span>Stay</span>
+            <span>Pickup</span>
+            <span className="justify-self-end">Remaining</span>
+          </div>
+          <ul className="divide-y divide-border-subtle">
+            {query.data.items.map((group) => (
+              <GroupRow key={group.id} group={group} />
+            ))}
+          </ul>
+          <p className="border-t border-border-subtle px-4 py-2 text-xs text-fg-muted">
+            Showing {query.data.items.length} {query.data.items.length === 1 ? "group" : "groups"}
+            {query.data.meta.nextCursor ? " (first page)" : ""}
+          </p>
+        </section>
       ) : null}
       {creating ? (
         <NewGroupDialog
@@ -105,7 +160,7 @@ function GroupRow({ group }: { group: GroupListItem }) {
     <li>
       <Link
         href={`/${property.code}/groups/${group.id}` as Route}
-        className="grid min-h-14 grid-cols-[1fr_auto] items-center gap-x-4 gap-y-0.5 px-4 py-2.5 hover:bg-surface-sunken md:grid-cols-[minmax(0,2fr)_minmax(0,1.5fr)_minmax(0,2fr)_auto]"
+        className={`grid min-h-14 grid-cols-1 items-center gap-x-4 gap-y-0.5 px-4 py-2.5 hover:bg-surface-sunken ${ROW_GRID}`}
       >
         <span className="min-w-0">
           <span className="block truncate font-medium">{group.name}</span>
@@ -114,17 +169,17 @@ function GroupRow({ group }: { group: GroupListItem }) {
             {group.account ? ` · ${group.account}` : ""}
           </span>
         </span>
-        <span className="text-sm">
+        <span className="text-xs text-fg-secondary md:text-sm md:whitespace-nowrap md:text-fg">
           {group.firstNight
             ? `${formatDate(group.firstNight)} → ${formatDate(group.departure)}`
             : "No block yet"}
         </span>
-        <span className="col-span-2 text-xs text-fg-muted md:col-span-1 md:text-sm">
+        <span className="text-xs text-fg-muted md:text-sm">
           {group.blocks} block{group.blocks === 1 ? "" : "s"} · {t.pickedUp}/{t.allocated}{" "}
           room-nights picked up
           {t.released ? ` · ${t.released} released` : ""}
         </span>
-        <span className="col-span-2 md:col-span-1 md:justify-self-end">
+        <span className="mt-1 md:mt-0 md:justify-self-end">
           <Badge tone={t.remaining > 0 ? "info" : "neutral"}>{t.remaining} remaining</Badge>
         </span>
       </Link>

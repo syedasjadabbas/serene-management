@@ -4,8 +4,12 @@ import Link from "next/link";
 import type { Route } from "next";
 import { useState } from "react";
 import { Badge, type BadgeTone } from "@/components/ui/Badge";
+import { UsersRound } from "lucide-react";
 import { Button } from "@/components/ui/Button";
+import { KeyFacts } from "@/components/ui/KeyFacts";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { StatusPanel } from "@/components/ui/StatusPanel";
+import { PageSkeleton } from "@/components/ui/PageSkeleton";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useProperty } from "@/hooks/useProperty";
 import { useGroupQuery } from "@/lib/api/endpoints/groups.api";
@@ -42,7 +46,7 @@ export function GroupDetailView({ groupId }: { groupId: string }) {
   const error = toClientApiError(query.error);
   const [dialog, setDialog] = useState<Dialog>(null);
 
-  if (isLoading) return <StatusPanel kind="loading" title="Loading group" />;
+  if (isLoading) return <PageSkeleton title="Loading group" layout="detail" />;
   if (!can("groups:read")) {
     return (
       <StatusPanel
@@ -52,7 +56,7 @@ export function GroupDetailView({ groupId }: { groupId: string }) {
       />
     );
   }
-  if (query.isLoading) return <StatusPanel kind="loading" title="Loading group" />;
+  if (query.isLoading) return <PageSkeleton title="Loading group" layout="detail" />;
   if (error || !query.data) {
     return (
       <StatusPanel
@@ -75,60 +79,43 @@ export function GroupDetailView({ groupId }: { groupId: string }) {
   const a = group.actions;
 
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-4">
-      <nav aria-label="Breadcrumb" className="text-xs text-fg-muted">
-        <Link href={`/${property.code}/groups` as Route} className="hover:underline">
-          Groups
-        </Link>{" "}
-        / {group.code}
-      </nav>
-      <section className="rounded-lg border border-border-subtle bg-surface">
-        <div className="flex flex-wrap items-center gap-2 border-b border-border-subtle px-4 py-2.5">
-          <h1 className="text-lg font-semibold">{group.name}</h1>
+    <div className="mx-auto flex max-w-6xl flex-col gap-6">
+      <PageHeader
+        back={{ href: `/${property.code}/groups`, label: "Groups" }}
+        icon={UsersRound}
+        eyebrow="Group"
+        title={group.name}
+        meta={
           <Badge tone={group.status === "ACTIVE" ? "success" : "neutral"}>
             {group.status.toLowerCase()}
           </Badge>
-          <span className="ms-auto flex flex-wrap gap-1.5">
-            {a.manage ? (
-              <Button
-                size="sm"
-                className="min-h-11 md:min-h-0"
-                onClick={() => setDialog({ kind: "block" })}
-              >
-                New block
-              </Button>
-            ) : null}
-            {a.manage ? (
-              <Button
-                size="sm"
-                variant="ghost"
-                className="min-h-11 md:min-h-0"
-                onClick={() => setDialog({ kind: "groupStatus" })}
-              >
+        }
+        actions={
+          a.manage ? (
+            <>
+              <Button variant="ghost" onClick={() => setDialog({ kind: "groupStatus" })}>
                 Close or cancel group
               </Button>
-            ) : null}
-          </span>
-        </div>
-        <dl className="grid grid-cols-1 gap-x-6 gap-y-1.5 p-4 sm:grid-cols-2 lg:grid-cols-4">
-          {(
-            [
-              ["Code", group.code],
-              ["Company", group.account?.name ?? "—"],
-              ["Contact", group.contact?.name ?? "—"],
-              ["Created", formatDate(group.createdAt.slice(0, 10))],
-            ] as const
-          ).map(([term, value]) => (
-            <div key={term} className="flex flex-col">
-              <dt className="text-xs text-fg-muted">{term}</dt>
-              <dd className="text-sm">{value}</dd>
-            </div>
-          ))}
-        </dl>
-        {group.notes ? (
-          <p className="px-4 pb-4 text-sm whitespace-pre-wrap text-fg-secondary">{group.notes}</p>
-        ) : null}
-      </section>
+              <Button onClick={() => setDialog({ kind: "block" })}>New block</Button>
+            </>
+          ) : undefined
+        }
+        footer={
+          <KeyFacts
+            items={[
+              { label: "Code", value: group.code, mono: true },
+              { label: "Company", value: group.account?.name ?? "—" },
+              { label: "Contact", value: group.contact?.name ?? "—" },
+              { label: "Created", value: formatDate(group.createdAt.slice(0, 10)) },
+            ]}
+          />
+        }
+      />
+      {group.notes ? (
+        <section className="rounded-lg border border-border-subtle bg-surface p-4">
+          <p className="text-sm whitespace-pre-wrap text-fg-secondary">{group.notes}</p>
+        </section>
+      ) : null}
 
       {group.blocks.length === 0 ? (
         <StatusPanel

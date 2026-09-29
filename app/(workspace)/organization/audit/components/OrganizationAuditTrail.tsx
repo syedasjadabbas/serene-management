@@ -1,8 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import { ScrollText } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { Select } from "@/components/ui/Select";
 import { StatusPanel } from "@/components/ui/StatusPanel";
 import { TextField } from "@/components/ui/TextField";
@@ -63,14 +65,13 @@ export function OrganizationAuditTrail() {
     setDraft({ ...draft, [key]: e.target.value });
 
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-3">
-      <header>
-        <h1 className="text-xl font-semibold">Audit trail</h1>
-        <p className="text-sm text-fg-secondary">
-          Newest first. Times are shown in each property&apos;s time zone; organization-level
-          records in UTC.
-        </p>
-      </header>
+    <div className="flex flex-col gap-6">
+      <PageHeader
+        icon={ScrollText}
+        breadcrumbs={[{ label: "Organization", href: "/organization" }, { label: "Audit" }]}
+        title="Audit trail"
+        description="Newest first. Times are shown in each property's time zone; organization-level records in UTC."
+      />
       <form
         className="grid grid-cols-2 items-end gap-2 rounded-lg border border-border-subtle bg-surface p-3 md:flex md:flex-wrap"
         onSubmit={(event) => {

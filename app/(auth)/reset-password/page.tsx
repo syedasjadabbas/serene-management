@@ -9,9 +9,14 @@ export const metadata: Metadata = { title: "Set a new password" };
  */
 export default function ResetPasswordPage() {
   return (
-    <section className="rounded-lg border border-border-subtle bg-surface p-6 shadow-raised">
-      <h1 className="text-lg font-semibold">Set a new password</h1>
-      <p className="mt-1 mb-5 text-sm text-fg-secondary">
+    <section>
+      <p className="hidden text-2xs font-semibold tracking-[0.16em] text-brand uppercase lg:block">
+        SERENE MANAGEMENT
+      </p>
+      <h1 className="text-[1.75rem] leading-tight font-bold tracking-[-0.025em] lg:mt-2">
+        Set a new password
+      </h1>
+      <p className="mt-1.5 mb-8 text-sm text-fg-secondary">
         This link works once and expires 30 minutes after it was issued.
       </p>
       <ResetPasswordForm />

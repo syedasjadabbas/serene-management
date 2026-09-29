@@ -5,8 +5,12 @@ import type { Route } from "next";
 import { useState } from "react";
 import { Alert } from "@/components/ui/Alert";
 import { Badge } from "@/components/ui/Badge";
-import { Button } from "@/components/ui/Button";
+import { Receipt } from "lucide-react";
+import { Button, buttonClass } from "@/components/ui/Button";
+import { IdChip, type KeyFact, KeyFacts } from "@/components/ui/KeyFacts";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { StatusPanel } from "@/components/ui/StatusPanel";
+import { PageSkeleton } from "@/components/ui/PageSkeleton";
 import { cn } from "@/components/ui/cn";
 import { useTabs } from "@/components/ui/tabs";
 import { usePermissions } from "@/hooks/usePermissions";
@@ -43,7 +47,7 @@ export function FolioWorkspace({ reservationRoomId }: { reservationRoomId: strin
   const [openWindow, openState] = useOpenWindowMutation();
   const openError = toClientApiError(openState.error);
 
-  if (permissionsLoading) return <StatusPanel kind="loading" title="Loading folio" />;
+  if (permissionsLoading) return <PageSkeleton title="Loading folio" layout="detail" />;
   if (!allowed) {
     return (
       <StatusPanel
@@ -53,7 +57,7 @@ export function FolioWorkspace({ reservationRoomId }: { reservationRoomId: strin
       />
     );
   }
-  if (query.isLoading) return <StatusPanel kind="loading" title="Loading folio" />;
+  if (query.isLoading) return <PageSkeleton title="Loading folio" layout="detail" />;
   if (error || !query.data) {
     return (
       <StatusPanel
@@ -80,14 +84,7 @@ export function FolioWorkspace({ reservationRoomId }: { reservationRoomId: strin
     formatCurrency(value, account.currencyCode, "en", account.minorUnits);
 
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-4">
-      <nav aria-label="Breadcrumb" className="text-xs text-fg-muted">
-        <Link href={`/${property.code}/billing` as Route} className="hover:underline">
-          Billing
-        </Link>{" "}
-        / {account.confirmation}
-      </nav>
-
+    <div className="mx-auto flex max-w-6xl flex-col gap-6">
       <Header account={account} />
 
       {account.windows.length === 0 ? (
@@ -118,7 +115,7 @@ export function FolioWorkspace({ reservationRoomId }: { reservationRoomId: strin
         <>
           <section
             aria-label="Account totals"
-            className="grid grid-cols-1 gap-2 min-[420px]:grid-cols-3"
+            className="grid grid-cols-1 gap-3 min-[420px]:grid-cols-3"
           >
             <Total label="Charges" value={money(account.totals.charges)} />
             <Total label="Payments & credits" value={money(account.totals.credits)} />
@@ -243,53 +240,72 @@ export function FolioWorkspace({ reservationRoomId }: { reservationRoomId: strin
 
 function Header({ account }: { account: FolioAccountView }) {
   const property = useProperty();
-  const facts: [string, string][] = [
-    ["Confirmation", account.confirmation],
-    [
-      "Room",
-      account.room ? `${account.room.number} · ${account.roomType.name}` : account.roomType.name,
-    ],
-    ["Stay", `${formatDate(account.arrival)} → ${formatDate(account.departure)}`],
-    ["Rate plan", account.ratePlanCode],
-    [
-      "Guests",
-      `${pluralize(account.adults, "adult")}${account.children ? `, ${pluralize(account.children, "child", "children")}` : ""}`,
-    ],
-    ["Currency", account.currencyCode],
-    ["Business date", account.businessDate ? formatDate(account.businessDate) : "—"],
+  const facts: KeyFact[] = [
+    {
+      label: "Room",
+      value: account.room
+        ? `${account.room.number} · ${account.roomType.name}`
+        : account.roomType.name,
+    },
+    {
+      label: "Stay",
+      value: `${formatDate(account.arrival)} → ${formatDate(account.departure)}`,
+    },
+    {
+      label: "Guests",
+      value: `${pluralize(account.adults, "adult")}${account.children ? `, ${pluralize(account.children, "child", "children")}` : ""}`,
+    },
+    {
+      label: "Business date",
+      value: account.businessDate ? formatDate(account.businessDate) : "—",
+    },
   ];
   return (
-    <section className="rounded-lg border border-border-subtle bg-surface">
-      <div className="flex flex-wrap items-center gap-2 border-b border-border-subtle px-4 py-2.5">
-        <h1 className="text-lg font-semibold">{account.guest.name}</h1>
-        {account.stayStatus === "IN_HOUSE" ? <Badge tone="brand">In house</Badge> : null}
-        {account.stayStatus === "CHECKED_OUT" ? <Badge>Checked out</Badge> : null}
-        {account.stayId ? (
+    <PageHeader
+      back={{ href: `/${property.code}/billing`, label: "Billing" }}
+      icon={Receipt}
+      eyebrow="Folio"
+      title={account.guest.name}
+      meta={
+        <>
+          {account.stayStatus === "IN_HOUSE" ? <Badge tone="brand">In house</Badge> : null}
+          {account.stayStatus === "CHECKED_OUT" ? <Badge>Checked out</Badge> : null}
+        </>
+      }
+      actions={
+        account.stayId ? (
           <Link
             href={`/${property.code}/front-desk/stays/${account.stayId}` as Route}
-            className="ml-auto text-sm text-brand hover:underline"
+            className={buttonClass("secondary")}
           >
             View stay
           </Link>
-        ) : null}
-      </div>
-      <dl className="grid grid-cols-1 gap-x-6 gap-y-1.5 p-4 sm:grid-cols-2 lg:grid-cols-4">
-        {facts.map(([term, value]) => (
-          <div key={term} className="flex flex-col">
-            <dt className="text-xs text-fg-muted">{term}</dt>
-            <dd className="text-sm">{value}</dd>
+        ) : undefined
+      }
+      footer={
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-wrap gap-2">
+            <IdChip label="Confirmation" value={account.confirmation} />
+            <IdChip label="Rate plan" value={account.ratePlanCode} />
+            <IdChip label="Currency" value={account.currencyCode} />
           </div>
-        ))}
-      </dl>
-    </section>
+          <KeyFacts items={facts} />
+        </div>
+      }
+    />
   );
 }
 
 function Total({ label, value, emphasis }: { label: string; value: string; emphasis?: boolean }) {
   return (
-    <div className="rounded-lg border border-border-subtle bg-surface px-4 py-3">
-      <p className="text-xs text-fg-muted">{label}</p>
-      <p className={cn("text-lg tabular-nums", emphasis ? "font-semibold" : "font-medium")}>
+    <div className="rounded-lg border border-border-subtle bg-surface px-5 py-4 shadow-card">
+      <p className="label-caps">{label}</p>
+      <p
+        className={cn(
+          "mt-1 text-xl tracking-[-0.01em] tabular-nums",
+          emphasis ? "font-bold text-fg" : "font-semibold text-fg-secondary",
+        )}
+      >
         {value}
       </p>
     </div>

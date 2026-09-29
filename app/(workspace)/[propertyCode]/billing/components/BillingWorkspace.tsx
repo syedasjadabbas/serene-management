@@ -1,13 +1,16 @@
 "use client";
 
 import { ToggleGroup } from "@/components/ui/ToggleGroup";
+import { Receipt } from "lucide-react";
 import Link from "next/link";
 import type { Route } from "next";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { StatusPanel } from "@/components/ui/StatusPanel";
+import { PageSkeleton } from "@/components/ui/PageSkeleton";
 import { TextField } from "@/components/ui/TextField";
 import { cn } from "@/components/ui/cn";
 import { usePermissions } from "@/hooks/usePermissions";
@@ -48,7 +51,7 @@ export function BillingWorkspace() {
     router.replace(`${pathname}?${next.toString()}` as Route);
   };
 
-  if (permissionsLoading) return <StatusPanel kind="loading" title="Loading billing" />;
+  if (permissionsLoading) return <PageSkeleton title="Loading billing" />;
   if (!can("billing:read")) {
     return (
       <StatusPanel
@@ -60,33 +63,33 @@ export function BillingWorkspace() {
   }
 
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-4">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold">Billing</h1>
-          <p className="text-sm text-fg-muted">
-            Guest folios in {property.currencyCode}. Open a stay to post charges and take payments.
-          </p>
-        </div>
-        <form
-          className="flex w-full items-end gap-2 sm:w-auto"
-          onSubmit={(event) => {
-            event.preventDefault();
-            setParam({ q: search.trim() });
-          }}
-          role="search"
-        >
-          <TextField
-            label="Guest, confirmation or room"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="min-w-0 flex-1 sm:w-64"
-          />
-          <Button type="submit" variant="secondary">
-            Search
-          </Button>
-        </form>
-      </div>
+    <div className="flex flex-col gap-6">
+      <PageHeader
+        icon={Receipt}
+        breadcrumbs={[{ label: property.code, href: `/${property.code}` }, { label: "Billing" }]}
+        title="Billing"
+        description={`Guest folios in ${property.currencyCode}. Open a stay to post charges and take payments.`}
+        actions={
+          <form
+            className="flex w-full items-end gap-2 sm:w-auto"
+            onSubmit={(event) => {
+              event.preventDefault();
+              setParam({ q: search.trim() });
+            }}
+            role="search"
+          >
+            <TextField
+              label="Guest, confirmation or room"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="min-w-0 flex-1 sm:w-64"
+            />
+            <Button type="submit" variant="secondary">
+              Search
+            </Button>
+          </form>
+        }
+      />
 
       <ToggleGroup
         label="Folio views"
@@ -179,11 +182,11 @@ function FolioRow({ row }: { row: FolioListRow }) {
     <li>
       <Link
         href={`/${property.code}/billing/${row.reservationRoomId}` as Route}
-        className="grid min-h-14 grid-cols-[1fr_auto] items-center gap-x-4 gap-y-0.5 px-4 py-2.5 hover:bg-surface-sunken sm:grid-cols-[minmax(0,2fr)_6rem_minmax(0,2fr)_auto]"
+        className="grid min-h-14 grid-cols-[1fr_auto] items-center gap-x-4 gap-y-0.5 px-4 py-2.5 hover:bg-surface-sunken sm:grid-cols-[minmax(0,2fr)_6rem_minmax(0,2fr)_11rem]"
       >
         <span className="min-w-0">
           <span className="block truncate font-medium">{row.guestName}</span>
-          <span className="text-xs text-fg-muted">{row.confirmation}</span>
+          <span className="font-mono text-xs text-fg-muted">{row.confirmation}</span>
         </span>
         <span className="text-sm sm:order-none">
           {row.roomNumber ? `Room ${row.roomNumber}` : "No room"}

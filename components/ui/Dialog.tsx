@@ -80,17 +80,17 @@ export function Dialog({
     >
       {open ? (
         <div className="flex flex-col">
-          <div className="px-5 pt-4 pb-3">
-            <h2 id={titleId} className="text-lg font-semibold">
+          <div className="px-6 pt-5 pb-3">
+            <h2 id={titleId} className="text-lg font-semibold tracking-[-0.01em]">
               {title}
             </h2>
             {description ? (
               <div className="mt-1 text-sm text-fg-secondary">{description}</div>
             ) : null}
           </div>
-          <div className="max-h-[70vh] overflow-y-auto px-5 pb-4">{children}</div>
+          <div className="max-h-[70vh] overflow-y-auto px-6 pb-5">{children}</div>
           {footer ? (
-            <div className="flex flex-wrap justify-end gap-2 border-t border-border-subtle bg-surface-sunken/60 px-5 py-3">
+            <div className="flex flex-wrap justify-end gap-2 border-t border-border-subtle bg-surface-sunken/60 px-6 py-3.5">
               {footer}
             </div>
           ) : null}

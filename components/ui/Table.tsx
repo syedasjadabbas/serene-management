@@ -87,7 +87,7 @@ export function THead({
   return (
     <thead
       className={cn(
-        "border-b border-border-subtle bg-surface-sunken/70 text-xs text-fg-secondary",
+        "border-b border-border-subtle bg-surface-sunken/60",
         sticky && "sticky top-0 z-(--z-sticky)",
         className,
       )}
@@ -130,7 +130,7 @@ export function Th({
     <th
       scope={scope}
       className={cn(
-        "h-9 px-3 font-medium whitespace-nowrap",
+        "h-10 px-3 label-caps whitespace-nowrap first:ps-4 last:pe-4",
         numeric ? "text-end" : "text-start",
         className,
       )}
@@ -147,7 +147,7 @@ export function Td({
   return (
     <td
       className={cn(
-        "h-row px-3 py-2 align-middle",
+        "h-row px-3 py-2 align-middle first:ps-4 last:pe-4",
         numeric ? "text-end tabular-nums" : "text-start",
         className,
       )}

@@ -1,16 +1,18 @@
 "use client";
 
 import {
-  Building2,
   CalendarRange,
   ChartColumn,
+  Hotel,
   LayoutDashboard,
   type LucideIcon,
   ScrollText,
   UsersRound,
 } from "lucide-react";
 import { usePathname } from "next/navigation";
-import { SideNav } from "@/components/workspace/SideNav";
+import { MobileNav } from "@/components/workspace/MobileNav";
+import { PrimaryNav } from "@/components/workspace/PrimaryNav";
+import type { NavEntry } from "@/components/workspace/nav";
 import { ORGANIZATION_SECTIONS } from "@/components/workspace/sections";
 import { useMeQuery } from "@/lib/api/endpoints/session.api";
 
@@ -20,24 +22,33 @@ const ICONS: Record<string, LucideIcon> = {
   availability: CalendarRange,
   audit: ScrollText,
   users: UsersRound,
-  properties: Building2,
+  properties: Hotel,
 };
 
-/** Organization navigation; sections the user cannot use are hidden (the server still enforces). */
-export function OrganizationNav() {
+/**
+ * Organization navigation, as the top bar (`variant="bar"`) or the drawer
+ * panel (`variant="panel"`). Six sections fit the bar as direct links;
+ * sections the user cannot use are hidden (the server still enforces).
+ */
+export function OrganizationNav({ variant }: { variant: "bar" | "panel" }) {
   const pathname = usePathname();
   const { data: me } = useMeQuery();
   const base = "/organization";
-  const items = ORGANIZATION_SECTIONS.filter((s) => (me ? s.visible(me) : s.segment === "")).map(
-    (section) => {
-      const href = section.segment ? `${base}/${section.segment}` : base;
-      return {
-        href,
-        label: section.label,
-        icon: ICONS[section.segment] ?? LayoutDashboard,
-        active: section.segment ? pathname.startsWith(href) : pathname === base,
-      };
-    },
+  const entries: NavEntry[] = ORGANIZATION_SECTIONS.filter((s) =>
+    me ? s.visible(me) : s.segment === "",
+  ).map((section) => {
+    const href = section.segment ? `${base}/${section.segment}` : base;
+    return {
+      kind: "link",
+      href,
+      label: section.label,
+      icon: ICONS[section.segment] ?? LayoutDashboard,
+      active: section.segment ? pathname.startsWith(href) : pathname === base,
+    };
+  });
+  return variant === "bar" ? (
+    <PrimaryNav label="Organization" entries={entries} />
+  ) : (
+    <MobileNav label="Organization" entries={entries} />
   );
-  return <SideNav label="Organization" items={items} />;
 }

@@ -1,8 +1,10 @@
 "use client";
 
+import { CalendarPlus } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { useEffect } from "react";
 import { StatusPanel } from "@/components/ui/StatusPanel";
+import { PageSkeleton } from "@/components/ui/PageSkeleton";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Stepper } from "@/components/ui/Stepper";
 import { useBusinessDate } from "@/hooks/useBusinessDate";
@@ -55,7 +57,7 @@ export function NewReservationWorkflow() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [property.id]);
 
-  if (isLoading || businessDate.isLoading) return <StatusPanel kind="loading" title="Loading" />;
+  if (isLoading || businessDate.isLoading) return <PageSkeleton title="Loading" layout="detail" />;
   if (!can("reservations:create")) {
     return (
       <StatusPanel
@@ -86,8 +88,9 @@ export function NewReservationWorkflow() {
   }
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-6">
       <PageHeader
+        icon={CalendarPlus}
         breadcrumbs={[
           { label: property.code, href: `/${property.code}` },
           { label: "Reservations", href: `/${property.code}/reservations` },

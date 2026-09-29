@@ -13,11 +13,13 @@ export function Disclosure({
   children,
   align = "start",
   buttonClassName,
+  chevronClassName,
 }: {
   label: ReactNode;
   children: (close: () => void) => ReactNode;
   align?: "start" | "end";
   buttonClassName?: string;
+  chevronClassName?: string;
 }) {
   const [open, setOpen] = useState(false);
   const id = useId();
@@ -52,18 +54,22 @@ export function Disclosure({
         aria-controls={id}
         onClick={() => setOpen((value) => !value)}
         className={cn(
-          "inline-flex h-control max-w-full min-w-0 items-center gap-1.5 rounded-md px-2 text-sm transition-colors duration-150 hover:bg-surface-sunken",
-          buttonClassName,
+          "inline-flex max-w-full min-w-0 items-center gap-1.5 text-sm transition-colors duration-150",
+          // A custom look replaces the default one (cn does not merge conflicts).
+          buttonClassName ?? "h-control rounded-md px-2 hover:bg-surface-sunken",
         )}
       >
         {label}
-        <ChevronDown aria-hidden="true" className="size-3.5 shrink-0 text-fg-muted" />
+        <ChevronDown
+          aria-hidden="true"
+          className={cn("size-3.5 shrink-0 text-fg-muted", chevronClassName)}
+        />
       </button>
       {open ? (
         <div
           id={id}
           className={cn(
-            "absolute top-full z-(--z-popover) mt-1 max-h-[70vh] min-w-56 overflow-y-auto rounded-lg border border-border-subtle bg-surface-raised p-1 shadow-overlay",
+            "absolute top-full z-(--z-popover) mt-2 max-h-[70vh] min-w-56 overflow-y-auto rounded-lg border border-border-subtle bg-surface-raised p-1.5 shadow-overlay",
             align === "end" ? "end-0" : "start-0",
           )}
         >

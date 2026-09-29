@@ -9,7 +9,7 @@ import { useProperty } from "@/hooks/useProperty";
 import { cn } from "@/components/ui/cn";
 
 const FIELD =
-  "inline-flex h-9 items-center gap-2 rounded-md border bg-surface px-2.5 text-xs whitespace-nowrap";
+  "inline-flex h-10 items-center gap-2 rounded-md border bg-surface px-3 text-xs whitespace-nowrap shadow-card";
 
 /**
  * Header indicator of the hotel business date (server value, never the
@@ -45,15 +45,18 @@ export function BusinessDateBadge() {
 
   const content = (
     <>
-      <CalendarDays aria-hidden="true" className="size-3.5 shrink-0 text-fg-muted" />
-      <span className="hidden text-fg-secondary xl:inline">Business date</span>
-      <span className="font-mono font-medium text-fg">{data.businessDate}</span>
+      <CalendarDays
+        aria-hidden="true"
+        className="hidden size-3.5 shrink-0 text-fg-muted sm:block"
+      />
+      <span className="hidden label-caps min-[87.5rem]:inline">Business date</span>
+      <span className="font-mono text-sm font-semibold text-fg">{data.businessDate}</span>
       {state ? (
         <>
           <span aria-hidden="true" className="h-3.5 w-px bg-border" />
           <span className={cn("inline-flex items-center gap-1.5 font-medium", state.tone)}>
             <span aria-hidden="true" className={cn("size-1.5 rounded-full", state.dot)} />
-            <span className="sm:hidden">{state.short}</span>
+            <span className="sr-only">{state.short}</span>
             <span className="hidden sm:inline">{state.long}</span>
           </span>
         </>

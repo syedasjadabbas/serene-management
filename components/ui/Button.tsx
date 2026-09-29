@@ -12,22 +12,22 @@ export type ButtonSize = "sm" | "md" | "touch";
  */
 const VARIANTS: Record<ButtonVariant, string> = {
   primary:
-    "bg-brand text-brand-fg shadow-raised hover:bg-brand-hover active:bg-brand-hover disabled:bg-border-strong disabled:text-fg-inverse disabled:shadow-none",
+    "bg-brand font-semibold text-brand-fg shadow-[0_1px_2px_rgb(16_124_65/0.24)] hover:bg-brand-hover active:bg-brand-hover disabled:bg-border-strong disabled:text-fg-inverse disabled:shadow-none",
   secondary:
-    "border border-border bg-surface text-fg shadow-card hover:border-border-strong hover:bg-surface-sunken disabled:text-fg-muted disabled:hover:border-border disabled:hover:bg-surface",
+    "border border-border bg-surface font-medium text-fg shadow-card hover:bg-surface-sunken disabled:text-fg-muted disabled:hover:bg-surface",
   ghost:
-    "text-fg-secondary hover:bg-surface-sunken hover:text-fg disabled:text-fg-muted disabled:hover:bg-transparent",
-  danger: "bg-danger text-fg-inverse shadow-raised hover:opacity-90 disabled:opacity-50",
+    "font-medium text-fg-secondary hover:bg-surface-sunken hover:text-fg disabled:text-fg-muted disabled:hover:bg-transparent",
+  danger: "bg-danger font-semibold text-fg-inverse hover:opacity-90 disabled:opacity-50",
 };
 
 const SIZES: Record<ButtonSize, string> = {
-  sm: "h-control-sm px-2.5 text-xs",
-  md: "h-control px-3.5 text-sm",
-  touch: "h-control-touch px-4 text-base",
+  sm: "h-control-sm px-3 text-xs",
+  md: "h-control px-4 text-sm",
+  touch: "h-control-touch px-5 text-base",
 };
 
 export const buttonBaseClass =
-  "inline-flex items-center justify-center gap-2 rounded-md font-medium whitespace-nowrap transition-colors duration-150 ease-out-quart disabled:cursor-not-allowed motion-reduce:transition-none [&_svg]:shrink-0";
+  "inline-flex items-center justify-center gap-2 rounded-md whitespace-nowrap transition-colors duration-150 ease-out-quart disabled:cursor-not-allowed motion-reduce:transition-none [&_svg]:shrink-0";
 
 /**
  * Standalone text link ("View all", "Open front desk"): brand colour, 24px

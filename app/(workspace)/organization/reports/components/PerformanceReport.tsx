@@ -3,10 +3,13 @@
 import type { Route } from "next";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { type ReactNode, useState } from "react";
+import { ChartColumn } from "lucide-react";
 import { Alert } from "@/components/ui/Alert";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { StatusPanel } from "@/components/ui/StatusPanel";
+import { PageSkeleton } from "@/components/ui/PageSkeleton";
 import { TextField } from "@/components/ui/TextField";
 import { holdsAnywhere } from "@/components/workspace/sections";
 import {
@@ -82,7 +85,7 @@ export function PerformanceReport() {
   const [draftFrom, setDraftFrom] = useState<string | null>(null);
   const [draftTo, setDraftTo] = useState<string | null>(null);
 
-  if (overview.isLoading) return <StatusPanel kind="loading" title="Loading" />;
+  if (overview.isLoading) return <PageSkeleton title="Loading" />;
   if (!from || !to) {
     return (
       <StatusPanel
@@ -97,29 +100,33 @@ export function PerformanceReport() {
   const data = report.data;
 
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-3">
-      <header className="flex flex-wrap items-end gap-2">
-        <div className="me-auto">
-          <h1 className="text-xl font-semibold">Organization performance</h1>
-          <p className="text-sm text-fg-secondary">
+    <div className="flex flex-col gap-6">
+      <PageHeader
+        icon={ChartColumn}
+        breadcrumbs={[{ label: "Organization", href: "/organization" }, { label: "Reports" }]}
+        title="Organization performance"
+        description={
+          <>
             {formatDate(from)} – {formatDate(to)} · business dates of each property
-          </p>
-        </div>
-        <div className="flex gap-1.5 print:hidden">
-          <Button size="sm" variant="secondary" onClick={() => window.print()}>
-            Print
-          </Button>
-          {canExport ? (
-            <a
-              className="inline-flex h-7 items-center rounded-md border border-border bg-surface px-2.5 text-xs hover:bg-surface-sunken"
-              href={`/api/v1/organization/reports/performance/export?${new URLSearchParams({ from, to }).toString()}`}
-              download
-            >
-              Export CSV
-            </a>
-          ) : null}
-        </div>
-      </header>
+          </>
+        }
+        actions={
+          <div className="flex gap-1.5 print:hidden">
+            <Button size="sm" variant="secondary" onClick={() => window.print()}>
+              Print
+            </Button>
+            {canExport ? (
+              <a
+                className="inline-flex h-7 items-center rounded-md border border-border bg-surface px-2.5 text-xs hover:bg-surface-sunken"
+                href={`/api/v1/organization/reports/performance/export?${new URLSearchParams({ from, to }).toString()}`}
+                download
+              >
+                Export CSV
+              </a>
+            ) : null}
+          </div>
+        }
+      />
       <form
         className="flex flex-wrap items-end gap-2 rounded-lg border border-border-subtle bg-surface p-3 print:hidden"
         onSubmit={(event) => {

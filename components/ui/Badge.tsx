@@ -14,9 +14,9 @@ const TONES: Record<BadgeTone, string> = {
 };
 
 /**
- * Status tag: a small squared label (5px corners, hairline border in the
- * tone, light tint), sized to sit on a 40px table row without dominating
- * it. Always carries text, never colour alone. Tone follows meaning:
+ * Status pill (SERENE family): small uppercase tracked label, hairline
+ * border in the tone and a light tint, sized to sit on a table row without
+ * dominating it. Always carries text, never colour alone. Tone follows meaning:
  * success = done/available, warning = needs attention soon,
  * danger = blocked/overdue/cancelled, info = scheduled/in progress,
  * brand = the product's own state (e.g. confirmed), accent = loyalty/VIP.
@@ -36,7 +36,7 @@ export function Badge({
   return (
     <span
       className={cn(
-        "inline-flex h-5 items-center gap-1.5 rounded-[5px] border px-1.5 text-xs leading-none font-medium whitespace-nowrap",
+        "inline-flex h-[1.375rem] items-center gap-1.5 rounded-full border px-2 text-2xs leading-none font-semibold tracking-[0.06em] whitespace-nowrap uppercase",
         TONES[tone],
         className,
       )}
@@ -52,7 +52,7 @@ export function Count({ children, className }: { children: ReactNode; className?
   return (
     <span
       className={cn(
-        "inline-flex h-[1.125rem] min-w-[1.125rem] items-center justify-center rounded-[4px] bg-surface-sunken px-1 text-2xs font-semibold text-fg-secondary tabular-nums",
+        "inline-flex h-[1.125rem] min-w-[1.125rem] items-center justify-center rounded-full bg-surface-sunken px-1.5 text-2xs font-semibold text-fg-secondary tabular-nums",
         className,
       )}
     >

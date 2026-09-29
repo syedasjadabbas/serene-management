@@ -1,8 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import { UsersRound } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { StatusPanel } from "@/components/ui/StatusPanel";
 import { TextField } from "@/components/ui/TextField";
 import { useRolesQuery, useUsersQuery } from "@/lib/api/endpoints/organization.api";
@@ -48,14 +50,13 @@ export function UsersPanel() {
   const isSelf = (user: UserView) => user.id === me?.user.id;
 
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-4">
-      <header>
-        <h1 className="text-xl font-semibold">Users &amp; roles</h1>
-        <p className="text-sm text-fg-secondary">
-          Role assignments are shown for the scopes you may inspect. Users are invited outside this
-          workspace.
-        </p>
-      </header>
+    <div className="flex flex-col gap-6">
+      <PageHeader
+        icon={UsersRound}
+        breadcrumbs={[{ label: "Organization", href: "/organization" }, { label: "Users" }]}
+        title="Users & roles"
+        description="Role assignments are shown for the scopes you may inspect. Users are invited outside this workspace."
+      />
       <form
         className="flex flex-wrap items-end gap-2"
         onSubmit={(event) => {

@@ -24,7 +24,7 @@ export function StatsRow({ view, propertyCode }: { view: DashboardView; property
   return (
     <section
       aria-label="Today at a glance"
-      className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4"
+      className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4"
     >
       <StatCard
         icon={BedDouble}

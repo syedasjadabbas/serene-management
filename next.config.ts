@@ -17,6 +17,10 @@ const securityHeaders = [
 const nextConfig: NextConfig = {
   poweredByHeader: false,
   typedRoutes: true,
+  // The dev-only route indicator ("Rendering…") overlaps the workspace and
+  // lingers after pages settle; navigation feedback comes from the shell's
+  // own progress bar. Compile and runtime errors are still surfaced.
+  devIndicators: false,
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];
   },

@@ -5,10 +5,14 @@ import type { Route } from "next";
 import { type ReactNode, useState } from "react";
 import { Alert } from "@/components/ui/Alert";
 import { Badge } from "@/components/ui/Badge";
+import { Wrench } from "lucide-react";
 import { Button } from "@/components/ui/Button";
+import { KeyFacts } from "@/components/ui/KeyFacts";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { Dialog } from "@/components/ui/Dialog";
 import { Select } from "@/components/ui/Select";
 import { StatusPanel } from "@/components/ui/StatusPanel";
+import { PageSkeleton } from "@/components/ui/PageSkeleton";
 import { TextArea } from "@/components/ui/TextArea";
 import { TextField } from "@/components/ui/TextField";
 import { useBusinessDate } from "@/hooks/useBusinessDate";
@@ -48,7 +52,7 @@ export function RequestDetailView({ requestId }: { requestId: string }) {
     useMaintenanceCommandMutation();
   const actionError = toClientApiError(commandError);
 
-  if (permissionsLoading) return <StatusPanel kind="loading" title="Loading request" />;
+  if (permissionsLoading) return <PageSkeleton title="Loading request" layout="detail" />;
   if (!allowed) {
     return (
       <StatusPanel
@@ -58,7 +62,7 @@ export function RequestDetailView({ requestId }: { requestId: string }) {
       />
     );
   }
-  if (query.isLoading) return <StatusPanel kind="loading" title="Loading request" />;
+  if (query.isLoading) return <PageSkeleton title="Loading request" layout="detail" />;
   if (error || !query.data) {
     return (
       <StatusPanel
@@ -90,99 +94,101 @@ export function RequestDetailView({ requestId }: { requestId: string }) {
   const pending = (action: string) => isLoading && originalArgs?.action === action;
 
   return (
-    <div className="mx-auto flex max-w-5xl flex-col gap-4">
-      <nav aria-label="Breadcrumb" className="text-xs text-fg-muted">
-        <Link href={`/${property.code}/maintenance` as Route} className="hover:underline">
-          Maintenance
-        </Link>{" "}
-        / {request.requestNumber}
-      </nav>
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
+      <PageHeader
+        back={{ href: `/${property.code}/maintenance`, label: "Maintenance" }}
+        icon={Wrench}
+        eyebrow="Maintenance request"
+        title={request.title}
+        meta={
+          <>
+            <PriorityBadge priority={request.priority} />
+            <StatusBadge status={request.status} />
+            {request.roomBlocked ? (
+              <Badge tone="danger">
+                {request.roomBlocked === "OUT_OF_ORDER"
+                  ? "Room out of order"
+                  : "Room out of service"}
+              </Badge>
+            ) : null}
+          </>
+        }
+        actions={
+          <>
+            {a.cancel ? (
+              <Button variant="ghost" onClick={() => setDialog("cancel")}>
+                Cancel request
+              </Button>
+            ) : null}
+            {a.reopen ? (
+              <Button
+                variant="secondary"
+                pending={pending("reopen")}
+                onClick={() => simple("reopen")}
+              >
+                Reopen
+              </Button>
+            ) : null}
+            {a.close ? (
+              <Button
+                variant="secondary"
+                pending={pending("close")}
+                onClick={() => simple("close")}
+              >
+                Close
+              </Button>
+            ) : null}
+            {a.hold ? (
+              <Button variant="secondary" pending={pending("hold")} onClick={() => simple("hold")}>
+                Put on hold
+              </Button>
+            ) : null}
+            {a.assign ? (
+              <Button variant="secondary" onClick={() => setDialog("assign")}>
+                {request.assignee ? "Reassign" : "Assign"}
+              </Button>
+            ) : null}
+            {a.blockRoom ? (
+              <Button variant="danger" onClick={() => setDialog("block")}>
+                Take room out of use
+              </Button>
+            ) : null}
+            {a.start ? (
+              <Button pending={pending("start")} onClick={() => simple("start")}>
+                {request.assignee ? "Start work" : "Take & start"}
+              </Button>
+            ) : null}
+            {a.resume ? (
+              <Button pending={pending("resume")} onClick={() => simple("resume")}>
+                Resume
+              </Button>
+            ) : null}
+            {a.resolve ? <Button onClick={() => setDialog("resolve")}>Resolve</Button> : null}
+          </>
+        }
+        footer={
+          <KeyFacts
+            items={[
+              { label: "Request", value: request.requestNumber, mono: true },
+              {
+                label: "Where",
+                value: request.room ? `Room ${request.room.number}` : (request.location ?? "—"),
+              },
+              {
+                label: "Category",
+                value: `${request.category.code} · ${request.category.name}`,
+              },
+              { label: "Assigned to", value: request.assignee?.name ?? "Unassigned" },
+            ]}
+          />
+        }
+      />
+      {actionError && !dialog ? <Alert tone="danger">{actionError.message}</Alert> : null}
 
       <section className="rounded-lg border border-border-subtle bg-surface">
-        <div className="flex flex-wrap items-center gap-2 border-b border-border-subtle px-4 py-2.5">
-          <h1 className="text-lg font-semibold">{request.title}</h1>
-          <PriorityBadge priority={request.priority} />
-          <StatusBadge status={request.status} />
-          {request.roomBlocked ? (
-            <Badge tone="danger">
-              {request.roomBlocked === "OUT_OF_ORDER" ? "Room out of order" : "Room out of service"}
-            </Badge>
-          ) : null}
-        </div>
-        <div className="flex flex-wrap gap-1.5 px-4 pt-3">
-          {a.start ? (
-            <Button size="touch" pending={pending("start")} onClick={() => simple("start")}>
-              {request.assignee ? "Start work" : "Take & start"}
-            </Button>
-          ) : null}
-          {a.resume ? (
-            <Button size="touch" pending={pending("resume")} onClick={() => simple("resume")}>
-              Resume
-            </Button>
-          ) : null}
-          {a.resolve ? (
-            <Button size="touch" onClick={() => setDialog("resolve")}>
-              Resolve
-            </Button>
-          ) : null}
-          {a.hold ? (
-            <Button
-              size="touch"
-              variant="secondary"
-              pending={pending("hold")}
-              onClick={() => simple("hold")}
-            >
-              Put on hold
-            </Button>
-          ) : null}
-          {a.assign ? (
-            <Button size="touch" variant="secondary" onClick={() => setDialog("assign")}>
-              {request.assignee ? "Reassign" : "Assign"}
-            </Button>
-          ) : null}
-          {a.blockRoom ? (
-            <Button size="touch" variant="danger" onClick={() => setDialog("block")}>
-              Take room out of use
-            </Button>
-          ) : null}
-          {a.close ? (
-            <Button
-              size="touch"
-              variant="secondary"
-              pending={pending("close")}
-              onClick={() => simple("close")}
-            >
-              Close
-            </Button>
-          ) : null}
-          {a.reopen ? (
-            <Button
-              size="touch"
-              variant="secondary"
-              pending={pending("reopen")}
-              onClick={() => simple("reopen")}
-            >
-              Reopen
-            </Button>
-          ) : null}
-          {a.cancel ? (
-            <Button size="touch" variant="ghost" onClick={() => setDialog("cancel")}>
-              Cancel request
-            </Button>
-          ) : null}
-        </div>
-        {actionError && !dialog ? (
-          <div className="px-4 pt-3">
-            <Alert tone="danger">{actionError.message}</Alert>
-          </div>
-        ) : null}
         <dl className="grid grid-cols-1 gap-x-6 gap-y-1.5 p-4 sm:grid-cols-[10rem_1fr]">
           {(
             [
-              ["Request", request.requestNumber],
-              ["Where", request.room ? `Room ${request.room.number}` : (request.location ?? "—")],
-              ["Category", `${request.category.code} · ${request.category.name}`],
-              ["Assigned to", request.assignee?.name ?? "Unassigned"],
               [
                 "Reported",
                 `${formatDateTime(request.reportedAt, property.timezone)}${request.reportedBy ? ` by ${request.reportedBy}` : ""}`,

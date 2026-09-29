@@ -50,7 +50,7 @@ export function FilterBar({
       aria-label={label}
       onSubmit={submit}
       className={cn(
-        "flex flex-col gap-3 rounded-lg border border-border-subtle bg-surface p-3 shadow-card sm:p-4",
+        "flex flex-col gap-3 rounded-lg border border-border-subtle bg-surface p-4 shadow-card sm:p-5",
         className,
       )}
     >

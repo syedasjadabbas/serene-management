@@ -9,12 +9,13 @@
  *   3. Tailwind @theme mapping so utilities read semantic tokens
  *      (bg-surface, text-fg-muted, border-subtle, bg-nav, shadow-card ...).
  *
- * Character (docs/NGINAP_UI_MAPPING.md): light, airy, Nginap-inspired —
- * cool off-white canvas, white cards with minimal elevation, pale mint
- * secondary surfaces and navigation, fresh green for action, selection and
- * the active page, charcoal text, brass only for VIP/loyalty. Colour carries
- * state and action; surfaces stay quiet so operational data reads first.
- * Every text/background pair below is checked at >= 4.5:1 in both themes.
+ * Character (docs/DESIGN_SYSTEM.md §0): the SERENE product family, shared
+ * with SALESTORM (CRM). Neutral near-white canvas, white surfaces with a
+ * hairline border and almost no shadow, Geist type, deep Serene green
+ * (#107c41) only for primary actions, the active page, selection and
+ * positive states, charcoal text, uppercase tracked micro-labels, brass
+ * only for VIP/loyalty. Semantic colours (warning, danger, info) keep their
+ * own hues. Every text/background pair below is checked at >= 4.5:1.
  */
 
 :root {
@@ -49,44 +50,46 @@
   --palette-brass-100: #f4ebd8;
 
   /* --- Semantic: surfaces & text (light) ----------------------------- */
-  --sm-canvas: #f5f8f6;
+  /* Neutral greys shared with SALESTORM (zinc family, a hair of green). */
+  --sm-canvas: #f7f8f7;
   --sm-surface: #ffffff;
-  --sm-surface-sunken: #edf3ef;
+  --sm-surface-sunken: #f3f4f3;
   --sm-surface-raised: #ffffff;
-  --sm-surface-inverse: var(--palette-stone-900);
-  --sm-overlay: rgb(13 19 16 / 0.42);
+  --sm-surface-inverse: #18181b;
+  --sm-overlay: rgb(24 24 27 / 0.4);
 
-  --sm-border-subtle: #e3ebe6;
-  --sm-border: #d3ded7;
+  --sm-border-subtle: #e8e9e7;
+  --sm-border: #dcdedb;
   /* Form-control outline: >= 3:1 against surface (WCAG 1.4.11). */
-  --sm-border-strong: #879690;
+  --sm-border-strong: #8e928f;
 
-  --sm-fg: #1d2521;
-  --sm-fg-secondary: #4f5b55;
-  --sm-fg-muted: #5f6b65;
+  --sm-fg: #18181b;
+  --sm-fg-secondary: #4d4d55;
+  --sm-fg-muted: #66666f;
   --sm-fg-inverse: #ffffff;
 
-  --sm-brand: #15823c;
-  --sm-brand-hover: #126d33;
-  --sm-brand-subtle: #f0f9f3;
+  /* Serene green (the SALESTORM brand green): white text 5.3:1. */
+  --sm-brand: #107c41;
+  --sm-brand-hover: #0a5d2b;
+  --sm-brand-subtle: #eef7f1;
   /* Stronger mint for icon tiles and decorative fills only (never behind text). */
-  --sm-brand-muted: #dcf0e3;
+  --sm-brand-muted: #dceee3;
   --sm-brand-fg: #ffffff;
   --sm-accent: var(--palette-brass-700);
   --sm-accent-subtle: var(--palette-brass-100);
-  --sm-focus: #2563c9;
+  --sm-focus: #107c41;
 
-  /* Navigation rail: pale mint panel; the current page is a solid green pill. */
-  --sm-nav: #eef4f0;
-  --sm-nav-raised: #e3ede7;
-  --sm-nav-border: #dfe8e3;
-  --sm-nav-fg: #3f4b45;
-  --sm-nav-fg-muted: #5f6b65;
+  /* Navigation surfaces (top bar menus, mobile drawer): white. */
+  --sm-nav: #ffffff;
+  --sm-nav-raised: #f3f4f3;
+  --sm-nav-border: #e8e9e7;
+  --sm-nav-fg: #3f3f46;
+  --sm-nav-fg-muted: #6b6b74;
   --sm-nav-fg-active: #ffffff;
-  --sm-nav-fg-hover: #1d2521;
-  /* Active item: solid brand pill (white text 4.9:1). */
-  --sm-nav-active: #15823c;
-  --sm-nav-indicator: #15823c;
+  --sm-nav-fg-hover: #18181b;
+  /* Active item: solid brand (white text 5.3:1). */
+  --sm-nav-active: #107c41;
+  --sm-nav-indicator: #107c41;
 
   /* --- Semantic: feedback ------------------------------------------- */
   --sm-success: #1d7348;
@@ -120,28 +123,28 @@
   --sm-res-waitlisted: #4a554f;
 
   /* --- Data visualisation: ordered categorical series ---------------- */
-  --sm-chart-1: #15823c;
+  --sm-chart-1: #107c41;
   --sm-chart-2: #b08a45;
   --sm-chart-3: #4f86c6;
-  --sm-chart-4: #9ccfae;
+  --sm-chart-4: #a3d4b5;
   --sm-chart-5: #c2674f;
-  --sm-chart-grid: #e3ebe6;
+  --sm-chart-grid: #ececea;
   --sm-chart-axis: var(--palette-stone-500);
 
   /* --- Elevation ------------------------------------------------------ */
-  --sm-shadow-card: 0 1px 2px rgb(20 40 30 / 0.04);
-  --sm-shadow-raised: 0 1px 3px rgb(20 40 30 / 0.08), 0 1px 2px rgb(20 40 30 / 0.04);
-  --sm-shadow-overlay: 0 12px 32px rgb(20 40 30 / 0.14), 0 2px 6px rgb(20 40 30 / 0.05);
+  /* Surfaces rely on their border; shadows are barely there. */
+  --sm-shadow-card: 0 1px 2px rgb(24 24 27 / 0.03);
+  --sm-shadow-raised: 0 1px 2px rgb(24 24 27 / 0.07), 0 1px 1px rgb(24 24 27 / 0.03);
+  --sm-shadow-overlay: 0 16px 40px rgb(24 24 27 / 0.12), 0 2px 6px rgb(24 24 27 / 0.05);
 
   /* --- Density ---------------------------------------------------------- */
-  --sm-row-height: 2.5rem; /* 40px table rows */
-  --sm-control-height: 2.25rem; /* 36px inputs, selects, buttons */
+  --sm-row-height: 2.75rem; /* 44px table rows */
+  --sm-control-height: 2.375rem; /* 38px inputs, selects, buttons */
   --sm-control-height-touch: 2.75rem; /* 44px housekeeping / tablet workflows */
   --sm-control-height-sm: 1.75rem; /* 28px compact secondary actions */
 
   /* --- Layering: named levels only, never ad-hoc z-values ------------ */
   --z-sticky: 20;
-  --z-rail: 30;
   --z-popover: 40;
   --z-skip: 50;
 
@@ -178,7 +181,7 @@
   --sm-accent: var(--palette-brass-300);
   --sm-accent-subtle: #2a2317;
   --sm-focus: #6aa5f5;
-  --sm-nav: #09110d;
+  --sm-nav: #0f1512;
   --sm-nav-raised: #15241c;
   --sm-nav-active: #187049;
   --sm-nav-fg: #d2ddd7;
@@ -240,8 +243,9 @@
 
 /* --- Tailwind mapping ---------------------------------------------------- */
 @theme inline {
-  --font-sans: var(--font-plex-sans), var(--font-plex-arabic), ui-sans-serif, system-ui, sans-serif;
-  --font-mono: var(--font-plex-mono), ui-monospace, monospace;
+  /* Geist, as in SALESTORM; Arabic falls back to IBM Plex Sans Arabic. */
+  --font-sans: var(--font-geist), var(--font-plex-arabic), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
 
   /* Type scale (ratio ~1.14): dense data at 13px, reading text at 14px. */
   --text-2xs: 0.6875rem; /* 11px: meta, chart ticks */
@@ -259,12 +263,13 @@
   --text-2xl: 1.5rem; /* 24px: page titles (PageHeader), key figures */
   --text-2xl--line-height: 2rem;
 
-  /* Medium radii: 8px controls, 12px cards and dialogs. */
-  --radius-xs: 3px;
-  --radius-sm: 5px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-  --radius-xl: 16px;
+  /* SERENE family radii: 10px controls, 16px cards and dialogs, 20px page
+     surfaces (page and record headers). Pills are rounded-full. */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
 
   --shadow-card: var(--sm-shadow-card);
   --shadow-raised: var(--sm-shadow-raised);
@@ -339,10 +344,6 @@
   --spacing-control: var(--sm-control-height);
   --spacing-control-touch: var(--sm-control-height-touch);
   --spacing-control-sm: var(--sm-control-height-sm);
-  /* Navigation rail width (lg and up). */
-  --spacing-rail: 15rem;
-  /* Collapsed rail: icons only. */
-  --spacing-rail-collapsed: 4.5rem;
 }
 
 /* --- Base ---------------------------------------------------------------- */
@@ -350,6 +351,12 @@
   html {
     font-size: 16px;
     -webkit-text-size-adjust: 100%;
+    /* Anchors and focus targets land below the sticky header: 64px, plus
+       the 48px navigation row from lg. */
+    scroll-padding-top: 4.5rem;
+    @media (min-width: 64rem) {
+      scroll-padding-top: 7.5rem;
+    }
   }
 
   body {
@@ -366,11 +373,23 @@
   h2,
   h3 {
     text-wrap: balance;
+    letter-spacing: -0.01em;
   }
 
   :focus-visible {
     outline: 2px solid var(--sm-focus);
     outline-offset: 2px;
+  }
+
+  /* Table headings everywhere use the family micro-label (Table.tsx and the
+     route-local tables alike); utilities on a cell still override it. */
+  thead th {
+    font-size: 0.6875rem;
+    line-height: 1rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--sm-fg-muted);
   }
 
   /* Native checkboxes and radios take the brand colour. */
@@ -401,6 +420,27 @@
       transition-duration: 0.01ms !important;
       scroll-behavior: auto !important;
     }
+  }
+}
+
+/*
+ * Micro-label: the family's small uppercase tracked label (menu headings,
+ * field and fact labels, table headings, eyebrow of a record).
+ */
+@utility label-caps {
+  font-size: 0.6875rem;
+  line-height: 1rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--sm-fg-muted);
+}
+
+/* Horizontal strips that still scroll by touch/trackpad but show no bar. */
+@utility scrollbar-hidden {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
   }
 }
 
@@ -471,10 +511,52 @@
     animation: sm-indeterminate 1.5s cubic-bezier(0.65, 0, 0.35, 1) infinite;
   }
 
+  /*
+   * Navigation progress (components/workspace/NavigationProgress.tsx): the
+   * bar eases toward 90% while a route loads, then fills and fades.
+   */
+  .sm-nav-progress {
+    transform-origin: 0 50%;
+    transform: scaleX(0);
+    opacity: 0;
+    transition:
+      transform 0.2s ease-out,
+      opacity 0.3s ease-out 0.15s;
+  }
+  .sm-nav-progress[data-state="loading"] {
+    opacity: 1;
+    transform: scaleX(0.9);
+    transition:
+      transform 8s cubic-bezier(0.1, 0.8, 0.2, 1),
+      opacity 0.1s linear;
+  }
+  .sm-nav-progress[data-state="done"] {
+    opacity: 0;
+    transform: scaleX(1);
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .sm-mark-draw,
     .sm-indeterminate {
       animation: none !important;
     }
   }
+}
+
+/*
+ * Browser autofill keeps the control's own surface instead of the browser's
+ * blue fill (an inset shadow paints over it); focus still shows the brand
+ * ring. Unlayered on purpose: it must beat the controls' shadow utilities.
+ */
+input:-webkit-autofill,
+input:-webkit-autofill:hover {
+  -webkit-text-fill-color: var(--sm-fg);
+  box-shadow: inset 0 0 0 1000px var(--sm-surface);
+  caret-color: var(--sm-fg);
+}
+input:-webkit-autofill:focus {
+  -webkit-text-fill-color: var(--sm-fg);
+  box-shadow:
+    inset 0 0 0 1000px var(--sm-surface),
+    0 0 0 3px rgb(16 124 65 / 0.14);
 }

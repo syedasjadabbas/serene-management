@@ -6,14 +6,6 @@ import { cn } from "@/components/ui/cn";
 import { formatShortDate } from "@/lib/utils/format";
 import type { RoomBoardRow } from "@/modules/rooms/rooms.types";
 
-const EDGE: Record<RoomBoardRow["status"], string> = {
-  OUT_OF_ORDER: "border-s-danger",
-  OUT_OF_SERVICE: "border-s-warning",
-  OCCUPIED: "border-s-info",
-  VACANT_READY: "border-s-success",
-  VACANT_NOT_READY: "border-s-warning",
-};
-
 const TASK_STATUS: Record<string, string> = {
   PENDING: "to clean",
   IN_PROGRESS: "cleaning",
@@ -26,6 +18,9 @@ const TASK_STATUS: Record<string, string> = {
  * The shared room board: one tile per room with occupancy, housekeeping,
  * service and maintenance state. Guest names appear only when the server
  * sent them (frontdesk:read). Tiles are buttons when `onSelect` is given.
+ * SERENE family tile: hairline border, room number and status pill on the
+ * first line, room type and floor under it; the status pill carries the
+ * colour (no coloured edge).
  */
 export function RoomBoardGrid({
   rooms,
@@ -37,15 +32,17 @@ export function RoomBoardGrid({
   return (
     <ul
       aria-label="Rooms"
-      className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
+      className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
     >
       {rooms.map((room) => {
         const body = (
           <>
-            <div className="flex items-center justify-between gap-2">
-              <span className="flex items-baseline gap-2">
-                <span className="font-mono text-base font-semibold">{room.number}</span>
-                <span className="text-xs text-fg-muted">
+            <div className="flex items-start justify-between gap-2">
+              <span className="flex min-w-0 flex-col">
+                <span className="font-mono text-lg leading-6 font-bold tracking-[-0.01em]">
+                  {room.number}
+                </span>
+                <span className="truncate text-xs text-fg-muted">
                   {room.roomType.code}
                   {room.floor ? ` · ${room.floor.name}` : ""}
                 </span>
@@ -102,10 +99,8 @@ export function RoomBoardGrid({
             ) : null}
           </>
         );
-        const className = cn(
-          "flex w-full flex-col gap-1 rounded-md border border-s-4 border-border-subtle bg-surface px-3 py-2 text-start",
-          EDGE[room.status],
-        );
+        const className =
+          "flex h-full w-full flex-col gap-1.5 rounded-md border border-border-subtle bg-surface px-3.5 py-3 text-start shadow-card";
         return (
           <li key={room.id}>
             {onSelect ? (

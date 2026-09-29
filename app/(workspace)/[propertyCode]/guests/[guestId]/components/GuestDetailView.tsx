@@ -5,9 +5,13 @@ import type { Route } from "next";
 import { useState } from "react";
 import { Alert } from "@/components/ui/Alert";
 import { Badge } from "@/components/ui/Badge";
+import { Contact } from "lucide-react";
 import { Button } from "@/components/ui/Button";
+import { IdChip } from "@/components/ui/KeyFacts";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { Select } from "@/components/ui/Select";
 import { StatusPanel } from "@/components/ui/StatusPanel";
+import { PageSkeleton } from "@/components/ui/PageSkeleton";
 import { useProperty } from "@/hooks/useProperty";
 import {
   useDeleteGuestNoteMutation,
@@ -47,7 +51,7 @@ export function GuestDetailView({ guestId }: { guestId: string }) {
   const [dialog, setDialog] = useState<Dialog>(null);
   const close = () => setDialog(null);
 
-  if (query.isLoading) return <StatusPanel kind="loading" title="Loading guest" />;
+  if (query.isLoading) return <PageSkeleton title="Loading guest" layout="detail" />;
   if (error || !query.data) {
     return (
       <StatusPanel
@@ -75,82 +79,64 @@ export function GuestDetailView({ guestId }: { guestId: string }) {
   const g = query.data;
   const a = g.access;
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-4">
-      <nav aria-label="Breadcrumb" className="text-xs text-fg-muted">
-        <Link href={`/${property.code}/guests` as Route} className="hover:underline">
-          Guests
-        </Link>{" "}
-        / {g.profileNumber}
-      </nav>
-      <section className="rounded-lg border border-border-subtle bg-surface">
-        <div className="flex flex-wrap items-center gap-2 border-b border-border-subtle px-4 py-2.5">
-          <h1 className="text-lg font-semibold">{g.fullName}</h1>
-          {g.preferredName ? (
-            <span className="text-sm text-fg-muted">“{g.preferredName}”</span>
-          ) : null}
-          {g.vip ? <Badge tone="brand">{g.vip.name}</Badge> : null}
-          {g.isRestricted ? <Badge tone="danger">Restricted</Badge> : null}
-          {g.status !== "ACTIVE" ? <Badge>Inactive</Badge> : null}
-          <span className="ms-auto flex flex-wrap gap-1.5">
-            {a.update ? (
-              <Button
-                size="sm"
-                className="min-h-11 md:min-h-0"
-                onClick={() => setDialog({ kind: "edit" })}
-              >
-                Edit profile
-              </Button>
+    <div className="mx-auto flex max-w-6xl flex-col gap-6">
+      <PageHeader
+        back={{ href: `/${property.code}/guests`, label: "Guests" }}
+        icon={Contact}
+        eyebrow="Guest"
+        title={g.fullName}
+        meta={
+          <>
+            {g.preferredName ? (
+              <span className="text-sm text-fg-muted">“{g.preferredName}”</span>
             ) : null}
-            {a.update ? (
-              <Button
-                size="sm"
-                variant="secondary"
-                className="min-h-11 md:min-h-0"
-                onClick={() => setDialog({ kind: "preferences" })}
-              >
-                Preferences
-              </Button>
-            ) : null}
-            {a.addNote ? (
-              <Button
-                size="sm"
-                variant="secondary"
-                className="min-h-11 md:min-h-0"
-                onClick={() => setDialog({ kind: "note" })}
-              >
-                Add note
-              </Button>
-            ) : null}
+            {g.vip ? <Badge tone="brand">{g.vip.name}</Badge> : null}
+            {g.isRestricted ? <Badge tone="danger">Restricted</Badge> : null}
+            {g.status !== "ACTIVE" ? <Badge>Inactive</Badge> : null}
+          </>
+        }
+        actions={
+          <>
             {a.enrollLoyalty && g.status === "ACTIVE" ? (
-              <Button
-                size="sm"
-                variant="secondary"
-                className="min-h-11 md:min-h-0"
-                onClick={() => setDialog({ kind: "enroll" })}
-              >
+              <Button variant="secondary" onClick={() => setDialog({ kind: "enroll" })}>
                 Enroll in loyalty
               </Button>
             ) : null}
-          </span>
-        </div>
-        {g.alerts.length > 0 || g.isRestricted ? (
-          <div className="flex flex-col gap-2 px-4 pt-3">
-            {g.isRestricted ? (
-              <Alert tone="danger">
-                Restricted from booking{g.restrictionReason ? `: ${g.restrictionReason}` : ""}.
-              </Alert>
+            {a.addNote ? (
+              <Button variant="secondary" onClick={() => setDialog({ kind: "note" })}>
+                Add note
+              </Button>
             ) : null}
-            {g.alerts.map((alert, i) => (
-              <Alert key={i} tone="warning">
-                {alert}
-              </Alert>
-            ))}
-          </div>
-        ) : null}
+            {a.update ? (
+              <Button variant="secondary" onClick={() => setDialog({ kind: "preferences" })}>
+                Preferences
+              </Button>
+            ) : null}
+            {a.update ? (
+              <Button onClick={() => setDialog({ kind: "edit" })}>Edit profile</Button>
+            ) : null}
+          </>
+        }
+        footer={<IdChip label="Profile" value={g.profileNumber} />}
+      />
+      {g.alerts.length > 0 || g.isRestricted ? (
+        <div className="flex flex-col gap-2">
+          {g.isRestricted ? (
+            <Alert tone="danger">
+              Restricted from booking{g.restrictionReason ? `: ${g.restrictionReason}` : ""}.
+            </Alert>
+          ) : null}
+          {g.alerts.map((alert, i) => (
+            <Alert key={i} tone="warning">
+              {alert}
+            </Alert>
+          ))}
+        </div>
+      ) : null}
+      <section className="rounded-lg border border-border-subtle bg-surface">
         <dl className="grid grid-cols-1 gap-x-6 gap-y-2 p-4 sm:grid-cols-2 lg:grid-cols-4">
           {(
             [
-              ["Profile", g.profileNumber],
               ["E-mail", g.email ?? "—"],
               ["Phone", g.phone ?? "—"],
               ["Preferred contact", g.preferredContact ? CONTACT_LABELS[g.preferredContact] : "—"],

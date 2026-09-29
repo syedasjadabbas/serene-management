@@ -7,8 +7,12 @@ import { AuditHistory } from "@/components/audit/AuditHistory";
 import { GuestRecognition } from "@/components/guests/GuestRecognition";
 import { Alert } from "@/components/ui/Alert";
 import { Badge } from "@/components/ui/Badge";
-import { Button } from "@/components/ui/Button";
+import { BedDouble } from "lucide-react";
+import { Button, buttonClass } from "@/components/ui/Button";
+import { type KeyFact, KeyFacts } from "@/components/ui/KeyFacts";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { StatusPanel } from "@/components/ui/StatusPanel";
+import { PageSkeleton } from "@/components/ui/PageSkeleton";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useProperty } from "@/hooks/useProperty";
 import { useStayQuery } from "@/lib/api/endpoints/front-desk.api";
@@ -49,7 +53,7 @@ export function StayDetailView({
   const error = toClientApiError(query.error);
   const [dialog, setDialog] = useState<"move" | "checkOut" | "extend" | null>(null);
 
-  if (permissionsLoading) return <StatusPanel kind="loading" title="Loading stay" />;
+  if (permissionsLoading) return <PageSkeleton title="Loading stay" layout="detail" />;
   if (!allowed) {
     return (
       <StatusPanel
@@ -59,7 +63,7 @@ export function StayDetailView({
       />
     );
   }
-  if (query.isLoading) return <StatusPanel kind="loading" title="Loading stay" />;
+  if (query.isLoading) return <PageSkeleton title="Loading stay" layout="detail" />;
   if (error || !query.data) {
     return (
       <StatusPanel
@@ -87,33 +91,44 @@ export function StayDetailView({
 
   const stay = query.data;
   const inHouse = stay.status === "IN_HOUSE";
+  const keyFacts: KeyFact[] = [
+    {
+      label: "Stay",
+      value: `${formatDate(stay.arrival)} → ${formatDate(stay.departure)}`,
+      hint: pluralize(stay.nights, "night"),
+    },
+    {
+      label: "Room",
+      value: stay.room.number,
+      hint: `${stay.room.frontOfficeStatus.toLowerCase()} · housekeeping ${stay.room.housekeepingStatus.toLowerCase()}`,
+      mono: true,
+    },
+    {
+      label: "Party",
+      value: `${pluralize(stay.adults, "adult")}${stay.children ? `, ${pluralize(stay.children, "child", "children")}` : ""}`,
+    },
+    ...(stay.allowedActions.viewFolio
+      ? [
+          stay.folio
+            ? {
+                label: "Balance",
+                value: formatCurrency(
+                  stay.folio.balance,
+                  stay.folio.currencyCode,
+                  "en",
+                  stay.folio.minorUnits,
+                ),
+                hint: `${pluralize(stay.folio.windows, "window")}${stay.folio.status === "SETTLED" ? " · settled" : ""}`,
+              }
+            : { label: "Balance", value: "No folio yet" },
+        ]
+      : []),
+  ];
   const facts: [string, string][] = [
     ["Guest", `${stay.guest.name} (${stay.guest.profileNumber})`],
     ["Contact", [stay.guest.email, stay.guest.phone].filter(Boolean).join(" · ") || "—"],
-    [
-      "Room",
-      `${stay.room.number} · ${stay.room.frontOfficeStatus.toLowerCase()} · housekeeping ${stay.room.housekeepingStatus.toLowerCase()}`,
-    ],
     ["Room type", `${stay.roomType.code} · ${stay.roomType.name}`],
-    [
-      "Stay",
-      `${formatDate(stay.arrival)} → ${formatDate(stay.departure)} · ${pluralize(stay.nights, "night")}`,
-    ],
-    [
-      "Party",
-      `${pluralize(stay.adults, "adult")}${stay.children ? `, ${pluralize(stay.children, "child", "children")}` : ""}`,
-    ],
     ["Rate plan", `${stay.ratePlan.code} · ${stay.ratePlan.name}`],
-    ...(stay.allowedActions.viewFolio
-      ? ([
-          [
-            "Balance",
-            stay.folio
-              ? `${formatCurrency(stay.folio.balance, stay.folio.currencyCode, "en", stay.folio.minorUnits)} · ${pluralize(stay.folio.windows, "window")}${stay.folio.status === "SETTLED" ? " · settled" : ""}`
-              : "No folio yet",
-          ],
-        ] as [string, string][])
-      : []),
     [
       "Checked in",
       `${formatDateTime(stay.checkedInAt, property.timezone)}${stay.checkedInBy ? ` by ${stay.checkedInBy}` : ""} · business date ${formatDate(stay.arrivalBusinessDate)}`,
@@ -127,20 +142,58 @@ export function StayDetailView({
   ];
 
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-4">
-      <nav aria-label="Breadcrumb" className="text-xs text-fg-muted">
-        <Link href={`/${property.code}/front-desk` as Route} className="hover:underline">
-          Front desk
-        </Link>{" "}
-        /{" "}
-        <Link
-          href={`/${property.code}/reservations/${stay.reservationId}` as Route}
-          className="hover:underline"
-        >
-          {stay.confirmation}
-        </Link>{" "}
-        / Stay
-      </nav>
+    <div className="mx-auto flex max-w-6xl flex-col gap-6">
+      <PageHeader
+        breadcrumbs={[
+          { label: "Front desk", href: `/${property.code}/front-desk` },
+          {
+            label: stay.confirmation,
+            href: `/${property.code}/reservations/${stay.reservationId}`,
+          },
+          { label: "Stay" },
+        ]}
+        icon={BedDouble}
+        eyebrow="Stay"
+        title={<span id="stay-heading">{stay.guest.name}</span>}
+        meta={
+          <>
+            {stay.guest.vip ? <Badge tone="brand">VIP {stay.guest.vip}</Badge> : null}
+            <Badge tone={inHouse ? "success" : "neutral"}>
+              {inHouse ? "In house" : "Checked out"}
+            </Badge>
+            {stay.checkoutTiming ? (
+              <span className="text-xs text-fg-muted">{TIMING_LABELS[stay.checkoutTiming]}</span>
+            ) : null}
+            {stay.isWalkIn ? <Badge>Walk-in</Badge> : null}
+          </>
+        }
+        actions={
+          <>
+            {stay.allowedActions.viewFolio ? (
+              <Link
+                href={`/${property.code}/billing/${stay.reservationRoomId}` as Route}
+                className={buttonClass("secondary")}
+              >
+                Folio
+              </Link>
+            ) : null}
+            {stay.allowedActions.extend ? (
+              <Button variant="secondary" onClick={() => setDialog("extend")}>
+                Extend stay
+              </Button>
+            ) : null}
+            {stay.allowedActions.moveRoom ? (
+              <Button variant="secondary" onClick={() => setDialog("move")}>
+                Change room
+              </Button>
+            ) : null}
+            {stay.allowedActions.checkOut ? (
+              <Button onClick={() => setDialog("checkOut")}>Check out</Button>
+            ) : null}
+          </>
+        }
+        footer={<KeyFacts items={keyFacts} />}
+      />
       {justCheckedIn && inHouse && stay.version === 1 ? (
         <Alert tone="success">
           {stay.guest.name} is checked in to room {stay.room.number}.
@@ -151,44 +204,6 @@ export function StayDetailView({
         aria-labelledby="stay-heading"
         className="rounded-lg border border-border-subtle bg-surface"
       >
-        <div className="flex flex-wrap items-center gap-2 border-b border-border-subtle px-4 py-2.5">
-          <h1 id="stay-heading" className="text-lg font-semibold">
-            {stay.guest.name}
-          </h1>
-          {stay.guest.vip ? <Badge tone="brand">VIP {stay.guest.vip}</Badge> : null}
-          <Badge tone={inHouse ? "success" : "neutral"}>
-            {inHouse ? "In house" : "Checked out"}
-          </Badge>
-          {stay.checkoutTiming ? (
-            <span className="text-xs text-fg-muted">{TIMING_LABELS[stay.checkoutTiming]}</span>
-          ) : null}
-          {stay.isWalkIn ? <Badge>Walk-in</Badge> : null}
-          <div className="ms-auto flex flex-wrap gap-1.5">
-            {stay.allowedActions.viewFolio ? (
-              <Link
-                href={`/${property.code}/billing/${stay.reservationRoomId}` as Route}
-                className="inline-flex h-7 items-center rounded-md border border-border bg-surface px-2.5 text-xs hover:bg-surface-sunken"
-              >
-                Folio
-              </Link>
-            ) : null}
-            {stay.allowedActions.extend ? (
-              <Button size="sm" variant="secondary" onClick={() => setDialog("extend")}>
-                Extend stay
-              </Button>
-            ) : null}
-            {stay.allowedActions.moveRoom ? (
-              <Button size="sm" variant="secondary" onClick={() => setDialog("move")}>
-                Change room
-              </Button>
-            ) : null}
-            {stay.allowedActions.checkOut ? (
-              <Button size="sm" onClick={() => setDialog("checkOut")}>
-                Check out
-              </Button>
-            ) : null}
-          </div>
-        </div>
         {can("guests:read") ? (
           <div className="px-4 pt-3">
             <GuestRecognition guestId={stay.guest.id} propertyCode={property.code} />

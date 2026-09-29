@@ -48,6 +48,7 @@ export function StaysView({ kind, filter, q }: { kind: Kind; filter: string; q: 
           marked for cleaning.
         </Alert>
       ) : null}
+      {/* Narrow screens scroll the table sideways; the room column stays pinned. */}
       <div className="relative overflow-x-auto rounded-lg border border-border-subtle bg-surface">
         <table className="w-full min-w-[900px] text-sm">
           <caption className="sr-only">
@@ -55,7 +56,10 @@ export function StaysView({ kind, filter, q }: { kind: Kind; filter: string; q: 
           </caption>
           <thead className="bg-surface-sunken text-left text-xs text-fg-secondary">
             <tr>
-              <th scope="col" className="px-3 py-2 font-medium">
+              <th
+                scope="col"
+                className="sticky start-0 z-[1] bg-surface-sunken px-3 py-2 font-medium"
+              >
                 Room
               </th>
               <th scope="col" className="px-2 py-2 font-medium">
@@ -176,8 +180,8 @@ function StaysPage({
           row.stayStatus === "IN_HOUSE" &&
           (row.checkoutTiming === "ON_TIME" || row.checkoutTiming === "OVERSTAY");
         return (
-          <tr key={row.stayId} className="align-top hover:bg-surface-sunken/60">
-            <td className="px-3 py-2 font-mono text-sm font-medium">
+          <tr key={row.stayId} className="group align-top hover:bg-surface-sunken/60">
+            <td className="sticky start-0 z-[1] bg-surface px-3 py-2 font-mono text-sm font-medium whitespace-nowrap group-hover:bg-[color-mix(in_srgb,var(--sm-surface-sunken)_60%,var(--sm-surface))]">
               {row.room.number}
               <span className="ms-1 text-xs text-fg-muted">{row.roomType.code}</span>
             </td>

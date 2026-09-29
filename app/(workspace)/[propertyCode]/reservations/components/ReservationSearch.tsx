@@ -1,6 +1,6 @@
 "use client";
 
-import { CalendarRange, Plus } from "lucide-react";
+import { CalendarCheck, CalendarRange, Plus } from "lucide-react";
 import Link from "next/link";
 import type { Route } from "next";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -8,6 +8,7 @@ import { useState } from "react";
 import { buttonClass } from "@/components/ui/Button";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { StatusPanel } from "@/components/ui/StatusPanel";
+import { PageSkeleton } from "@/components/ui/PageSkeleton";
 import { THead, Table, TableFrame, Th } from "@/components/ui/Table";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useProperty } from "@/hooks/useProperty";
@@ -40,7 +41,7 @@ export function ReservationSearch() {
   });
   const cursors = pages.key === filterKey ? pages.cursors : [undefined];
 
-  if (isLoading) return <StatusPanel kind="loading" title="Loading reservations" />;
+  if (isLoading) return <PageSkeleton title="Loading reservations" />;
   if (!can("reservations:read")) {
     return (
       <StatusPanel
@@ -70,8 +71,9 @@ export function ReservationSearch() {
   });
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-6">
       <PageHeader
+        icon={CalendarCheck}
         breadcrumbs={[
           { label: property.code, href: `/${property.code}` },
           { label: "Reservations" },

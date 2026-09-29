@@ -8,9 +8,11 @@ import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
 import { type Fact, FactList } from "@/components/ui/FactList";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { CalendarCheck } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { AuditHistory } from "@/components/audit/AuditHistory";
 import { StatusPanel } from "@/components/ui/StatusPanel";
+import { PageSkeleton } from "@/components/ui/PageSkeleton";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useProperty } from "@/hooks/useProperty";
 import { useReservationQuery } from "@/lib/api/endpoints/reservations.api";
@@ -36,7 +38,7 @@ export function ReservationDetailView({
   const error = toClientApiError(query.error);
   const [editingCompany, setEditingCompany] = useState(false);
 
-  if (permissionsLoading) return <StatusPanel kind="loading" title="Loading reservation" />;
+  if (permissionsLoading) return <PageSkeleton title="Loading reservation" layout="detail" />;
   if (!can("reservations:read")) {
     return (
       <StatusPanel
@@ -46,7 +48,7 @@ export function ReservationDetailView({
       />
     );
   }
-  if (query.isLoading) return <StatusPanel kind="loading" title="Loading reservation" />;
+  if (query.isLoading) return <PageSkeleton title="Loading reservation" layout="detail" />;
   if (error || !query.data) {
     return (
       <StatusPanel
@@ -129,6 +131,8 @@ export function ReservationDetailView({
           { label: "Reservations", href: `/${property.code}/reservations` },
           { label: reservation.confirmationNumber },
         ]}
+        icon={CalendarCheck}
+        eyebrow="Reservation"
         title={lead ? lead.primaryGuest.name : reservation.confirmationNumber}
         meta={
           <>

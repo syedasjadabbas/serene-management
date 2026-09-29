@@ -4,13 +4,13 @@ import { cn } from "@/components/ui/cn";
 export const MARK_S_PATH =
   "M21.4 10.2C20.2 8.8 18.3 8 16.1 8C12.9 8 10.7 9.7 10.7 12.2C10.7 13.5 11.3 14.3 12.4 14.9C13.4 15.4 14.6 15.7 16 16C17.4 16.3 18.6 16.6 19.6 17.1C20.7 17.7 21.3 18.6 21.3 19.9C21.3 22.4 19 24 15.9 24C13.5 24 11.5 23.1 10.3 21.6";
 export const MARK_SPINE_PATH = "M12.4 14.9C13.4 15.4 14.6 15.7 16 16C17.4 16.3 18.6 16.6 19.6 17.1";
-export const BRAND_GREEN = "#15823C";
+export const BRAND_GREEN = "#107C41";
 export const BRAND_MINT = "#BFE6CC";
 
 /**
  * SERENE MANAGEMENT brand (docs/DESIGN_SYSTEM.md §Brand).
  *
- * Mark: a rounded green tile (#15823C) with a single-weight "S" drawn as one
+ * Mark: a rounded green tile (#107C41, the SERENE family green) with a single-weight "S" drawn as one
  * stroke; its diagonal spine is mint (#BFE6CC), the only accent. Flat
  * colours, no gradients or effects, so it stays crisp from 16 px up and
  * reads the same on light and dark backgrounds (the tile carries its own

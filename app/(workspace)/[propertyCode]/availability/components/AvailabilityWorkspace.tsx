@@ -1,6 +1,6 @@
 "use client";
 
-import { BedDouble, Ban, CalendarCheck, Plus, Tag } from "lucide-react";
+import { BedDouble, Ban, CalendarCheck, CalendarRange, Plus, Tag } from "lucide-react";
 import Link from "next/link";
 import type { Route } from "next";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -13,6 +13,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { StatCard } from "@/components/ui/StatCard";
 import { StatusPanel } from "@/components/ui/StatusPanel";
+import { PageSkeleton } from "@/components/ui/PageSkeleton";
 import { useBusinessDate } from "@/hooks/useBusinessDate";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useProperty } from "@/hooks/useProperty";
@@ -54,7 +55,7 @@ export function AvailabilityWorkspace() {
   );
 
   if (permissionsLoading || businessDate.isLoading)
-    return <StatusPanel kind="loading" title="Loading availability" />;
+    return <PageSkeleton title="Loading availability" />;
   if (!can("availability:read")) {
     return (
       <StatusPanel
@@ -104,8 +105,9 @@ export function AvailabilityWorkspace() {
     }).toString()}` as Route;
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-6">
       <PageHeader
+        icon={CalendarRange}
         breadcrumbs={[
           { label: property.code, href: `/${property.code}` },
           { label: "Availability" },

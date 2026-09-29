@@ -1,15 +1,18 @@
 "use client";
 
 import { ToggleGroup } from "@/components/ui/ToggleGroup";
-import { Count } from "@/components/ui/Badge";
+import { ViewNav } from "@/components/ui/ViewNav";
+import { Wrench } from "lucide-react";
 import Link from "next/link";
 import type { Route } from "next";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { type FormEvent, useState } from "react";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { StatusPanel } from "@/components/ui/StatusPanel";
-import { cn } from "@/components/ui/cn";
+import { PageSkeleton } from "@/components/ui/PageSkeleton";
+import { SkeletonRows } from "@/components/ui/Skeleton";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useProperty } from "@/hooks/useProperty";
 import {
@@ -38,6 +41,16 @@ const VIEW_LABELS: Record<MaintenanceView, string> = {
 
 const PAGE_SIZE = 50;
 
+/** Empty-state copy per view: what would be listed here. */
+const EMPTY_TEXT: Record<MaintenanceView, string> = {
+  open: "Nothing is waiting. New issues reported by staff appear here until someone resolves them.",
+  mine: "No requests are assigned to you right now.",
+  in_progress: "No request is being worked on right now.",
+  resolved: "Resolved requests wait here until they are checked and closed.",
+  closed: "Closed requests are kept here as the room's maintenance history.",
+  all: "No maintenance request has been reported for this property yet.",
+};
+
 /**
  * Maintenance workspace: requests by work state, most urgent first, with
  * server-side priority filter and search. View, priority and search live in
@@ -62,7 +75,7 @@ export function MaintenanceWorkspace() {
   const priority = params.get("priority") ?? "";
   const q = params.get("q") ?? "";
 
-  if (isLoading) return <StatusPanel kind="loading" title="Loading maintenance" />;
+  if (isLoading) return <PageSkeleton title="Loading maintenance" />;
   if (!allowed) {
     return (
       <StatusPanel
@@ -93,43 +106,36 @@ export function MaintenanceWorkspace() {
   };
 
   return (
-    <div className="mx-auto flex max-w-7xl flex-col gap-4">
-      <header className="flex flex-wrap items-end justify-between gap-2">
-        <div>
-          <h1 className="text-xl font-semibold">Maintenance</h1>
-          <p className="text-xs text-fg-muted">
-            {counts
-              ? `${counts.open} open · ${counts.unassigned} unassigned · ${counts.blockingRooms} taking a room out of use`
-              : " "}
-          </p>
-        </div>
-        {can("maintenance:create") ? (
-          <Button onClick={() => setReporting(true)}>Report issue</Button>
-        ) : null}
-      </header>
+    <div className="flex flex-col gap-6">
+      <PageHeader
+        icon={Wrench}
+        breadcrumbs={[
+          { label: property.code, href: `/${property.code}` },
+          { label: "Maintenance" },
+        ]}
+        title="Maintenance"
+        description={
+          counts
+            ? `${counts.open} open · ${counts.unassigned} unassigned · ${counts.blockingRooms} taking a room out of use`
+            : " "
+        }
+        actions={
+          can("maintenance:create") ? (
+            <Button onClick={() => setReporting(true)}>Report issue</Button>
+          ) : undefined
+        }
+      />
 
-      <nav aria-label="Maintenance views" className="-mx-1 overflow-x-auto">
-        <ul className="flex gap-1 px-1">
-          {MAINTENANCE_VIEWS.map((key) => (
-            <li key={key}>
-              <button
-                type="button"
-                aria-current={view === key ? "page" : undefined}
-                onClick={() => navigate({ view: key })}
-                className={cn(
-                  "flex items-center gap-2 rounded-md border px-3 py-2 text-sm whitespace-nowrap",
-                  view === key
-                    ? "border-brand bg-brand-subtle font-medium text-brand"
-                    : "border-border-subtle bg-surface hover:bg-surface-sunken",
-                )}
-              >
-                {VIEW_LABELS[key]}
-                {tabCount[key] !== undefined ? <Count>{tabCount[key]}</Count> : null}
-              </button>
-            </li>
-          ))}
-        </ul>
-      </nav>
+      <ViewNav
+        label="Maintenance views"
+        items={MAINTENANCE_VIEWS.map((key) => ({
+          key,
+          label: VIEW_LABELS[key],
+          count: tabCount[key],
+        }))}
+        value={view}
+        onChange={(key) => navigate({ view: key })}
+      />
 
       <Toolbar
         key={`${priority}-${q}`}
@@ -203,7 +209,7 @@ function RequestList({ view, priority, q }: { view: string; priority: string; q:
   });
   const cursors = pages.key === key ? pages.cursors : [undefined];
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex flex-col gap-3">
       {cursors.map((cursor, index) => (
         <RequestPage
           key={`${key}-${cursor ?? "first"}`}
@@ -250,7 +256,13 @@ function RequestPage({
     { pollingInterval: first ? 60_000 : 0, skipPollingIfUnfocused: true },
   );
   const apiError = toClientApiError(error);
-  if (isLoading) return <StatusPanel kind="loading" title="Loading requests" />;
+  if (isLoading) {
+    return (
+      <div className="overflow-hidden rounded-lg border border-border-subtle bg-surface">
+        <SkeletonRows rows={first ? 4 : 2} columns={3} label="Loading requests" />
+      </div>
+    );
+  }
   if (apiError) {
     return (
       <StatusPanel
@@ -267,14 +279,27 @@ function RequestPage({
     );
   }
   if (!data || (data.items.length === 0 && first)) {
-    return <StatusPanel kind="empty" title="No maintenance requests here" />;
+    const filtered = Boolean(priority || q);
+    return (
+      <div className="rounded-lg border border-dashed border-border bg-surface">
+        <StatusPanel
+          kind="empty"
+          title={filtered ? "No requests match these filters" : "No maintenance requests here"}
+          description={
+            filtered
+              ? "Try another priority or search, or clear the filters."
+              : EMPTY_TEXT[view as MaintenanceView]
+          }
+        />
+      </div>
+    );
   }
   return (
     <>
-      <ul className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">
+      <ul className="divide-y divide-border-subtle overflow-hidden rounded-lg border border-border-subtle bg-surface">
         {data.items.map((item) => (
           <li key={item.id}>
-            <RequestCard item={item} />
+            <RequestRow item={item} />
           </li>
         ))}
       </ul>
@@ -294,30 +319,35 @@ function RequestPage({
   );
 }
 
-function RequestCard({ item }: { item: MaintenanceListItem }) {
+/** One request as a full-width row: what and where on the left, who and when on the right. */
+function RequestRow({ item }: { item: MaintenanceListItem }) {
   const property = useProperty();
   return (
     <Link
       href={`/${property.code}/maintenance/${item.id}` as Route}
-      className="flex h-full flex-col gap-1.5 rounded-md border border-border-subtle bg-surface p-3 hover:bg-surface-sunken"
+      className="flex flex-col gap-1.5 px-4 py-3 hover:bg-surface-sunken md:grid md:grid-cols-[minmax(0,1fr)_minmax(12rem,18rem)] md:items-center md:gap-x-6"
     >
-      <span className="flex flex-wrap items-center gap-2">
-        <span className="font-mono text-xs text-fg-muted">{item.requestNumber}</span>
-        <PriorityBadge priority={item.priority} />
-        <StatusBadge status={item.status} />
-        {item.roomBlocked ? (
-          <Badge tone="danger">
-            {item.roomBlocked === "OUT_OF_ORDER" ? "Room out of order" : "Room out of service"}
-          </Badge>
-        ) : null}
+      <span className="flex min-w-0 flex-col gap-1">
+        <span className="flex flex-wrap items-center gap-2">
+          <span className="font-mono text-xs text-fg-muted">{item.requestNumber}</span>
+          <PriorityBadge priority={item.priority} />
+          <StatusBadge status={item.status} />
+          {item.roomBlocked ? (
+            <Badge tone="danger">
+              {item.roomBlocked === "OUT_OF_ORDER" ? "Room out of order" : "Room out of service"}
+            </Badge>
+          ) : null}
+        </span>
+        <span className="font-medium">{item.title}</span>
+        <span className="text-xs text-fg-secondary">
+          {item.room ? `Room ${item.room.number}` : item.location} · {item.category.name}
+        </span>
       </span>
-      <span className="font-medium">{item.title}</span>
-      <span className="text-xs text-fg-secondary">
-        {item.room ? `Room ${item.room.number}` : item.location} · {item.category.name}
-      </span>
-      <span className="text-xs text-fg-muted">
-        {item.assignee ? `${item.assignee.name}${item.mine ? " (you)" : ""}` : "Unassigned"} ·
-        reported {formatDateTime(item.reportedAt, property.timezone)}
+      <span className="flex flex-col text-xs text-fg-muted md:items-end md:text-end">
+        <span className={item.assignee ? "text-fg-secondary" : undefined}>
+          {item.assignee ? `${item.assignee.name}${item.mine ? " (you)" : ""}` : "Unassigned"}
+        </span>
+        <span>Reported {formatDateTime(item.reportedAt, property.timezone)}</span>
       </span>
     </Link>
   );

@@ -1,9 +1,12 @@
 "use client";
 
 import Link from "next/link";
+import { Building2 } from "lucide-react";
 import type { Route } from "next";
 import { Badge } from "@/components/ui/Badge";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { StatusPanel } from "@/components/ui/StatusPanel";
+import { PageSkeleton } from "@/components/ui/PageSkeleton";
 import { useOrganizationOverviewQuery } from "@/lib/api/endpoints/organization.api";
 import { toClientApiError } from "@/lib/api/errors";
 import { formatCurrency, formatDate } from "@/lib/utils/format";
@@ -15,7 +18,7 @@ import { formatCurrency, formatDate } from "@/lib/utils/format";
  */
 export function OrganizationOverviewPanel() {
   const overview = useOrganizationOverviewQuery();
-  if (overview.isLoading) return <StatusPanel kind="loading" title="Loading the organization" />;
+  if (overview.isLoading) return <PageSkeleton title="Loading the organization" />;
   if (overview.isError || !overview.data) {
     const error = toClientApiError(overview.error);
     return (
@@ -29,14 +32,18 @@ export function OrganizationOverviewPanel() {
   }
   const data = overview.data;
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-4">
-      <header>
-        <h1 className="text-xl font-semibold">{data.organization.name}</h1>
-        <p className="text-sm text-fg-secondary">
-          {data.properties.length} {data.properties.length === 1 ? "property" : "properties"} you
-          can access · each on its own business date and currency
-        </p>
-      </header>
+    <div className="flex flex-col gap-6">
+      <PageHeader
+        icon={Building2}
+        breadcrumbs={[{ label: "Organization" }, { label: "Overview" }]}
+        title={data.organization.name}
+        description={
+          <>
+            {data.properties.length} {data.properties.length === 1 ? "property" : "properties"} you
+            can access · each on its own business date and currency
+          </>
+        }
+      />
       {data.properties.length === 0 ? (
         <StatusPanel kind="empty" title="No properties" />
       ) : (

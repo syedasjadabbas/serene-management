@@ -133,7 +133,7 @@ export function ProfileDialog({ me, onClose }: { me: MeView; onClose: () => void
       error={apiError}
     >
       <div className="flex items-center gap-4">
-        <Avatar name={trimmed || me.user.displayName} src={preview} size="xl" />
+        <Avatar name={trimmed || me.user.displayName} src={preview} size="xl" tone="solid" />
         <div className="flex flex-col gap-2">
           <div className="flex flex-wrap gap-2">
             <input

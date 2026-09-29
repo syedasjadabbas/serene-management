@@ -13,10 +13,20 @@ export default async function LoginPage({ searchParams }: PageProps<"/login">) {
   if (await getServerSession()) redirect(next as Route);
 
   return (
-    <section className="rounded-lg border border-border-subtle bg-surface p-6 shadow-raised">
-      <h1 className="text-lg font-semibold">Sign in</h1>
-      <p className="mt-1 mb-5 text-sm text-fg-secondary">Use your hotel staff account.</p>
+    <section>
+      <p className="hidden text-2xs font-semibold tracking-[0.16em] text-brand uppercase lg:block">
+        SERENE MANAGEMENT
+      </p>
+      <h1 className="text-[1.75rem] leading-tight font-bold tracking-[-0.025em] lg:mt-2">
+        Welcome back
+      </h1>
+      <p className="mt-1.5 mb-8 text-sm text-fg-secondary">
+        Sign in with your hotel staff account to continue.
+      </p>
       <LoginForm next={next} />
+      <p className="mt-8 border-t border-border-subtle pt-5 text-xs text-fg-muted">
+        For SERENE hotel staff only. You see the properties and actions your role allows.
+      </p>
     </section>
   );
 }

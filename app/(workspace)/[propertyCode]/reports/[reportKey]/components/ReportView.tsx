@@ -1,11 +1,13 @@
 "use client";
 
+import { ChartColumn } from "lucide-react";
 import Link from "next/link";
 import type { Route } from "next";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 import { Alert } from "@/components/ui/Alert";
-import { Button } from "@/components/ui/Button";
+import { Button, buttonClass } from "@/components/ui/Button";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { Select } from "@/components/ui/Select";
 import { StatusPanel } from "@/components/ui/StatusPanel";
 import { TextField } from "@/components/ui/TextField";
@@ -76,7 +78,7 @@ export function ReportView({ reportKey }: { reportKey: string }) {
 
   if (report.isLoading) {
     return (
-      <div className="mx-auto flex max-w-6xl flex-col gap-3">
+      <div className="flex flex-col gap-3">
         {back}
         <StatusPanel kind="loading" title="Running the report" />
       </div>
@@ -85,7 +87,7 @@ export function ReportView({ reportKey }: { reportKey: string }) {
   if (report.isError || !report.data) {
     const error = toClientApiError(report.error);
     return (
-      <div className="mx-auto flex max-w-6xl flex-col gap-3">
+      <div className="flex flex-col gap-3">
         {back}
         <StatusPanel
           kind={error?.status === 403 ? "forbidden" : "error"}
@@ -101,12 +103,17 @@ export function ReportView({ reportKey }: { reportKey: string }) {
     formatCell(column, value ?? null, data.currencyCode, property.timezone);
 
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-3">
-      {back}
-      <header className="flex flex-wrap items-end gap-2">
-        <div className="me-auto">
-          <h1 className="text-xl font-semibold">{data.title}</h1>
-          <p className="text-sm text-fg-secondary">
+    <div className="flex flex-col gap-6">
+      <PageHeader
+        icon={ChartColumn}
+        breadcrumbs={[
+          { label: property.code, href: `/${property.code}` },
+          { label: "Reports", href: `/${property.code}/reports` },
+          { label: data.title },
+        ]}
+        title={data.title}
+        description={
+          <>
             {property.name} ·{" "}
             {data.ranged
               ? data.params.from === data.params.to
@@ -114,27 +121,29 @@ export function ReportView({ reportKey }: { reportKey: string }) {
                 : `${formatDate(data.params.from)} – ${formatDate(data.params.to)}`
               : "Now"}{" "}
             · business date {data.businessDate}
-          </p>
-        </div>
-        <div className="flex gap-1.5 print:hidden">
-          <Button size="sm" variant="secondary" onClick={() => window.print()}>
-            Print
-          </Button>
-          {data.canExport ? (
-            <a
-              className="inline-flex h-7 items-center rounded-md border border-border bg-surface px-2.5 text-xs hover:bg-surface-sunken"
-              href={reportExportUrl(property.id, reportKey, {
-                ...data.params,
-                roomTypeId: data.params.roomTypeId ?? undefined,
-                risk: (data.params.risk as ReportQuery["risk"]) ?? undefined,
-              })}
-              download
-            >
-              Export CSV
-            </a>
-          ) : null}
-        </div>
-      </header>
+          </>
+        }
+        actions={
+          <div className="flex flex-wrap gap-2 print:hidden">
+            <Button size="sm" variant="secondary" onClick={() => window.print()}>
+              Print
+            </Button>
+            {data.canExport ? (
+              <a
+                className={buttonClass("secondary", "sm")}
+                href={reportExportUrl(property.id, reportKey, {
+                  ...data.params,
+                  roomTypeId: data.params.roomTypeId ?? undefined,
+                  risk: (data.params.risk as ReportQuery["risk"]) ?? undefined,
+                })}
+                download
+              >
+                Export CSV
+              </a>
+            ) : null}
+          </div>
+        }
+      />
 
       {data.ranged || data.roomTypeFilter || data.riskFilter ? (
         <form

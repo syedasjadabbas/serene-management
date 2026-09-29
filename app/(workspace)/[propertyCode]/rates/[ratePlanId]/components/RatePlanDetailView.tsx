@@ -5,9 +5,12 @@ import type { Route } from "next";
 import { useState } from "react";
 import { type PickedCompany, CompanyPicker } from "@/components/accounts/CompanyPicker";
 import { Badge } from "@/components/ui/Badge";
+import { Tags } from "lucide-react";
 import { Button } from "@/components/ui/Button";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { FormDialog, WeekdayPicker } from "@/components/ui/FormDialog";
 import { StatusPanel } from "@/components/ui/StatusPanel";
+import { PageSkeleton } from "@/components/ui/PageSkeleton";
 import { TextArea } from "@/components/ui/TextArea";
 import { TextField } from "@/components/ui/TextField";
 import { usePermissions } from "@/hooks/usePermissions";
@@ -47,7 +50,7 @@ export function RatePlanDetailView({ ratePlanId }: { ratePlanId: string }) {
   const error = toClientApiError(query.error);
   const [dialog, setDialog] = useState<Dialog>(null);
 
-  if (isLoading) return <StatusPanel kind="loading" title="Loading rate plan" />;
+  if (isLoading) return <PageSkeleton title="Loading rate plan" layout="detail" />;
   if (!can("rates:read")) {
     return (
       <StatusPanel
@@ -57,7 +60,7 @@ export function RatePlanDetailView({ ratePlanId }: { ratePlanId: string }) {
       />
     );
   }
-  if (query.isLoading) return <StatusPanel kind="loading" title="Loading rate plan" />;
+  if (query.isLoading) return <PageSkeleton title="Loading rate plan" layout="detail" />;
   if (error || !query.data) {
     return (
       <StatusPanel
@@ -111,47 +114,45 @@ export function RatePlanDetailView({ ratePlanId }: { ratePlanId: string }) {
   ];
 
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-4">
-      <nav aria-label="Breadcrumb" className="text-xs text-fg-muted">
-        <Link href={`/${property.code}/rates` as Route} className="hover:underline">
-          Rates
-        </Link>{" "}
-        / {plan.code}
-      </nav>
-      <section className="rounded-lg border border-border-subtle bg-surface">
-        <div className="flex flex-wrap items-center gap-2 border-b border-border-subtle px-4 py-2.5">
-          <h1 className="text-lg font-semibold">
+    <div className="mx-auto flex max-w-6xl flex-col gap-6">
+      <PageHeader
+        back={{ href: `/${property.code}/rates`, label: "Rates" }}
+        icon={Tags}
+        eyebrow="Rate plan"
+        title={
+          <>
             {plan.code} · {plan.name}
-          </h1>
-          {plan.status === "ACTIVE" ? (
-            <Badge tone="success">Active</Badge>
-          ) : (
-            <Badge>Inactive</Badge>
-          )}
-          <Badge>{plan.kind.toLowerCase().replace("_", " ")}</Badge>
-          {manage ? (
-            <Button
-              size="sm"
-              variant="secondary"
-              className="ms-auto min-h-11 md:min-h-0"
-              onClick={() => setDialog("edit")}
-            >
+          </>
+        }
+        meta={
+          <>
+            {plan.status === "ACTIVE" ? (
+              <Badge tone="success">Active</Badge>
+            ) : (
+              <Badge>Inactive</Badge>
+            )}
+            <Badge>{plan.kind.toLowerCase().replace("_", " ")}</Badge>
+          </>
+        }
+        description={plan.description || undefined}
+        actions={
+          manage ? (
+            <Button variant="secondary" onClick={() => setDialog("edit")}>
               Edit plan
             </Button>
-          ) : null}
-        </div>
-        <dl className="grid grid-cols-1 gap-x-6 gap-y-1.5 p-4 sm:grid-cols-2 lg:grid-cols-3">
-          {facts.map(([term, value]) => (
-            <div key={term} className="flex flex-col">
-              <dt className="text-xs text-fg-muted">{term}</dt>
-              <dd className="text-sm">{value}</dd>
-            </div>
-          ))}
-        </dl>
-        {plan.description ? (
-          <p className="px-4 pb-4 text-sm text-fg-secondary">{plan.description}</p>
-        ) : null}
-      </section>
+          ) : undefined
+        }
+        footer={
+          <dl className="grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2 lg:grid-cols-3">
+            {facts.map(([term, value]) => (
+              <div key={term} className="flex min-w-0 flex-col gap-0.5">
+                <dt className="label-caps">{term}</dt>
+                <dd className="text-sm break-words text-fg">{value}</dd>
+              </div>
+            ))}
+          </dl>
+        }
+      />
 
       <section className="rounded-lg border border-border-subtle bg-surface p-4">
         <div className="mb-2 flex flex-wrap items-center gap-2">

@@ -2,8 +2,8 @@ import type { MeView } from "@/modules/access/access.types";
 import type { Permission } from "@/lib/permissions/catalog";
 
 /**
- * Sections of the property workspace, in navigation order, grouped on the
- * navigation rail by the kind of work (front office, rooms, revenue and
+ * Sections of the property workspace, in navigation order, grouped in the
+ * top navigation by the kind of work (front office, rooms, revenue and
  * finance). Grouping is presentation only; `permission` gates visibility.
  */
 export const PROPERTY_SECTIONS: {
@@ -50,6 +50,137 @@ export const PROPERTY_SECTIONS: {
   },
   { segment: "reports", label: "Reports", group: "Revenue & finance", permission: "reports:read" },
 ];
+
+/** One destination in the property's top navigation. */
+export interface PropertyNavItem {
+  /** Route segment; label and permission default to its PROPERTY_SECTIONS row. */
+  segment: string;
+  label?: string;
+  /** Overrides the section's permission (tabs gated by their own permission). */
+  permission?: Permission | null;
+  /** Opens this tab of the section page (`?tab=`). */
+  tab?: string;
+  /** The section's default tab: also current on record pages and unknown tabs. */
+  defaultTab?: boolean;
+  /** Other route segments that belong to this item (company records → Companies). */
+  alsoActive?: string[];
+  description?: string;
+}
+
+export type PropertyNavNode =
+  | ({ kind: "link" } & PropertyNavItem)
+  | { kind: "group"; id: string; label: string; items: PropertyNavItem[] };
+
+/**
+ * The property workspace's top navigation: a few domains instead of a flat
+ * list, in the order of daily work. Labels are the section and tab labels
+ * the pages already use; visibility follows the same permissions as the
+ * pages (UI gating only, the server enforces). Companies and Loyalty are
+ * tabs of Guests, Packages a tab of Rates.
+ */
+export const PROPERTY_NAV: PropertyNavNode[] = [
+  { kind: "link", segment: "" },
+  {
+    kind: "group",
+    id: "front-office",
+    label: "Front office",
+    items: [
+      { segment: "front-desk", description: "Arrivals, in-house guests and departures" },
+      { segment: "reservations", description: "Find, create and change bookings" },
+      { segment: "availability", description: "Rooms and rates for any stay" },
+    ],
+  },
+  {
+    kind: "group",
+    id: "guests",
+    label: "Guests",
+    items: [
+      {
+        segment: "guests",
+        tab: "guests",
+        defaultTab: true,
+        description: "Guest profiles, preferences and stays",
+      },
+      {
+        segment: "guests",
+        tab: "companies",
+        label: "Companies",
+        permission: "accounts:read",
+        alsoActive: ["companies"],
+        description: "Corporate and agency accounts",
+      },
+      { segment: "groups", description: "Room blocks and pickup" },
+      {
+        segment: "guests",
+        tab: "loyalty",
+        label: "Loyalty",
+        permission: "loyalty:read",
+        description: "Members, tiers and points",
+      },
+    ],
+  },
+  {
+    kind: "group",
+    id: "rooms",
+    label: "Rooms",
+    items: [
+      { segment: "housekeeping", description: "Room board, cleaning and inspections" },
+      { segment: "maintenance", description: "Work orders and rooms out of use" },
+    ],
+  },
+  {
+    kind: "group",
+    id: "revenue",
+    label: "Revenue & finance",
+    items: [
+      {
+        segment: "rates",
+        defaultTab: true,
+        tab: "plans",
+        description: "Rate plans, pricing calendar and restrictions",
+      },
+      {
+        segment: "rates",
+        tab: "packages",
+        label: "Packages",
+        description: "Extras sold with a rate",
+      },
+      { segment: "billing", description: "Folios, charges and payments" },
+    ],
+  },
+  { kind: "link", segment: "night-audit" },
+  { kind: "link", segment: "reports" },
+];
+
+/** The PROPERTY_SECTIONS row of a segment (label, default permission). */
+export function propertySection(segment: string) {
+  const section = PROPERTY_SECTIONS.find((s) => s.segment === segment);
+  if (!section) throw new Error(`Unknown property section "${segment}"`);
+  return section;
+}
+
+/**
+ * Whether a navigation item is the current page: its route (and any nested
+ * record route), and for tab items the matching `?tab=`. The default tab
+ * also covers record pages and tabs that no sibling item claims.
+ */
+export function propertyNavItemActive(
+  item: PropertyNavItem,
+  siblings: PropertyNavItem[],
+  base: string,
+  pathname: string,
+  tab: string | null,
+): boolean {
+  const under = (segment: string) =>
+    segment === "" ? pathname === base : pathname.startsWith(`${base}/${segment}`);
+  if (item.alsoActive?.some(under)) return true;
+  if (!under(item.segment)) return false;
+  if (!item.tab) return true;
+  if (tab === item.tab) return true;
+  if (!item.defaultTab) return false;
+  const claimed = siblings.some((s) => s.segment === item.segment && s.tab === tab && s !== item);
+  return tab === null || !claimed;
+}
 
 type MeProperty = MeView["properties"][number];
 

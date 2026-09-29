@@ -1,13 +1,16 @@
 "use client";
 
-import { Plus, UserPlus } from "lucide-react";
+import { LayoutDashboard, Plus, UserPlus } from "lucide-react";
 import Link from "next/link";
 import type { Route } from "next";
+import type { ReactNode } from "react";
 import { Badge } from "@/components/ui/Badge";
 import { Button, buttonClass } from "@/components/ui/Button";
+import { cn } from "@/components/ui/cn";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { StatusPanel } from "@/components/ui/StatusPanel";
+import { PageSkeleton } from "@/components/ui/PageSkeleton";
 import { useBusinessDate } from "@/hooks/useBusinessDate";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useProperty } from "@/hooks/useProperty";
@@ -24,7 +27,7 @@ import { OperationsCard } from "./dashboard/OperationsCard";
 import { PropertyDetailsCard } from "./dashboard/PropertyDetailsCard";
 import { RoomStatusCard } from "./dashboard/RoomStatusCard";
 import { StatsRow } from "./dashboard/StatsRow";
-import { TrendCard } from "./dashboard/TrendCard";
+import { TrendCard, hasTrend } from "./dashboard/TrendCard";
 
 const SYNC_TEXT = {
   IN_SYNC: "Business date matches the property calendar.",
@@ -77,7 +80,9 @@ export function PropertyOverview() {
     skipPollingIfUnfocused: true,
   });
 
-  if (businessDate.isLoading) return <DashboardSkeleton />;
+  if (businessDate.isLoading) {
+    return <PageSkeleton title="Loading dashboard" />;
+  }
   if (businessDate.isError) {
     const error = toClientApiError(businessDate.error);
     return (
@@ -184,34 +189,47 @@ export function PropertyOverview() {
   ];
 
   const showOperations = housekeepingAllowed || maintenanceAllowed;
-  const main = [
-    frontDeskAllowed ? (
-      <ArrivalsCard
-        key="arrivals"
-        propertyId={property.id}
-        propertyCode={property.code}
-        canOpenReservation={can("reservations:read")}
-      />
-    ) : null,
-    view ? <TrendCard key="trend" trend={view.trend} /> : null,
-  ].filter(Boolean);
-  const side = [
-    view ? <RoomStatusCard key="rooms" rooms={view.rooms} href={roomsHref} /> : null,
-    view ? <LastClosedCard key="closed" view={view} propertyCode={property.code} /> : null,
-    showOperations ? (
-      <OperationsCard
-        key="operations"
-        propertyId={property.id}
-        propertyCode={property.code}
-        housekeeping={housekeepingAllowed}
-        maintenance={maintenanceAllowed}
-      />
-    ) : null,
-  ].filter(Boolean);
+  const trendReady = view ? hasTrend(view.trend) : false;
+  const arrivals = frontDeskAllowed ? (
+    <ArrivalsCard
+      propertyId={property.id}
+      propertyCode={property.code}
+      canOpenReservation={can("reservations:read")}
+    />
+  ) : null;
+  const roomStatus = view ? <RoomStatusCard rooms={view.rooms} href={roomsHref} /> : null;
+  const lastClosed = view ? <LastClosedCard view={view} propertyCode={property.code} /> : null;
+  const operations = showOperations ? (
+    <OperationsCard
+      propertyId={property.id}
+      propertyCode={property.code}
+      housekeeping={housekeepingAllowed}
+      maintenance={maintenanceAllowed}
+    />
+  ) : null;
+
+  // The workspace reads top-down in the order front-office staff need it:
+  // what needs attention, today's figures, today's arrivals beside the room
+  // picture, then the last close and open work. With a trend (two or more
+  // closed dates) the chart pairs with the last close; without one it is a
+  // single line and the last close, operations and property facts share a
+  // row of three. Sections the user may not see give their space away.
+  const rows: ReactNode[][] = trendReady
+    ? [
+        [arrivals, roomStatus],
+        [<TrendCard key="trend" trend={view!.trend} />, lastClosed],
+        [<PropertyDetailsCard key="facts" facts={facts} />, operations],
+      ]
+    : [
+        [arrivals, roomStatus],
+        [view ? <TrendCard key="trend" trend={view.trend} /> : null],
+        [lastClosed, operations, <PropertyDetailsCard key="facts" facts={facts} compact />],
+      ];
 
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
+        icon={LayoutDashboard}
         breadcrumbs={[{ label: property.code }, { label: "Dashboard" }]}
         title={property.name}
         meta={status ? <Badge tone={status.tone}>{status.label}</Badge> : null}
@@ -267,41 +285,43 @@ export function PropertyOverview() {
         )
       ) : null}
 
-      {main.length || side.length ? (
-        <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-3">
-          {main.length ? (
-            <div
-              className={
-                side.length
-                  ? "flex min-w-0 flex-col gap-6 lg:col-span-2"
-                  : "flex min-w-0 flex-col gap-6 lg:col-span-3"
-              }
-            >
-              {main}
-            </div>
-          ) : null}
-          {side.length ? (
-            <div
-              className={
-                main.length
-                  ? "flex min-w-0 flex-col gap-6"
-                  : "grid min-w-0 grid-cols-1 gap-6 md:grid-cols-2 lg:col-span-3 lg:grid-cols-3"
-              }
-            >
-              {side}
-            </div>
-          ) : null}
-        </div>
-      ) : null}
+      {rows.map((row, index) => (
+        <DashboardRow key={index} cells={row} />
+      ))}
+    </div>
+  );
+}
 
-      <PropertyDetailsCard facts={facts} />
+/**
+ * One dashboard row. Two cells pair as two-thirds and one-third (the
+ * operational list beside its summary), three share the width equally, one
+ * spans it; from lg, below which they stack. Cells stretch to the row's
+ * height so paired cards end on the same line.
+ */
+function DashboardRow({ cells }: { cells: ReactNode[] }) {
+  const visible = cells.filter(Boolean);
+  if (visible.length === 0) return null;
+  return (
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+      {visible.map((cell, index) => (
+        <div
+          key={index}
+          className={cn(
+            "flex min-w-0 flex-col [&>*]:flex-1",
+            visible.length === 1 && "lg:col-span-3",
+            visible.length === 2 && index === 0 && "lg:col-span-2",
+          )}
+        >
+          {cell}
+        </div>
+      ))}
     </div>
   );
 }
 
 function StatSkeletons() {
   return (
-    <div role="status" className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
+    <div role="status" className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
       <span className="sr-only">Loading today&apos;s figures</span>
       {[0, 1, 2, 3].map((i) => (
         <div key={i} className="flex gap-3 rounded-lg border border-border-subtle bg-surface p-4">
@@ -313,19 +333,6 @@ function StatSkeletons() {
           </div>
         </div>
       ))}
-    </div>
-  );
-}
-
-function DashboardSkeleton() {
-  return (
-    <div className="flex flex-col gap-6">
-      <div className="flex flex-col gap-2" aria-hidden="true">
-        <Skeleton className="h-3 w-24" />
-        <Skeleton className="h-7 w-64" />
-        <Skeleton className="h-3 w-80" />
-      </div>
-      <StatSkeletons />
     </div>
   );
 }

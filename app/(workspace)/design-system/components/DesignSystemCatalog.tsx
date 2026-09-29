@@ -36,7 +36,9 @@ import { TextField } from "@/components/ui/TextField";
 import { ToggleGroup } from "@/components/ui/ToggleGroup";
 import { useTabs } from "@/components/ui/tabs";
 import { AppShell } from "@/components/workspace/AppShell";
-import { SideNav } from "@/components/workspace/SideNav";
+import { MobileNav } from "@/components/workspace/MobileNav";
+import { PrimaryNav } from "@/components/workspace/PrimaryNav";
+import type { NavEntry } from "@/components/workspace/nav";
 
 const SECTIONS = [
   { id: "brand", label: "Brand", icon: Shapes },
@@ -121,6 +123,22 @@ function Section({ id, title, children }: { id: string; title: string; children:
   );
 }
 
+/** The catalogue's sections as one navigation menu (anchors on this page). */
+const catalogNav: NavEntry[] = [
+  {
+    kind: "group",
+    id: "sections",
+    label: "Sections",
+    icon: SECTIONS[0]!.icon,
+    items: SECTIONS.map((section) => ({
+      href: `#${section.id}`,
+      label: section.label,
+      icon: section.icon,
+      active: false,
+    })),
+  },
+];
+
 export function DesignSystemCatalog() {
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [filter, setFilter] = useState("all");
@@ -138,17 +156,8 @@ export function DesignSystemCatalog() {
 
   return (
     <AppShell
-      nav={
-        <SideNav
-          label="Design system"
-          items={SECTIONS.map((s) => ({
-            href: `#${s.id}`,
-            label: s.label,
-            icon: s.icon,
-            active: false,
-          }))}
-        />
-      }
+      nav={<PrimaryNav label="Design system" entries={catalogNav} />}
+      mobileNav={<MobileNav label="Design system" entries={catalogNav} />}
       context={<span className="px-2 text-sm font-medium">SERENE design system</span>}
       actions={
         <ToggleGroup

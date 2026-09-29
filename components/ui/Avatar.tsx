@@ -21,7 +21,9 @@ const SIZES = {
  * Avatar for people (users, guests): the profile picture when there is one,
  * initials otherwise (also when the image fails to load). Decorative: the
  * name is always shown or announced next to it, so it is hidden from
- * assistive technology. `tone="accent"` marks VIP guests.
+ * assistive technology. SERENE family look: a rounded square. Guests use
+ * the soft mint tile; `tone="solid"` (green, white initials) is the signed-in
+ * user; `tone="accent"` marks VIP guests.
  */
 export function Avatar({
   name,
@@ -33,7 +35,7 @@ export function Avatar({
   name: string;
   src?: string | null;
   size?: keyof typeof SIZES;
-  tone?: "brand" | "accent" | "neutral";
+  tone?: "brand" | "solid" | "accent" | "neutral";
   className?: string;
 }) {
   const [failed, setFailed] = useState<string | null>(null);
@@ -42,13 +44,15 @@ export function Avatar({
     <span
       aria-hidden="true"
       className={cn(
-        "relative flex shrink-0 items-center justify-center overflow-hidden rounded-full font-semibold",
+        "relative flex shrink-0 items-center justify-center overflow-hidden rounded-md font-semibold",
         SIZES[size],
         tone === "accent"
           ? "bg-accent-subtle text-accent"
           : tone === "neutral"
             ? "bg-surface-sunken text-fg-secondary"
-            : "bg-brand-subtle text-brand",
+            : tone === "solid"
+              ? "bg-brand text-brand-fg"
+              : "bg-brand-subtle text-brand",
         className,
       )}
     >

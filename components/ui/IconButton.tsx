@@ -4,7 +4,8 @@ import { cn } from "./cn";
 
 const VARIANTS: Record<ButtonVariant, string> = {
   primary: "bg-brand text-brand-fg hover:bg-brand-hover",
-  secondary: "border border-border bg-surface text-fg hover:bg-surface-sunken",
+  secondary:
+    "border border-border bg-surface text-fg-secondary shadow-card hover:bg-surface-sunken hover:text-fg",
   ghost: "text-fg-secondary hover:bg-surface-sunken hover:text-fg",
   danger: "text-danger hover:bg-danger-subtle",
 };

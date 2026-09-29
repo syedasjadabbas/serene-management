@@ -3,9 +3,12 @@
 import Link from "next/link";
 import type { Route } from "next";
 import { useState } from "react";
+import { Hotel } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { StatusPanel } from "@/components/ui/StatusPanel";
+import { PageSkeleton } from "@/components/ui/PageSkeleton";
 import {
   useAccessiblePropertiesQuery,
   useOrganizationOverviewQuery,
@@ -32,7 +35,7 @@ export function PropertiesPanel() {
   const error = toClientApiError(properties.error ?? overview.error);
 
   if (properties.isLoading || overview.isLoading)
-    return <StatusPanel kind="loading" title="Loading properties" />;
+    return <PageSkeleton title="Loading properties" />;
   if (error || !properties.data) {
     return (
       <StatusPanel
@@ -46,24 +49,24 @@ export function PropertiesPanel() {
   const list = properties.data;
 
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-4">
-      <header className="flex flex-wrap items-end gap-2">
-        <div className="me-auto">
-          <h1 className="text-xl font-semibold">Properties</h1>
-          <p className="text-sm text-fg-secondary">
-            New confirmation numbers carry each property&apos;s prefix (e.g. SMR-100045).
-          </p>
-        </div>
-        {manage ? (
-          <Button
-            size="touch"
-            className="md:h-control md:text-sm"
-            onClick={() => setDialog({ kind: "create" })}
-          >
-            New property
-          </Button>
-        ) : null}
-      </header>
+    <div className="flex flex-col gap-6">
+      <PageHeader
+        icon={Hotel}
+        breadcrumbs={[{ label: "Organization", href: "/organization" }, { label: "Properties" }]}
+        title="Properties"
+        description="New confirmation numbers carry each property's prefix (e.g. SMR-100045)."
+        actions={
+          manage ? (
+            <Button
+              size="touch"
+              className="md:h-control md:text-sm"
+              onClick={() => setDialog({ kind: "create" })}
+            >
+              New property
+            </Button>
+          ) : undefined
+        }
+      />
       <section className="rounded-lg border border-border-subtle bg-surface">
         <div className="relative overflow-x-auto">
           <table className="w-full min-w-[640px] text-sm">
