@@ -393,6 +393,19 @@ export function softDeleteNote(tx: Tx, noteId: string) {
   return tx.guestNote.update({ where: { id: noteId }, data: { deletedAt: new Date() } });
 }
 
+/**
+ * Reservation rooms (alias `rr`) the guest is on, as primary guest or sharer.
+ * Written as an IN over two index lookups, not `primary_guest_id = g OR EXISTS
+ * (sharer)`: that OR cannot use either index, so PostgreSQL scanned every
+ * reservation room of the properties per profile view (docs/SCALABILITY.md).
+ */
+function onGuestReservationRooms(guestId: string) {
+  return Prisma.sql`rr."id" IN (
+    SELECT x."id" FROM "reservation_rooms" x WHERE x."primary_guest_id" = ${guestId}::uuid
+    UNION
+    SELECT rg."reservation_room_id" FROM "reservation_guests" rg WHERE rg."guest_id" = ${guestId}::uuid)`;
+}
+
 /** Counts and last stay over the given properties, from the reservation source rows. */
 export async function guestStatistics(tx: Tx, guestId: string, propertyIds: string[]) {
   if (propertyIds.length === 0) {
@@ -418,9 +431,7 @@ export async function guestStatistics(tx: Tx, guestId: string, propertyIds: stri
       (MAX(rr."departure_date") FILTER (WHERE rr."status" = 'CHECKED_OUT'))::text AS "last_stay"
     FROM "reservation_rooms" rr
     WHERE rr."property_id" = ANY(${propertyIds}::uuid[])
-      AND (rr."primary_guest_id" = ${guestId}::uuid OR EXISTS (
-        SELECT 1 FROM "reservation_guests" rg
-        WHERE rg."reservation_room_id" = rr."id" AND rg."guest_id" = ${guestId}::uuid))`;
+      AND ${onGuestReservationRooms(guestId)}`;
   const r = rows[0]!;
   return {
     stays: r.stays,
@@ -471,9 +482,7 @@ export function findGuestHistory(
 ) {
   const conditions = [
     Prisma.sql`rr."property_id" = ANY(${propertyIds}::uuid[])`,
-    Prisma.sql`(rr."primary_guest_id" = ${guestId}::uuid OR EXISTS (
-      SELECT 1 FROM "reservation_guests" rg
-      WHERE rg."reservation_room_id" = rr."id" AND rg."guest_id" = ${guestId}::uuid))`,
+    onGuestReservationRooms(guestId),
   ];
   if (filters.status) conditions.push(Prisma.sql`rr."status"::text = ${filters.status}`);
   if (filters.from) conditions.push(Prisma.sql`rr."departure_date" > ${filters.from}::date`);

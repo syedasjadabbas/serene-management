@@ -906,7 +906,7 @@ export async function getStay(ctx: PropertyContext, stayId: string): Promise<Sta
     confirmation: displayConfirmation(
       rr.reservation.confirmationNumber,
       rr.lineNumber,
-      rr.reservation._count.rooms,
+      rr.reservation.rooms.length,
     ),
     guest: {
       id: stay.primaryGuest.id,

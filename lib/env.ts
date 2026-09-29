@@ -69,6 +69,12 @@ const baseSchema = z.object({
     .min(1_000)
     .max(3_600_000)
     .default(60_000),
+  /**
+   * "1" adds a Server-Timing header (authentication and total milliseconds)
+   * to API responses, for load tests (docs/SCALABILITY.md). Off by default:
+   * timings are not shown to clients in normal operation.
+   */
+  SERVER_TIMING: z.enum(["0", "1"]).default("0"),
 });
 
 export type ServerEnv = z.infer<typeof baseSchema>;

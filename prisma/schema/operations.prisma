@@ -154,6 +154,8 @@ model HousekeepingTask {
   @@unique([propertyId, roomId, businessDate, taskTypeId], where: raw("status <> 'CANCELLED'"))
   @@index([propertyId, businessDate, status])
   @@index([propertyId, attendantId, businessDate])
+  /// Scalability phase: open and completed-not-inspected tasks per room (room board).
+  @@index([propertyId, roomId], map: "housekeeping_tasks_live_idx", where: raw("status IN ('PENDING', 'IN_PROGRESS', 'PAUSED', 'FAILED_INSPECTION', 'COMPLETED')"))
   @@map("housekeeping_tasks")
 }
 

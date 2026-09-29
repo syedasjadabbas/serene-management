@@ -357,7 +357,7 @@ function toDetail(
       confirmation: displayConfirmation(
         r.reservation.confirmationNumber,
         r.lineNumber,
-        r.reservation._count.rooms,
+        r.reservation.rooms.length,
       ),
       guestName: guestFullName(r.primaryGuest),
       arrival: toDateOnly(r.arrivalDate),

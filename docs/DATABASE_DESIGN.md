@@ -309,6 +309,10 @@ Nine indexes, each built with `CREATE INDEX CONCURRENTLY` in its own migration (
 | `loyalty_memberships_program_id_enrolled_at_idx`                         | member list, newest first                        |
 | `reservations_confirmation_number_trgm_idx` (GIN, `gin_trgm_ops`)        | confirmation search: prefix, contains, ends-with |
 
+### Scalability phase notes (index)
+
+`20261130090000_idx_housekeeping_tasks_live` adds `housekeeping_tasks_live_idx` on `(property_id, room_id)`, partial on `status IN ('PENDING', 'IN_PROGRESS', 'PAUSED', 'FAILED_INSPECTION', 'COMPLETED')`, built `CONCURRENTLY` in its own migration. It serves the room board's per-room current-task lookup and the awaiting-inspection count. Without it, each room walked its whole task history: 34 000 of the board's 38 000 buffer reads on a 300-room benchmark property. Evidence is in docs/SCALABILITY.md §7.
+
 Night audit's statistics roll-forward reads the previous day's `daily_statistics.ledger_closing_balance` as the opening. This is exact because postings into closed dates are refused. It falls back to a full sum only without a snapshot.
 
 ### Time zones (all phases)
@@ -339,7 +343,7 @@ Night audit's statistics roll-forward reads the previous day's `daily_statistics
 | `room_status_history`     | every status change                                       | Monthly partitions if needed; 2-year hot retention                                                         |
 | `reservation_room_nights` | nights × rooms                                            | Indexed `(property_id, stay_date, room_type_id)`                                                           |
 | `room_type_inventory`     | room types × horizon (e.g. 30 × 730 = 22 k rows/property) | Rolling horizon maintained by night audit                                                                  |
-| `housekeeping_tasks`      | rooms × days                                              | `(property_id, business_date, status)`                                                                     |
+| `housekeeping_tasks`      | rooms × days                                              | `(property_id, business_date, status)`; live tasks per room: partial `housekeeping_tasks_live_idx`         |
 | `outbox_events`           | every event                                               | Published purged after 30 days, failed after 90; pending kept until a publisher exists (OPERATIONS.md §5)  |
 
 Partitioning is introduced by a dedicated migration when monitoring shows the need; primary keys already include no assumptions that would block it (UUIDv7 + partition key will be added to the PK at that time).

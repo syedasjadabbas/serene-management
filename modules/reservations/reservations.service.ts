@@ -1800,7 +1800,7 @@ export async function listReservations(
         displayConfirmation: displayConfirmation(
           row.reservation.confirmationNumber,
           row.lineNumber,
-          row.reservation._count.rooms,
+          row.reservation.rooms.length,
         ),
         lineNumber: row.lineNumber,
         status: row.status,

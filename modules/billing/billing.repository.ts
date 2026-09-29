@@ -541,16 +541,35 @@ export function findFolioListPage(
                      AND (SELECT sum(y."balance") FROM "folios" y
                           WHERE y."reservation_room_id" = rr."id") <> 0`
         : Prisma.sql`AND EXISTS (SELECT 1 FROM "folios" x WHERE x."reservation_room_id" = rr."id")`;
+  // Search: guest name words, confirmation number or room number. Each is a
+  // separate candidate set of the property's reservation rooms, united: an OR
+  // across the three tables could use no index, so PostgreSQL sorted every
+  // guest and walked the property's whole history per keystroke of global
+  // search (4-8 s on 400k reservation rooms, docs/SCALABILITY.md §11).
   const search = options.search
-    ? Prisma.sql`AND ((${
-        options.search.tokens.length > 0
-          ? Prisma.join(
-              options.search.tokens.map((t) => Prisma.sql`g."search_name" LIKE ${`%${t}%`}`),
-              " AND ",
-            )
-          : Prisma.sql`FALSE`
-      }) OR ${confirmationMatchSql(Prisma.sql`res."confirmation_number"`, options.search.raw)}
-          OR upper(rm."number") = ${options.search.raw.trim().toUpperCase()})`
+    ? Prisma.sql`AND rr."id" IN (${Prisma.join(
+        [
+          ...(options.search.tokens.length > 0
+            ? [
+                Prisma.sql`SELECT x."id" FROM "reservation_rooms" x
+                  JOIN "guests" gx ON gx."id" = x."primary_guest_id"
+                  WHERE x."property_id" = ${propertyId}::uuid AND ${Prisma.join(
+                    options.search.tokens.map((t) => Prisma.sql`gx."search_name" LIKE ${`%${t}%`}`),
+                    " AND ",
+                  )}`,
+              ]
+            : []),
+          Prisma.sql`SELECT x."id" FROM "reservation_rooms" x
+            JOIN "reservations" rx ON rx."id" = x."reservation_id"
+            WHERE x."property_id" = ${propertyId}::uuid
+              AND ${confirmationMatchSql(Prisma.sql`rx."confirmation_number"`, options.search.raw)}`,
+          Prisma.sql`SELECT x."id" FROM "reservation_rooms" x
+            JOIN "rooms" mx ON mx."id" = x."room_id"
+            WHERE x."property_id" = ${propertyId}::uuid
+              AND upper(mx."number") = ${options.search.raw.trim().toUpperCase()}`,
+        ],
+        " UNION ",
+      )})`
     : Prisma.empty;
   const cursor = options.cursor
     ? Prisma.sql`AND (g."search_name", rr."id") > (${options.cursor.v}, ${options.cursor.i}::uuid)`

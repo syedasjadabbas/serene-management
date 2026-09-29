@@ -190,11 +190,22 @@ const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 /** Coarse flood guard before authentication; per-route limits follow per user. */
 const GLOBAL_WRITE_LIMIT: RateLimitRule = { name: "api.write.ip", limit: 300, windowMs: 60_000 };
 
+/** Authentication time per request, for the opt-in Server-Timing header. */
+const authTimings = new WeakMap<NextRequest, number>();
+
+function serverTiming(request: NextRequest, started: number): string | null {
+  if (serverEnv().SERVER_TIMING !== "1") return null;
+  const total = performance.now() - started;
+  const auth = authTimings.get(request);
+  return `${auth === undefined ? "" : `auth;dur=${auth.toFixed(1)}, `}total;dur=${total.toFixed(1)}`;
+}
+
 async function run(
   request: NextRequest,
   options: { status?: number },
   execute: (meta: RequestMeta) => Promise<unknown>,
 ): Promise<Response> {
+  const started = performance.now();
   const meta = requestMeta(request);
   try {
     if (MUTATING.has(request.method)) {
@@ -211,6 +222,8 @@ async function run(
           : ok(result, undefined, { status: options.status ?? 200 });
     response.headers.set("x-request-id", meta.requestId);
     response.headers.set("cache-control", "no-store");
+    const timing = serverTiming(request, started);
+    if (timing) response.headers.set("server-timing", timing);
     return response;
   } catch (error) {
     const headers: Record<string, string> = { "cache-control": "no-store" };
@@ -273,8 +286,10 @@ async function enforceRateLimit(rule: RateLimitRule, key: string | null) {
 }
 
 async function authenticate(request: NextRequest, meta: RequestMeta) {
+  const started = performance.now();
   const claims = await verifyAccessToken(request.cookies.get(ACCESS_COOKIE)?.value);
   const session = claims ? await resolveSession(claims) : null;
+  authTimings.set(request, performance.now() - started);
   if (!session)
     throw new AppError("UNAUTHENTICATED", "Your session has expired. Please sign in again.");
   const ctx: SessionContext = {

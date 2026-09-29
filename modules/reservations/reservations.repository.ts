@@ -378,7 +378,9 @@ const listSelect = {
       confirmationNumber: true,
       bookedAt: true,
       channel: { select: { code: true } },
-      _count: { select: { rooms: true } },
+      // Room ids, counted in the service: a relation `_count` compiles to an
+      // aggregate over the whole reservation_rooms table (docs/SCALABILITY.md).
+      rooms: { select: { id: true } },
     },
   },
   primaryGuest: {

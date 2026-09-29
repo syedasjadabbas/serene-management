@@ -193,7 +193,8 @@ export function findAccountReservations(tx: Tx, accountId: string, propertyIds: 
       departureDate: true,
       propertyId: true,
       reservation: {
-        select: { confirmationNumber: true, _count: { select: { rooms: true } } },
+        // Room ids, counted in the service: a relation `_count` aggregates the whole table.
+        select: { confirmationNumber: true, rooms: { select: { id: true } } },
       },
       primaryGuest: { select: { title: true, firstName: true, lastName: true } },
       ratePlan: { select: { code: true } },

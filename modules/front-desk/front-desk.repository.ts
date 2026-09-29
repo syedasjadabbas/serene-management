@@ -101,7 +101,8 @@ export function findStayDetail(tx: Tx, propertyId: string, stayId: string) {
           reservation: {
             select: {
               confirmationNumber: true,
-              _count: { select: { rooms: true } },
+              // Counted in the service; see reservations.repository listSelect.
+              rooms: { select: { id: true } },
               notes: {
                 where: { deletedAt: null },
                 orderBy: { createdAt: "asc" },
