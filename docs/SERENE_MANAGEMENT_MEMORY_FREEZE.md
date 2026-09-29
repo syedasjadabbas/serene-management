@@ -13,6 +13,7 @@ SERENE MANAGEMENT is a hotel PMS built from scratch, functionally inspired by en
 ## Completed
 
 Phases 0–10 are complete:
+
 1. Foundation
 2. Auth/RBAC/Organization
 3. Reservations/Availability

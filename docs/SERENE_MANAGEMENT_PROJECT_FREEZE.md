@@ -79,6 +79,7 @@ Canonical commit: `7129881d04db56b0963687eee0b468436c8ffda3`
 ## 6. Important Rules
 
 AI/coding agents must NOT:
+
 - commit
 - tag
 - push
@@ -117,6 +118,7 @@ These are future integrations/features, not failures of the core PMS:
 This is the next major focus. Improve the existing product without changing the established architecture/business logic.
 
 Focus on:
+
 - navigation/sidebar
 - workspace structure
 - tables/forms/dialogs
@@ -138,6 +140,7 @@ Focus on:
 ### Stage B — Real-world Product Refinement
 
 After UI/UX, operate the system like a real hotel team and identify:
+
 - missing workflows
 - awkward workflows
 - business-rule gaps
@@ -151,6 +154,7 @@ Then fix those findings.
 ### Stage C — Final Production Validation
 
 After refinement:
+
 - full tests
 - typecheck/lint/build
 - migration/drift checks
