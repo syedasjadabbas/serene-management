@@ -41,3 +41,37 @@ export const completePasswordResetSchema = z
   .strict();
 
 export type CompletePasswordResetInput = z.infer<typeof completePasswordResetSchema>;
+
+/** Self-service profile (the signed-in user edits their own display name). */
+export const updateProfileSchema = z
+  .object({
+    displayName: z
+      .string()
+      .trim()
+      .min(1, "Enter your name")
+      .max(120, "At most 120 characters")
+      .regex(/^[^\p{Cc}\p{Cf}]+$/u, "Remove special or invisible characters"),
+  })
+  .strict();
+
+export type UpdateProfileInput = z.infer<typeof updateProfileSchema>;
+
+/** Profile picture types; the server also checks the file signature. */
+export const AVATAR_CONTENT_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
+export type AvatarContentType = (typeof AVATAR_CONTENT_TYPES)[number];
+/** 256 KB decoded; the browser sends a 256 px image well below this. */
+export const AVATAR_MAX_BYTES = 262_144;
+
+/** JSON-only upload (API_CONVENTIONS): the image travels as base64. */
+export const uploadAvatarSchema = z
+  .object({
+    contentType: z.enum(AVATAR_CONTENT_TYPES),
+    data: z
+      .string()
+      .min(8)
+      .max(Math.ceil(AVATAR_MAX_BYTES / 3) * 4, "The image is too large (max 256 KB)")
+      .regex(/^[A-Za-z0-9+/]+={0,2}$/, "Invalid image data"),
+  })
+  .strict();
+
+export type UploadAvatarInput = z.infer<typeof uploadAvatarSchema>;

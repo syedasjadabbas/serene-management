@@ -1,5 +1,7 @@
 "use client";
 
+import { ToggleGroup } from "@/components/ui/ToggleGroup";
+import { Count } from "@/components/ui/Badge";
 import type { Route } from "next";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { RoomBoardPanel } from "@/components/rooms/RoomBoardPanel";
@@ -124,11 +126,7 @@ export function HousekeepingWorkspace() {
                 )}
               >
                 {tab.label}
-                {tab.count !== undefined ? (
-                  <span className="rounded-full bg-surface-sunken px-1.5 text-xs tabular-nums">
-                    {tab.count}
-                  </span>
-                ) : null}
+                {tab.count !== undefined ? <Count>{tab.count}</Count> : null}
               </button>
             </li>
           ))}
@@ -137,24 +135,12 @@ export function HousekeepingWorkspace() {
 
       {view === "board" ? (
         <>
-          <div role="group" aria-label="Room filter" className="flex flex-wrap gap-1.5">
-            {BOARD_FILTERS.map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                aria-pressed={filter === option.value}
-                onClick={() => navigate({ filter: option.value })}
-                className={cn(
-                  "rounded-full border px-3 py-1 text-xs",
-                  filter === option.value
-                    ? "border-brand bg-brand-subtle font-medium text-brand"
-                    : "border-border-subtle text-fg-secondary hover:bg-surface-sunken",
-                )}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
+          <ToggleGroup
+            label="Room filter"
+            options={BOARD_FILTERS}
+            value={filter}
+            onChange={(value) => navigate({ filter: value })}
+          />
           <RoomBoardPanel filter={filter} />
         </>
       ) : (

@@ -1,5 +1,6 @@
 "use client";
 
+import { ToggleGroup } from "@/components/ui/ToggleGroup";
 import Link from "next/link";
 import type { Route } from "next";
 import { useRouter } from "next/navigation";
@@ -10,7 +11,6 @@ import { FormDialog } from "@/components/ui/FormDialog";
 import { StatusPanel } from "@/components/ui/StatusPanel";
 import { TextArea } from "@/components/ui/TextArea";
 import { TextField } from "@/components/ui/TextField";
-import { cn } from "@/components/ui/cn";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useProperty } from "@/hooks/useProperty";
 import { useCreateGroupMutation, useGroupsQuery } from "@/lib/api/endpoints/groups.api";
@@ -59,24 +59,12 @@ export function GroupsWorkspace() {
           </Button>
         ) : null}
       </div>
-      <div role="group" aria-label="Group status" className="flex flex-wrap gap-1">
-        {STATUSES.map(([id, label]) => (
-          <button
-            key={id}
-            type="button"
-            aria-pressed={status === id}
-            onClick={() => setStatus(id)}
-            className={cn(
-              "min-h-11 rounded-md px-3 text-sm",
-              status === id
-                ? "bg-brand-subtle font-medium text-brand"
-                : "text-fg-secondary hover:bg-surface-sunken",
-            )}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
+      <ToggleGroup
+        label="Group status"
+        options={STATUSES.map(([value, label]) => ({ value, label }))}
+        value={status}
+        onChange={setStatus}
+      />
       {query.isLoading ? <StatusPanel kind="loading" title="Loading groups" /> : null}
       {error ? (
         <StatusPanel

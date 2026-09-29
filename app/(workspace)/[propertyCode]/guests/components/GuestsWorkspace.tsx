@@ -3,7 +3,7 @@
 import type { Route } from "next";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { StatusPanel } from "@/components/ui/StatusPanel";
-import { cn } from "@/components/ui/cn";
+import { Tab, TabList } from "@/components/ui/TabList";
 import { useTabs } from "@/components/ui/tabs";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useProperty } from "@/hooks/useProperty";
@@ -53,24 +53,17 @@ export function GuestsWorkspace() {
           Guest and company profiles are shared by every property of the organization.
         </p>
       </div>
-      <div role="tablist" aria-label="Profiles" className="flex flex-wrap gap-1">
+      <TabList label="Profiles">
         {visible.map(([id, label]) => (
-          <button
+          <Tab
             key={id}
-            type="button"
             {...tabs.tab(id)}
             onClick={() => router.replace(`${pathname}?tab=${id}` as Route)}
-            className={cn(
-              "min-h-11 rounded-md px-3 text-sm",
-              tab === id
-                ? "bg-brand-subtle font-medium text-brand"
-                : "text-fg-secondary hover:bg-surface-sunken",
-            )}
           >
             {label}
-          </button>
+          </Tab>
         ))}
-      </div>
+      </TabList>
       <div {...tabs.panel}>
         {tab === "guests" ? <GuestsPanel /> : null}
         {tab === "companies" ? <CompaniesPanel /> : null}

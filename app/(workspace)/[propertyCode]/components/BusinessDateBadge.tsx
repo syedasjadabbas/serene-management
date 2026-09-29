@@ -1,5 +1,6 @@
 "use client";
 
+import { CalendarDays } from "lucide-react";
 import Link from "next/link";
 import type { Route } from "next";
 import { useBusinessDate } from "@/hooks/useBusinessDate";
@@ -7,10 +8,15 @@ import { usePermissions } from "@/hooks/usePermissions";
 import { useProperty } from "@/hooks/useProperty";
 import { cn } from "@/components/ui/cn";
 
+const FIELD =
+  "inline-flex h-9 items-center gap-2 rounded-md border bg-surface px-2.5 text-xs whitespace-nowrap";
+
 /**
  * Header indicator of the hotel business date (server value, never the
- * browser date). Users who can read the night audit get a link to it; the
- * badge flags an audit that is due, overdue or running.
+ * browser date): a squared field with the date, and after a divider the
+ * night-audit state when it needs attention (running, due, overdue). Only
+ * an overdue audit turns the field red. Users who can read the night audit
+ * get a link to it.
  */
 export function BusinessDateBadge() {
   const property = useProperty();
@@ -22,37 +28,45 @@ export function BusinessDateBadge() {
     return <span className="text-xs text-danger">Business date unavailable</span>;
   if (data.status === "NOT_INITIALIZED") {
     return (
-      <span className="rounded-sm bg-warning-subtle px-2 py-0.5 text-xs text-warning">
-        Not live
-      </span>
+      <span className={cn(FIELD, "border-warning/30 font-medium text-warning")}>Not live</span>
     );
   }
 
   const overdue = data.sync?.state === "AUDIT_OVERDUE";
-  const due = data.sync?.state === "AWAITING_AUDIT";
-  const className = cn(
-    "flex items-center gap-1.5 rounded-sm px-2 py-0.5 text-xs",
-    overdue ? "bg-danger-subtle text-danger" : "bg-surface-sunken text-fg-secondary",
-  );
+  const due = data.sync?.state === "AWAITING_AUDIT" && data.status !== "IN_AUDIT";
+  const running = data.status === "IN_AUDIT";
+  const state = overdue
+    ? { tone: "text-danger", dot: "bg-danger", short: "Overdue", long: "Audit overdue" }
+    : running
+      ? { tone: "text-info", dot: "bg-info", short: "Running", long: "Audit running" }
+      : due
+        ? { tone: "text-warning", dot: "bg-warning", short: "Due", long: "Audit due" }
+        : null;
+
   const content = (
     <>
-      <span className="text-fg-muted">Business date</span>
+      <CalendarDays aria-hidden="true" className="size-3.5 shrink-0 text-fg-muted" />
+      <span className="hidden text-fg-secondary xl:inline">Business date</span>
       <span className="font-mono font-medium text-fg">{data.businessDate}</span>
-      {data.status === "IN_AUDIT" ? (
-        <span className="text-warning">· Night audit running</span>
-      ) : null}
-      {overdue ? <span>· Audit overdue</span> : null}
-      {due && data.status !== "IN_AUDIT" ? (
-        <span className="text-fg-muted">· Audit due</span>
+      {state ? (
+        <>
+          <span aria-hidden="true" className="h-3.5 w-px bg-border" />
+          <span className={cn("inline-flex items-center gap-1.5 font-medium", state.tone)}>
+            <span aria-hidden="true" className={cn("size-1.5 rounded-full", state.dot)} />
+            <span className="sm:hidden">{state.short}</span>
+            <span className="hidden sm:inline">{state.long}</span>
+          </span>
+        </>
       ) : null}
     </>
   );
+  const className = cn(FIELD, overdue ? "border-danger/35" : "border-border");
   const title = `Property time ${data.propertyLocalDate} ${data.propertyLocalTime} (${data.timezone})`;
   return can("nightaudit:read") ? (
     <Link
       href={`/${property.code}/night-audit` as Route}
       title={title}
-      className={cn(className, "hover:underline")}
+      className={cn(className, "transition-colors duration-150 hover:bg-surface-sunken")}
     >
       {content}
     </Link>

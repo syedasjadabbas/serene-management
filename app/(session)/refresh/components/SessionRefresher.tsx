@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import type { Route } from "next";
 import { useEffect } from "react";
-import { StatusPanel } from "@/components/ui/StatusPanel";
+import { BrandLoader } from "@/components/brand/BrandLoader";
 
 export function SessionRefresher({ next }: { next: string }) {
   const router = useRouter();
@@ -28,5 +28,10 @@ export function SessionRefresher({ next }: { next: string }) {
     };
   }, [next, router]);
 
-  return <StatusPanel kind="loading" title="Restoring your session" />;
+  return (
+    <BrandLoader
+      title="Restoring your session"
+      description="Just a moment while we sign you back in securely."
+    />
+  );
 }

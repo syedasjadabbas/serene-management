@@ -1,5 +1,6 @@
 import { type SelectHTMLAttributes, forwardRef, useId } from "react";
 import { cn } from "./cn";
+import { controlClass, fieldErrorClass, fieldHintClass, fieldLabelClass } from "./field";
 
 export interface SelectOption {
   value: string;
@@ -35,7 +36,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select
     .join(" ");
   return (
     <div className={cn("flex flex-col gap-1", className)}>
-      <label htmlFor={id} className="text-xs font-medium text-fg-secondary">
+      <label htmlFor={id} className={fieldLabelClass}>
         {label}
       </label>
       <select
@@ -44,10 +45,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select
         id={id}
         aria-invalid={error ? true : undefined}
         aria-describedby={describedBy || undefined}
-        className={cn(
-          "h-control rounded-md border bg-surface px-2 text-sm text-fg",
-          error ? "border-danger" : "border-border hover:border-border-strong",
-        )}
+        className={controlClass(Boolean(error), "h-control px-2.5")}
       >
         {placeholder !== undefined ? <option value="">{placeholder}</option> : null}
         {options.map((option) => (
@@ -57,12 +55,12 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select
         ))}
       </select>
       {hint ? (
-        <p id={`${id}-hint`} className="text-xs text-fg-muted">
+        <p id={`${id}-hint`} className={fieldHintClass}>
           {hint}
         </p>
       ) : null}
       {error ? (
-        <p id={`${id}-error`} className="text-xs text-danger">
+        <p id={`${id}-error`} className={fieldErrorClass}>
           {error}
         </p>
       ) : null}

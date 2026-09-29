@@ -1,21 +1,34 @@
 "use client";
 
+import { BedDouble, Ban, CalendarCheck, Plus, Tag } from "lucide-react";
 import Link from "next/link";
 import type { Route } from "next";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { AvailabilityResults } from "@/components/reservations/AvailabilityResults";
 import { StaySearchForm, type StaySearchValues } from "@/components/reservations/StaySearchForm";
-import { Alert } from "@/components/ui/Alert";
+import { Button, buttonClass } from "@/components/ui/Button";
+import { Card } from "@/components/ui/Card";
+import { DateNavigator } from "@/components/ui/DateNavigator";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { Skeleton } from "@/components/ui/Skeleton";
+import { StatCard } from "@/components/ui/StatCard";
 import { StatusPanel } from "@/components/ui/StatusPanel";
 import { useBusinessDate } from "@/hooks/useBusinessDate";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useProperty } from "@/hooks/useProperty";
 import { useAvailabilityQuery } from "@/lib/api/endpoints/reservations.api";
 import { toClientApiError } from "@/lib/api/errors";
-import { addDays } from "@/modules/business-date/business-date.policy";
-import { pluralize } from "@/lib/utils/format";
+import { formatCurrency, formatDate, pluralize } from "@/lib/utils/format";
+import { parseMoney } from "@/lib/utils/money";
+import type { AvailabilityView } from "@/modules/availability/availability.types";
+import { addDays, daysBetween } from "@/modules/business-date/business-date.policy";
 
-/** Availability search: criteria live in the URL so results are shareable and survive refresh. */
+/**
+ * Availability search. Criteria live in the URL (shareable, survive a
+ * refresh); without criteria the screen shows the business date, one night,
+ * two adults, one room. The date navigator moves the arrival day by day and
+ * keeps the length of stay and party.
+ */
 export function AvailabilityWorkspace() {
   const property = useProperty();
   const { can, isLoading: permissionsLoading } = usePermissions(property.id);
@@ -34,11 +47,10 @@ export function AvailabilityWorkspace() {
         rooms: Number(params.get("rooms") ?? 1),
       }
     : null;
-  const searched = params.has("arrival");
 
   const availability = useAvailabilityQuery(
     { propertyId: property.id, ...(criteria ?? {}) },
-    { skip: !criteria || !searched || !can("availability:read") },
+    { skip: !criteria || !can("availability:read") },
   );
 
   if (permissionsLoading || businessDate.isLoading)
@@ -73,7 +85,13 @@ export function AvailabilityWorkspace() {
     router.replace(`${pathname}?${next.toString()}` as Route);
   }
 
+  function moveArrival(arrival: string) {
+    const nights = Math.max(1, daysBetween(criteria!.arrival, criteria!.departure));
+    search({ ...criteria!, arrival, departure: addDays(arrival, nights) });
+  }
+
   const error = toClientApiError(availability.error);
+  const view = availability.data;
   const bookHref = (roomTypeId: string, ratePlanId: string) =>
     `/${property.code}/reservations/new?${new URLSearchParams({
       arrival: criteria.arrival,
@@ -86,14 +104,28 @@ export function AvailabilityWorkspace() {
     }).toString()}` as Route;
 
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-4">
-      <header className="flex flex-wrap items-baseline justify-between gap-2">
-        <h1 className="text-xl font-semibold">Availability</h1>
-        <p className="text-xs text-fg-muted">
-          Business date {today} · arrival inclusive, departure exclusive
-        </p>
-      </header>
-      <section className="rounded-lg border border-border-subtle bg-surface p-3">
+    <div className="flex flex-col gap-5">
+      <PageHeader
+        breadcrumbs={[
+          { label: property.code, href: `/${property.code}` },
+          { label: "Availability" },
+        ]}
+        title="Availability"
+        description={`Live inventory and bookable rates by room type. Business date ${formatDate(today)}; arrival inclusive, departure exclusive.`}
+        actions={
+          can("reservations:create") ? (
+            <Link
+              href={`/${property.code}/reservations/new` as Route}
+              className={buttonClass("primary")}
+            >
+              <Plus aria-hidden="true" className="size-4" />
+              New reservation
+            </Link>
+          ) : null
+        }
+      />
+
+      <Card title="Stay" description="Dates, party and number of rooms to check.">
         <StaySearchForm
           key={params.toString()}
           initial={criteria}
@@ -101,40 +133,59 @@ export function AvailabilityWorkspace() {
           onSearch={search}
           pending={availability.isFetching}
         />
-      </section>
-      {error ? (
-        <Alert tone="danger">
-          {error.message}
-          {error.requestId ? (
-            <span className="block font-mono text-2xs">Reference: {error.requestId}</span>
-          ) : null}
-        </Alert>
-      ) : null}
-      {!searched ? (
-        <StatusPanel
-          kind="empty"
-          title="Search availability"
-          description="Choose the stay dates and party, then search."
+      </Card>
+
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <DateNavigator
+          label="Arrival date"
+          value={criteria.arrival}
+          min={today}
+          today={today}
+          todayLabel="Business date"
+          onChange={moveArrival}
         />
-      ) : availability.isLoading ? (
-        <StatusPanel kind="loading" title="Checking availability" />
-      ) : availability.data ? (
+        <p className="text-sm text-fg-secondary" aria-live="polite">
+          {view
+            ? `${pluralize(view.nights, "night")}, ${formatDate(view.arrival)} → ${formatDate(view.departure)} · ${pluralize(view.adults, "adult")}${
+                view.children ? `, ${pluralize(view.children, "child", "children")}` : ""
+              } · ${pluralize(view.rooms, "room")}`
+            : null}
+        </p>
+      </div>
+
+      {error ? (
+        <StatusPanel
+          kind="error"
+          title="Could not check availability"
+          description={error.message}
+          requestId={error.requestId}
+          action={
+            <Button variant="secondary" onClick={() => void availability.refetch()}>
+              Try again
+            </Button>
+          }
+        />
+      ) : availability.isLoading || !view ? (
+        <div role="status" className="flex flex-col gap-4">
+          <span className="sr-only">Checking availability</span>
+          <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
+            {[0, 1, 2, 3].map((i) => (
+              <Skeleton key={i} className="h-20 rounded-lg" />
+            ))}
+          </div>
+          <Skeleton className="h-48 rounded-lg" />
+        </div>
+      ) : (
         <>
-          <p className="text-sm text-fg-secondary">
-            {pluralize(availability.data.nights, "night")} from {availability.data.arrival} to{" "}
-            {availability.data.departure}, {pluralize(availability.data.adults, "adult")}
-            {availability.data.children
-              ? `, ${pluralize(availability.data.children, "child", "children")}`
-              : ""}
-            , {pluralize(availability.data.rooms, "room")}.
-          </p>
+          <AvailabilitySummary view={view} />
           <AvailabilityResults
-            view={availability.data}
+            view={view}
             renderRateAction={(roomType, rate) =>
               rate.bookable && roomType.status === "AVAILABLE" && can("reservations:create") ? (
                 <Link
                   href={bookHref(roomType.roomType.id, rate.ratePlan.id)}
-                  className="inline-flex h-7 items-center rounded-md bg-brand px-2.5 text-xs font-medium text-brand-fg hover:bg-brand-hover"
+                  className={buttonClass("primary", "sm")}
+                  aria-label={`Book ${roomType.roomType.name}, ${rate.ratePlan.name}`}
                 >
                   Book
                 </Link>
@@ -142,7 +193,59 @@ export function AvailabilityWorkspace() {
             }
           />
         </>
-      ) : null}
+      )}
     </div>
+  );
+}
+
+/** Headline figures for the searched stay, all derived from the response. */
+function AvailabilitySummary({ view }: { view: AvailabilityView }) {
+  const types = view.roomTypes;
+  const available = types.filter((rt) => rt.status === "AVAILABLE" || rt.status === "LIMITED");
+  const blocked = types.filter((rt) => rt.status === "SOLD_OUT" || rt.status === "CLOSED");
+  const freeRooms = types.reduce((sum, rt) => sum + Math.max(0, rt.available), 0);
+  const quotes = types
+    .filter((rt) => rt.status === "AVAILABLE")
+    .flatMap((rt) => rt.rates)
+    .filter((rate) => rate.bookable && rate.total !== null);
+  const lowest = quotes.reduce<(typeof quotes)[number] | null>(
+    (best, rate) =>
+      best === null || parseMoney(rate.total!) < parseMoney(best.total!) ? rate : best,
+    null,
+  );
+  return (
+    <section
+      aria-label="Availability summary"
+      className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4"
+    >
+      <StatCard
+        icon={CalendarCheck}
+        tone="brand"
+        label="Room types available"
+        value={`${available.length} of ${types.length}`}
+        hint="for the whole stay"
+      />
+      <StatCard
+        icon={BedDouble}
+        tone="info"
+        label="Rooms free"
+        value={freeRooms}
+        hint="on the tightest night"
+      />
+      <StatCard
+        icon={Ban}
+        tone={blocked.length ? "danger" : "neutral"}
+        label="Sold out or closed"
+        value={blocked.length}
+        hint={blocked.length ? blocked.map((rt) => rt.roomType.code).join(", ") : "none"}
+      />
+      <StatCard
+        icon={Tag}
+        tone="accent"
+        label="Lowest bookable rate"
+        value={lowest ? formatCurrency(lowest.total, lowest.currencyCode) : "—"}
+        hint={lowest ? `${lowest.ratePlan.code} · stay total` : "no bookable rate"}
+      />
+    </section>
   );
 }

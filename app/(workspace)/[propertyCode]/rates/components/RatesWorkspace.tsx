@@ -3,7 +3,7 @@
 import type { Route } from "next";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { StatusPanel } from "@/components/ui/StatusPanel";
-import { cn } from "@/components/ui/cn";
+import { Tab, TabList } from "@/components/ui/TabList";
 import { useTabs } from "@/components/ui/tabs";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useProperty } from "@/hooks/useProperty";
@@ -56,24 +56,17 @@ export function RatesWorkspace() {
           always priced by the server from this configuration.
         </p>
       </div>
-      <div role="tablist" aria-label="Rate administration" className="flex flex-wrap gap-1">
+      <TabList label="Rate administration">
         {TABS.map(([id, label]) => (
-          <button
+          <Tab
             key={id}
-            type="button"
             {...tabs.tab(id)}
             onClick={() => router.replace(`${pathname}?tab=${id}` as Route)}
-            className={cn(
-              "min-h-11 rounded-md px-3 text-sm",
-              tab === id
-                ? "bg-brand-subtle font-medium text-brand"
-                : "text-fg-secondary hover:bg-surface-sunken",
-            )}
           >
             {label}
-          </button>
+          </Tab>
         ))}
-      </div>
+      </TabList>
       <div {...tabs.panel}>
         {tab === "plans" ? <RatePlansView /> : null}
         {tab === "calendar" ? <RateCalendarPanel /> : null}

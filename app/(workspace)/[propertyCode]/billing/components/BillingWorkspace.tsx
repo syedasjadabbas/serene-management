@@ -1,5 +1,6 @@
 "use client";
 
+import { ToggleGroup } from "@/components/ui/ToggleGroup";
 import Link from "next/link";
 import type { Route } from "next";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -87,24 +88,12 @@ export function BillingWorkspace() {
         </form>
       </div>
 
-      <div role="group" aria-label="Folio views" className="flex flex-wrap gap-1">
-        {FOLIO_VIEWS.map((v) => (
-          <button
-            key={v}
-            type="button"
-            aria-pressed={view === v}
-            onClick={() => setParam({ view: v === "in_house" ? "" : v })}
-            className={cn(
-              "min-h-11 rounded-md px-3 text-sm",
-              view === v
-                ? "bg-brand-subtle font-medium text-brand"
-                : "text-fg-secondary hover:bg-surface-sunken",
-            )}
-          >
-            {VIEW_LABELS[v]}
-          </button>
-        ))}
-      </div>
+      <ToggleGroup
+        label="Folio views"
+        options={FOLIO_VIEWS.map((v) => ({ value: v, label: VIEW_LABELS[v] }))}
+        value={view}
+        onChange={(v) => setParam({ view: v === "in_house" ? "" : v })}
+      />
 
       <section className="overflow-hidden rounded-lg border border-border-subtle bg-surface">
         {cursors.map((cursor, index) => (

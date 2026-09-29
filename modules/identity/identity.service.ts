@@ -17,6 +17,9 @@ import { consumeRateLimit, type RateLimitRule } from "@/lib/http/rate-limit";
 import {
   claimResetToken,
   createSession,
+  deleteAvatar,
+  findAvatar,
+  findDisplayName,
   findActiveSessions,
   findResetToken,
   findSessionByPreviousHash,
@@ -31,12 +34,18 @@ import {
   revokeSession,
   rotateRefreshToken,
   setLoginFailureState,
+  setDisplayName,
   setPassword,
+  upsertAvatar,
 } from "./identity.repository";
-import type {
-  ChangePasswordInput,
-  CompletePasswordResetInput,
-  LoginInput,
+import {
+  AVATAR_MAX_BYTES,
+  type AvatarContentType,
+  type ChangePasswordInput,
+  type CompletePasswordResetInput,
+  type LoginInput,
+  type UpdateProfileInput,
+  type UploadAvatarInput,
 } from "./identity.schema";
 import type { LoginResult, SessionView } from "./identity.types";
 
@@ -633,4 +642,113 @@ async function rotateOrNull(
 ) {
   const { count } = await rotateRefreshToken(tx, sessionId, presentedHash, nextHash, now);
   return count === 1;
+}
+
+// --- Self-service profile ------------------------------------------------
+
+export const AVATAR_UPLOAD_LIMIT: RateLimitRule = {
+  name: "me.avatar",
+  limit: 20,
+  windowMs: 15 * 60_000,
+};
+
+/** The versioned URL the UI uses for the caller's own picture. */
+function avatarUrl(updatedAt: Date): string {
+  return `/api/v1/me/avatar?v=${updatedAt.getTime()}`;
+}
+
+/**
+ * Actual image type from the file signature, whatever the client declared:
+ * JPEG (FF D8 FF), PNG (89 50 4E 47 0D 0A 1A 0A) or WebP (RIFF....WEBP).
+ */
+export function sniffImageType(bytes: Uint8Array): AvatarContentType | null {
+  const starts = (sig: number[], at = 0) => sig.every((b, i) => bytes[at + i] === b);
+  if (starts([0xff, 0xd8, 0xff])) return "image/jpeg";
+  if (starts([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) return "image/png";
+  if (starts([0x52, 0x49, 0x46, 0x46]) && starts([0x57, 0x45, 0x42, 0x50], 8)) return "image/webp";
+  return null;
+}
+
+/** The signed-in user renames themselves (audited with before/after). */
+export async function updateOwnProfile(
+  ctx: SessionContext,
+  input: UpdateProfileInput,
+): Promise<{ displayName: string }> {
+  return runInTransaction(async (tx) => {
+    const current = await findDisplayName(tx, ctx.userId);
+    if (!current) throw new AppError("UNAUTHENTICATED", SESSION_EXPIRED);
+    if (current.displayName === input.displayName) return { displayName: input.displayName };
+    await setDisplayName(tx, ctx.userId, input.displayName);
+    await recordAudit(tx, auditActor(ctx), {
+      action: "user.profile_update",
+      resourceType: "User",
+      resourceId: ctx.userId,
+      before: { displayName: current.displayName },
+      after: { displayName: input.displayName },
+    });
+    return { displayName: input.displayName };
+  });
+}
+
+/**
+ * Sets the caller's profile picture. The bytes must be a JPEG, PNG or WebP
+ * matching the declared type and at most 256 KB; the audit row records the
+ * type and size, never the image.
+ */
+export async function setOwnAvatar(
+  ctx: SessionContext,
+  input: UploadAvatarInput,
+  now: Date = new Date(),
+): Promise<{ avatarUrl: string }> {
+  const budget = await consumeRateLimit(AVATAR_UPLOAD_LIMIT, `user:${ctx.userId}`, now.getTime());
+  if (!budget.allowed) {
+    throw new AppError("RATE_LIMITED", "Too many uploads. Please wait and try again.", {
+      retryAfterSeconds: budget.retryAfterSeconds,
+    });
+  }
+  const bytes = new Uint8Array(Buffer.from(input.data, "base64"));
+  const invalid = (message: string) =>
+    new AppError("VALIDATION_FAILED", message, { fields: { data: [message] } });
+  if (bytes.byteLength === 0) throw invalid("The image is empty");
+  if (bytes.byteLength > AVATAR_MAX_BYTES) throw invalid("The image is too large (max 256 KB)");
+  if (sniffImageType(bytes) !== input.contentType) {
+    throw invalid("The file is not a valid JPEG, PNG or WebP image");
+  }
+  return runInTransaction(async (tx) => {
+    const saved = await upsertAvatar(tx, ctx.userId, {
+      contentType: input.contentType,
+      data: bytes,
+      byteSize: bytes.byteLength,
+      updatedAt: now,
+    });
+    await recordAudit(tx, auditActor(ctx), {
+      action: "user.avatar_update",
+      resourceType: "User",
+      resourceId: ctx.userId,
+      after: { contentType: input.contentType, byteSize: bytes.byteLength },
+    });
+    return { avatarUrl: avatarUrl(saved.updatedAt) };
+  });
+}
+
+/** Removes the caller's profile picture (back to initials). */
+export async function removeOwnAvatar(ctx: SessionContext): Promise<{ removed: boolean }> {
+  return runInTransaction(async (tx) => {
+    const { count } = await deleteAvatar(tx, ctx.userId);
+    if (count > 0) {
+      await recordAudit(tx, auditActor(ctx), {
+        action: "user.avatar_remove",
+        resourceType: "User",
+        resourceId: ctx.userId,
+      });
+    }
+    return { removed: count > 0 };
+  });
+}
+
+/** The caller's own picture; 404 when they have none. */
+export async function getOwnAvatar(userId: string) {
+  const avatar = await findAvatar(prisma, userId);
+  if (!avatar) throw notFound("Profile picture");
+  return avatar;
 }

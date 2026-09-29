@@ -212,3 +212,37 @@ export function findSessionOwner(tx: Tx, sessionId: string) {
     select: { id: true, userId: true },
   });
 }
+
+// --- Self-service profile ------------------------------------------------
+
+export function findDisplayName(tx: Tx, userId: string) {
+  return tx.user.findUnique({ where: { id: userId }, select: { displayName: true } });
+}
+
+export function setDisplayName(tx: Tx, userId: string, displayName: string) {
+  return tx.user.update({ where: { id: userId }, data: { displayName }, select: { id: true } });
+}
+
+export function findAvatar(tx: Tx, userId: string) {
+  return tx.userAvatar.findUnique({
+    where: { userId },
+    select: { contentType: true, data: true, byteSize: true, updatedAt: true },
+  });
+}
+
+export function upsertAvatar(
+  tx: Tx,
+  userId: string,
+  avatar: { contentType: string; data: Uint8Array<ArrayBuffer>; byteSize: number; updatedAt: Date },
+) {
+  return tx.userAvatar.upsert({
+    where: { userId },
+    create: { userId, ...avatar },
+    update: avatar,
+    select: { updatedAt: true },
+  });
+}
+
+export function deleteAvatar(tx: Tx, userId: string) {
+  return tx.userAvatar.deleteMany({ where: { userId } });
+}

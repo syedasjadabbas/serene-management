@@ -1,19 +1,29 @@
 "use client";
 
+import { ChevronRight } from "lucide-react";
 import Link from "next/link";
 import type { Route } from "next";
 import { BookingStateBadge } from "@/components/reservations/BookingStateBadge";
+import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
-import { Spinner } from "@/components/ui/Spinner";
+import { Skeleton, SkeletonRows } from "@/components/ui/Skeleton";
+import { TableEmpty, Td, Tr } from "@/components/ui/Table";
 import { useReservationsQuery } from "@/lib/api/endpoints/reservations.api";
 import { toClientApiError } from "@/lib/api/errors";
-import { formatCurrency, formatDate } from "@/lib/utils/format";
+import { formatCurrency, formatShortDate, pluralize } from "@/lib/utils/format";
+import type { ReservationListItem } from "@/modules/reservations/reservations.types";
 import type { ReservationFilterValues } from "./ReservationFilters";
 
 const PAGE_SIZE = 50;
+export const RESULT_COLUMNS = 8;
 
-/** One cursor page of results; the last page offers "Load more". */
+/**
+ * One cursor page of results, rendered either as table rows (xl and up) or
+ * as stacked rows (phones and tablets). Both variants read the same cached
+ * query, so showing both costs one request. The last page offers "Load more".
+ */
 export function ReservationResultsPage({
+  variant,
   propertyId,
   propertyCode,
   filters,
@@ -21,6 +31,7 @@ export function ReservationResultsPage({
   isLast,
   onLoadMore,
 }: {
+  variant: "table" | "list";
   propertyId: string;
   propertyCode: string;
   filters: ReservationFilterValues;
@@ -35,93 +46,182 @@ export function ReservationResultsPage({
     limit: String(PAGE_SIZE),
   });
   const apiError = toClientApiError(error);
+  const href = (item: ReservationListItem) =>
+    `/${propertyCode}/reservations/${item.reservationId}` as Route;
+
+  const message = (content: React.ReactNode, tone: "muted" | "danger" = "muted") =>
+    variant === "table" ? (
+      <tbody>
+        <TableEmpty colSpan={RESULT_COLUMNS}>
+          <span className={tone === "danger" ? "text-danger" : undefined}>{content}</span>
+        </TableEmpty>
+      </tbody>
+    ) : (
+      <li
+        className={`px-4 py-10 text-center text-sm ${tone === "danger" ? "text-danger" : "text-fg-secondary"}`}
+      >
+        {content}
+      </li>
+    );
 
   if (isLoading) {
-    return (
-      <tbody>
-        <tr>
-          <td colSpan={11} className="px-3 py-6 text-center">
-            <Spinner label="Loading reservations" />
-          </td>
-        </tr>
+    return variant === "table" ? (
+      <tbody className="divide-y divide-border-subtle">
+        {Array.from({ length: 6 }, (_, row) => (
+          <tr key={row}>
+            {Array.from({ length: RESULT_COLUMNS }, (_, column) => (
+              <Td key={column}>
+                {row === 0 && column === 0 ? (
+                  <span role="status" className="sr-only">
+                    Loading reservations
+                  </span>
+                ) : null}
+                <Skeleton className={column === 1 ? "w-32" : "w-16"} />
+              </Td>
+            ))}
+          </tr>
+        ))}
       </tbody>
+    ) : (
+      <li>
+        <SkeletonRows rows={4} columns={3} label="Loading reservations" />
+      </li>
     );
   }
   if (apiError) {
-    return (
-      <tbody>
-        <tr>
-          <td colSpan={11} className="px-3 py-6 text-center text-sm text-danger">
-            {apiError.message}{" "}
-            <Button size="sm" variant="secondary" onClick={() => void refetch()}>
-              Retry
-            </Button>
-          </td>
-        </tr>
-      </tbody>
+    return message(
+      <>
+        {apiError.message}{" "}
+        <Button size="sm" variant="secondary" onClick={() => void refetch()}>
+          Try again
+        </Button>
+      </>,
+      "danger",
     );
   }
   if (!data || (data.items.length === 0 && !cursor)) {
+    return message("No reservations match these filters. Clear a filter or widen the dates.");
+  }
+
+  const more =
+    isLast && data.meta.nextCursor ? (
+      <Button
+        variant="secondary"
+        size="sm"
+        pending={isFetching}
+        onClick={() => onLoadMore(data.meta.nextCursor!)}
+      >
+        Load more
+      </Button>
+    ) : null;
+
+  if (variant === "list") {
     return (
-      <tbody>
-        <tr>
-          <td colSpan={11} className="px-3 py-8 text-center text-sm text-fg-secondary">
-            No reservations match these filters.
-          </td>
-        </tr>
-      </tbody>
+      <>
+        {data.items.map((item) => (
+          <li key={item.reservationRoomId}>
+            <Link
+              href={href(item)}
+              className="flex items-center gap-3 px-4 py-3 transition-colors duration-150 hover:bg-surface-sunken/60"
+            >
+              <div className="flex min-w-0 flex-1 flex-col gap-1">
+                <div className="flex items-start justify-between gap-2">
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span className="truncate font-medium text-fg">{item.guest.name}</span>
+                    {item.guest.isVip ? <Badge tone="accent">VIP</Badge> : null}
+                  </span>
+                  <BookingStateBadge state={item.bookingState} />
+                </div>
+                <p className="text-sm text-fg">
+                  {formatShortDate(item.arrival)} → {formatShortDate(item.departure)}
+                  <span className="text-fg-secondary"> · {pluralize(item.nights, "night")}</span>
+                </p>
+                <p className="flex flex-wrap gap-x-2 text-xs text-fg-secondary">
+                  <span className="font-mono">{item.displayConfirmation}</span>
+                  <span aria-hidden="true">·</span>
+                  <span>{item.room ? `Room ${item.room.number}` : "Unassigned"}</span>
+                  <span aria-hidden="true">·</span>
+                  <span>{item.roomType.name}</span>
+                  <span aria-hidden="true">·</span>
+                  <span className="tabular-nums">
+                    {formatCurrency(item.totalAmount, item.currencyCode)}
+                  </span>
+                </p>
+              </div>
+              <ChevronRight
+                aria-hidden="true"
+                className="size-4 shrink-0 text-fg-muted rtl:rotate-180"
+              />
+            </Link>
+          </li>
+        ))}
+        {more ? <li className="px-4 py-3 text-center">{more}</li> : null}
+      </>
     );
   }
 
   return (
     <tbody className="divide-y divide-border-subtle border-t border-border-subtle">
       {data.items.map((item) => (
-        <tr key={item.reservationRoomId} className="hover:bg-surface-sunken/60">
-          <td className="px-3 py-1.5">
+        <Tr key={item.reservationRoomId} interactive>
+          <Td>
             <Link
-              href={`/${propertyCode}/reservations/${item.reservationId}` as Route}
+              href={href(item)}
               className="font-mono text-sm font-medium text-brand hover:underline"
             >
               {item.displayConfirmation}
             </Link>
-          </td>
-          <td className="px-2 py-1.5">
-            {item.guest.name}
-            {item.guest.isVip ? (
-              <span className="ms-1 text-2xs font-semibold text-accent">VIP</span>
-            ) : null}
-          </td>
-          <td className="px-2 py-1.5 whitespace-nowrap">{formatDate(item.arrival)}</td>
-          <td className="px-2 py-1.5 whitespace-nowrap">{formatDate(item.departure)}</td>
-          <td className="px-2 py-1.5 text-end tabular-nums">{item.nights}</td>
-          <td className="px-2 py-1.5">
-            <span className="font-mono text-xs">{item.roomType.code}</span>
-          </td>
-          <td className="px-2 py-1.5 font-mono text-xs">{item.room?.number ?? "—"}</td>
-          <td className="px-2 py-1.5 text-end tabular-nums">
-            {item.adults}
-            {item.children ? `+${item.children}` : ""}
-          </td>
-          <td className="px-2 py-1.5 font-mono text-xs">{item.ratePlan.code}</td>
-          <td className="px-2 py-1.5 text-end whitespace-nowrap tabular-nums">
+          </Td>
+          <Td>
+            <span className="flex items-center gap-2">
+              <span className="font-medium">{item.guest.name}</span>
+              {item.guest.isVip ? <Badge tone="accent">VIP</Badge> : null}
+            </span>
+          </Td>
+          <Td className="whitespace-nowrap">
+            {formatShortDate(item.arrival)} → {formatShortDate(item.departure)}
+            <span className="block text-xs text-fg-secondary">
+              {pluralize(item.nights, "night")} · {pluralize(item.adults + item.children, "guest")}
+            </span>
+          </Td>
+          <Td>
+            {item.room ? (
+              <span className="font-mono font-medium">{item.room.number}</span>
+            ) : (
+              <span className="text-fg-secondary">Unassigned</span>
+            )}
+            <span className="block text-xs text-fg-secondary" title={item.roomType.code}>
+              {item.roomType.name}
+            </span>
+          </Td>
+          <Td>
+            <span className="font-mono text-xs">{item.ratePlan.code}</span>
+            <span className="block text-xs text-fg-secondary">
+              {item.source.code}
+              {item.channel ? ` · ${item.channel.code}` : ""}
+            </span>
+          </Td>
+          <Td numeric className="whitespace-nowrap">
             {formatCurrency(item.totalAmount, item.currencyCode)}
-          </td>
-          <td className="px-3 py-1.5">
+          </Td>
+          <Td>
             <BookingStateBadge state={item.bookingState} />
-          </td>
-        </tr>
-      ))}
-      {isLast && data.meta.nextCursor ? (
-        <tr>
-          <td colSpan={11} className="px-3 py-2 text-center">
-            <Button
-              variant="secondary"
-              size="sm"
-              pending={isFetching}
-              onClick={() => onLoadMore(data.meta.nextCursor!)}
+          </Td>
+          <Td className="w-10 pe-2">
+            <Link
+              href={href(item)}
+              aria-label={`Open reservation ${item.displayConfirmation}`}
+              className="flex size-8 items-center justify-center rounded-md text-fg-muted hover:bg-surface-sunken hover:text-fg"
             >
-              Load more
-            </Button>
+              <ChevronRight aria-hidden="true" className="size-4 rtl:rotate-180" />
+            </Link>
+          </Td>
+        </Tr>
+      ))}
+      {more ? (
+        <tr>
+          <td colSpan={RESULT_COLUMNS} className="px-3 py-3 text-center">
+            {more}
           </td>
         </tr>
       ) : null}

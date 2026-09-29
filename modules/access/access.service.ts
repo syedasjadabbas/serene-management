@@ -17,7 +17,12 @@ import type { MeView, PropertySummary } from "./access.types";
 
 export interface ResolvedSession {
   sessionId: string;
-  user: MeView["user"] & { organizationId: string; defaultPropertyId: string | null };
+  user: Omit<MeView["user"], "avatarUrl"> & {
+    organizationId: string;
+    defaultPropertyId: string | null;
+    /** Last change of the profile picture; null when the user has none. */
+    avatarUpdatedAt: Date | null;
+  };
   organization: MeView["organization"];
   access: AccessProfile;
   properties: PropertySummary[];
@@ -80,6 +85,7 @@ export async function resolveSession(
       locale: user.locale,
       isSuperAdmin: user.isSuperAdmin,
       defaultPropertyId: user.defaultPropertyId,
+      avatarUpdatedAt: user.avatarUpdatedAt,
     },
     organization: {
       id: user.organization.id,
@@ -142,6 +148,9 @@ export function toMeView(session: ResolvedSession): MeView {
       displayName: session.user.displayName,
       locale: session.user.locale,
       isSuperAdmin: session.user.isSuperAdmin,
+      avatarUrl: session.user.avatarUpdatedAt
+        ? `/api/v1/me/avatar?v=${session.user.avatarUpdatedAt.getTime()}`
+        : null,
     },
     organization: session.organization,
     organizationPermissions: [...session.access.organizationPermissions],

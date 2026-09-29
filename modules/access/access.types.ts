@@ -16,6 +16,8 @@ export interface MeView {
     displayName: string;
     locale: string;
     isSuperAdmin: boolean;
+    /** Own profile picture (versioned URL), or null for initials. */
+    avatarUrl: string | null;
   };
   organization: { id: string; code: string; name: string; baseCurrency: string };
   organizationPermissions: Permission[];

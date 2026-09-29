@@ -2,6 +2,8 @@ import type {
   ChangePasswordInput,
   CompletePasswordResetInput,
   LoginInput,
+  UpdateProfileInput,
+  UploadAvatarInput,
 } from "@/modules/identity/identity.schema";
 import type { LoginResult } from "@/modules/identity/identity.types";
 import type { MeView } from "@/modules/access/access.types";
@@ -31,6 +33,23 @@ export const sessionApi = baseApi.injectEndpoints({
       query: (body) => ({ url: "/auth/password", method: "POST", body }),
       transformResponse: (response: ApiSuccess<{ changed: true }>) => response.data,
     }),
+    /** The signed-in user's own display name. */
+    updateProfile: build.mutation<{ displayName: string }, UpdateProfileInput>({
+      query: (body) => ({ url: "/me", method: "PATCH", body }),
+      transformResponse: (response: ApiSuccess<{ displayName: string }>) => response.data,
+      invalidatesTags: ["Me"],
+    }),
+    /** Own profile picture (base64, already cropped and resized by the browser). */
+    uploadAvatar: build.mutation<{ avatarUrl: string }, UploadAvatarInput>({
+      query: (body) => ({ url: "/me/avatar", method: "PUT", body }),
+      transformResponse: (response: ApiSuccess<{ avatarUrl: string }>) => response.data,
+      invalidatesTags: ["Me"],
+    }),
+    removeAvatar: build.mutation<{ removed: boolean }, void>({
+      query: () => ({ url: "/me/avatar", method: "DELETE" }),
+      transformResponse: (response: ApiSuccess<{ removed: boolean }>) => response.data,
+      invalidatesTags: ["Me"],
+    }),
     completePasswordReset: build.mutation<{ reset: true }, CompletePasswordResetInput>({
       query: (body) => ({ url: "/auth/password/reset", method: "POST", body }),
       transformResponse: (response: ApiSuccess<{ reset: true }>) => response.data,
@@ -43,5 +62,8 @@ export const {
   useLoginMutation,
   useLogoutMutation,
   useChangePasswordMutation,
+  useUpdateProfileMutation,
+  useUploadAvatarMutation,
+  useRemoveAvatarMutation,
   useCompletePasswordResetMutation,
 } = sessionApi;

@@ -25,16 +25,18 @@ export function WorkspaceSwitcher({
   const organization = me ? canUseOrganizationWorkspace(me) : false;
 
   const label = current ? (
-    <span className="flex items-baseline gap-2">
+    <span className="flex min-w-0 items-baseline gap-2 whitespace-nowrap">
       <span className="font-mono text-xs text-fg-muted">{current.code}</span>
-      <span className="font-medium">{current.name}</span>
+      <span className="truncate font-medium">{current.name}</span>
     </span>
   ) : (
-    <span className="font-medium">{me?.organization.name ?? "Organization"}</span>
+    <span className="truncate font-medium whitespace-nowrap">
+      {me?.organization.name ?? "Organization"}
+    </span>
   );
 
   if (!me || (properties.length <= 1 && !organization))
-    return <div className="flex h-8 items-center px-2 text-sm">{label}</div>;
+    return <div className="flex h-control min-w-0 items-center px-2 text-sm">{label}</div>;
 
   const itemClass =
     "flex items-baseline gap-2 rounded-md px-2 py-2 text-sm hover:bg-surface-sunken aria-[current=page]:bg-brand-subtle md:py-1.5";

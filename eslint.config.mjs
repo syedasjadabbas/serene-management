@@ -38,6 +38,9 @@ const eslintConfig = defineConfig([
       // autoFocus is used only to move focus into a freshly opened dialog,
       // wizard step or the sign-in form, which is the intended focus target.
       "jsx-a11y/no-autofocus": "off",
+      // Scrollable table frames (role="region") must be focusable so keyboard
+      // users can scroll them (axe: scrollable-region-focusable).
+      "jsx-a11y/no-noninteractive-tabindex": ["error", { tags: [], roles: ["tabpanel", "region"] }],
     },
   },
   {

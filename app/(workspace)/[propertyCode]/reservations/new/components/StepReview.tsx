@@ -127,7 +127,7 @@ export function StepReview() {
 
   return (
     <section
-      className="flex flex-col gap-4 rounded-lg border border-border-subtle bg-surface p-4"
+      className="flex flex-col gap-4 rounded-lg border border-border-subtle bg-surface p-5 shadow-card"
       aria-label="Review"
     >
       <dl className="grid grid-cols-1 gap-x-6 gap-y-2 sm:grid-cols-[12rem_1fr]">

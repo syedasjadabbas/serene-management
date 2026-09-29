@@ -43,9 +43,29 @@ model User {
   housekeepingAttendants HousekeepingAttendant[]
   maintenanceRequests    MaintenanceRequest[]
   cashierShifts          CashierShift[]
+  avatar                 UserAvatar?
 
   @@index([organizationId])
   @@map("users")
+}
+
+/// Profile picture chosen by the user themselves (self-service, audited).
+/// One row per user, replaced on upload and deleted on removal. The browser
+/// crops and resizes to 256 px; the server re-checks the image signature.
+/// Type and size limits are also enforced by a check constraint
+/// (20261120090000_user_avatars, docs/DATABASE_DESIGN.md §5).
+model UserAvatar {
+  userId      String   @id @map("user_id") @db.Uuid
+  /// image/jpeg, image/png or image/webp.
+  contentType String   @map("content_type") @db.VarChar(40)
+  data        Bytes
+  /// octet_length(data), at most 262 144 bytes.
+  byteSize    Int      @map("byte_size")
+  updatedAt   DateTime @map("updated_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_avatars")
 }
 
 /// Permission catalog. Keys follow `resource:action`; the catalog is code-owned

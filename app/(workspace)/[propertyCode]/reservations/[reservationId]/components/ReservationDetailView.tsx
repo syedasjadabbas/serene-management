@@ -2,7 +2,12 @@
 
 import Link from "next/link";
 import type { Route } from "next";
+import { BookingStateBadge } from "@/components/reservations/BookingStateBadge";
 import { Alert } from "@/components/ui/Alert";
+import { Badge } from "@/components/ui/Badge";
+import { Card } from "@/components/ui/Card";
+import { type Fact, FactList } from "@/components/ui/FactList";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { Button } from "@/components/ui/Button";
 import { AuditHistory } from "@/components/audit/AuditHistory";
 import { StatusPanel } from "@/components/ui/StatusPanel";
@@ -10,7 +15,7 @@ import { usePermissions } from "@/hooks/usePermissions";
 import { useProperty } from "@/hooks/useProperty";
 import { useReservationQuery } from "@/lib/api/endpoints/reservations.api";
 import { toClientApiError } from "@/lib/api/errors";
-import { formatDateTime } from "@/lib/utils/format";
+import { formatDate, formatDateTime, pluralize } from "@/lib/utils/format";
 import { useState } from "react";
 import { CompanyDialog } from "./CompanyDialog";
 import { ReservationRoomPanel } from "./ReservationRoomPanel";
@@ -70,31 +75,24 @@ export function ReservationDetailView({
   }
 
   const reservation = query.data;
-  return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-4">
-      <nav aria-label="Breadcrumb" className="text-xs text-fg-muted">
-        <Link href={`/${property.code}/reservations` as Route} className="hover:underline">
-          Reservations
-        </Link>{" "}
-        / {reservation.confirmationNumber}
-      </nav>
-      {/* Only until the first change: every command bumps the room version. */}
-      {justCreated && reservation.rooms.every((room) => room.version === 1) ? (
-        <Alert tone="success">Reservation {reservation.confirmationNumber} was created.</Alert>
-      ) : null}
-      <header className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
-        <h1 className="font-mono text-2xl font-semibold">{reservation.confirmationNumber}</h1>
-        <p className="text-sm text-fg-secondary">
-          {reservation.rooms.length > 1 ? `${reservation.rooms.length} rooms · ` : ""}
-          Booked {formatDateTime(reservation.bookedAt, property.timezone)}
-          {reservation.bookedBy ? ` by ${reservation.bookedBy}` : ""}
-          {reservation.channel ? ` · ${reservation.channel.name}` : ""}
-          {reservation.externalReference ? ` · Ref ${reservation.externalReference}` : ""}
-        </p>
-      </header>
-      {reservation.company || reservation.actions.changeCompany ? (
-        <p className="flex flex-wrap items-center gap-2 text-sm">
-          <span className="text-fg-muted">Company</span>
+  const lead = reservation.rooms[0];
+  const booking: Fact[] = [
+    {
+      label: "Booked",
+      value: `${formatDateTime(reservation.bookedAt, property.timezone)}${
+        reservation.bookedBy ? ` by ${reservation.bookedBy}` : ""
+      }`,
+      wide: true,
+    },
+    { label: "Channel", value: reservation.channel?.name ?? "Direct" },
+    { label: "External reference", value: reservation.externalReference ?? "—" },
+  ];
+  if (reservation.company || reservation.actions.changeCompany) {
+    booking.push({
+      label: "Company",
+      wide: true,
+      value: (
+        <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
           {reservation.company ? (
             <Link
               href={`/${property.code}/companies/${reservation.company.id}` as Route}
@@ -103,7 +101,7 @@ export function ReservationDetailView({
               {reservation.company.name}
             </Link>
           ) : (
-            <span>None</span>
+            <span className="text-fg-secondary">None</span>
           )}
           {reservation.company && reservation.booker ? (
             <span className="text-fg-secondary">· booked by {reservation.booker.fullName}</span>
@@ -118,33 +116,72 @@ export function ReservationDetailView({
               {reservation.company ? "Change" : "Set company"}
             </Button>
           ) : null}
-        </p>
+        </span>
+      ),
+    });
+  }
+
+  return (
+    <div className="flex flex-col gap-6">
+      <PageHeader
+        breadcrumbs={[
+          { label: property.code, href: `/${property.code}` },
+          { label: "Reservations", href: `/${property.code}/reservations` },
+          { label: reservation.confirmationNumber },
+        ]}
+        title={lead ? lead.primaryGuest.name : reservation.confirmationNumber}
+        meta={
+          <>
+            <span className="font-mono text-sm text-fg-secondary">
+              #{reservation.confirmationNumber}
+            </span>
+            {reservation.rooms.length === 1 && lead ? (
+              <BookingStateBadge state={lead.bookingState} />
+            ) : (
+              <Badge>{reservation.rooms.length} rooms</Badge>
+            )}
+          </>
+        }
+        description={
+          lead
+            ? `${formatDate(lead.arrival)} → ${formatDate(lead.departure)} · ${pluralize(lead.nights, "night")}`
+            : undefined
+        }
+      />
+      {/* Only until the first change: every command bumps the room version. */}
+      {justCreated && reservation.rooms.every((room) => room.version === 1) ? (
+        <Alert tone="success">Reservation {reservation.confirmationNumber} was created.</Alert>
       ) : null}
 
-      {reservation.rooms.map((room) => (
-        <ReservationRoomPanel key={room.id} room={room} reservation={reservation} />
-      ))}
-
-      {reservation.notes.length > 0 ? (
-        <section
-          aria-labelledby="notes-heading"
-          className="rounded-lg border border-border-subtle bg-surface p-4"
-        >
-          <h2 id="notes-heading" className="mb-2 text-lg font-semibold">
-            Notes and special requests
-          </h2>
-          <ul className="flex flex-col gap-2 text-sm">
-            {reservation.notes.map((note) => (
-              <li key={note.id}>
-                <p>{note.body}</p>
-                <p className="text-xs text-fg-muted">
-                  {formatDateTime(note.createdAt, property.timezone)}
-                </p>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
+      <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-3">
+        <div className="flex min-w-0 flex-col gap-6 xl:col-span-2">
+          {reservation.rooms.map((room) => (
+            <ReservationRoomPanel key={room.id} room={room} reservation={reservation} />
+          ))}
+        </div>
+        <div className="flex min-w-0 flex-col gap-6">
+          <Card title="Booking">
+            <FactList items={booking} />
+          </Card>
+          <Card
+            title="Notes and special requests"
+            description={reservation.notes.length === 0 ? "None recorded." : undefined}
+          >
+            {reservation.notes.length > 0 ? (
+              <ul className="flex flex-col divide-y divide-border-subtle text-sm">
+                {reservation.notes.map((note) => (
+                  <li key={note.id} className="py-2 first:pt-0 last:pb-0">
+                    <p className="whitespace-pre-wrap">{note.body}</p>
+                    <p className="mt-0.5 text-xs text-fg-muted">
+                      {formatDateTime(note.createdAt, property.timezone)}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </Card>
+        </div>
+      </div>
 
       <AuditHistory entries={reservation.history} timezone={property.timezone} />
       {editingCompany ? (

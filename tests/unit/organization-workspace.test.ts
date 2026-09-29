@@ -15,7 +15,14 @@ const property = (id: string, code: string, permissions: Permission[]) => ({
 });
 
 const me = (overrides: Partial<MeView> = {}): MeView => ({
-  user: { id: "u", email: "u@x", displayName: "U", locale: "en", isSuperAdmin: false },
+  user: {
+    id: "u",
+    email: "u@x",
+    displayName: "U",
+    locale: "en",
+    isSuperAdmin: false,
+    avatarUrl: null,
+  },
   organization: { id: "o", code: "O", name: "Org", baseCurrency: "PKR" },
   organizationPermissions: [],
   properties: [

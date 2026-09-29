@@ -61,7 +61,7 @@ export function NewGuestForm({
     <form
       onSubmit={submit}
       noValidate
-      className="flex flex-col gap-3 rounded-lg border border-border-subtle bg-surface p-4"
+      className="flex flex-col gap-3 rounded-lg border border-border-subtle bg-surface p-5 shadow-card"
       aria-label="New guest profile"
     >
       <h2 className="text-lg font-semibold">New guest profile</h2>

@@ -1,5 +1,6 @@
 "use client";
 
+import { ChevronDown } from "lucide-react";
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { cn } from "@/components/ui/cn";
 
@@ -43,7 +44,7 @@ export function Disclosure({
   }, [open]);
 
   return (
-    <div ref={rootRef} className="relative">
+    <div ref={rootRef} className="relative min-w-0">
       <button
         ref={buttonRef}
         type="button"
@@ -51,20 +52,18 @@ export function Disclosure({
         aria-controls={id}
         onClick={() => setOpen((value) => !value)}
         className={cn(
-          "inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-sm hover:bg-surface-sunken",
+          "inline-flex h-control max-w-full min-w-0 items-center gap-1.5 rounded-md px-2 text-sm transition-colors duration-150 hover:bg-surface-sunken",
           buttonClassName,
         )}
       >
         {label}
-        <span aria-hidden="true" className="text-2xs text-fg-muted">
-          ▾
-        </span>
+        <ChevronDown aria-hidden="true" className="size-3.5 shrink-0 text-fg-muted" />
       </button>
       {open ? (
         <div
           id={id}
           className={cn(
-            "absolute top-full z-40 mt-1 min-w-56 rounded-lg border border-border-subtle bg-surface-raised p-1 shadow-overlay",
+            "absolute top-full z-(--z-popover) mt-1 max-h-[70vh] min-w-56 overflow-y-auto rounded-lg border border-border-subtle bg-surface-raised p-1 shadow-overlay",
             align === "end" ? "end-0" : "start-0",
           )}
         >

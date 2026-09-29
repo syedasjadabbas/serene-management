@@ -22,6 +22,10 @@ Applies to every route handler under `app/api/v1/`. Implemented foundations: `ty
 
 ```text
 GET    /api/v1/me                                   # user, accessible properties, permissions per property
+PATCH  /api/v1/me                                   # own display name { displayName } (1–120 chars, no control characters); audited user.profile_update
+GET    /api/v1/me/avatar                            # own profile picture (image bytes, nosniff); 404 when none. `me.user.avatarUrl` is this URL versioned with ?v=
+PUT    /api/v1/me/avatar                            # { contentType: image/jpeg|png|webp, data: base64 } ≤ 256 KB, signature must match; per-user 20/15 min; audited (type, size)
+DELETE /api/v1/me/avatar                            # back to initials; audited user.avatar_remove
 GET    /api/v1/guests?q=&cursor=&limit=
 POST   /api/v1/guests
 GET    /api/v1/guests/{guestId}

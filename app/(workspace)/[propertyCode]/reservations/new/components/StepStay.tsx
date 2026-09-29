@@ -72,7 +72,7 @@ export function StepStay({
 
   return (
     <section className="flex flex-col gap-3" aria-label="Stay and rate">
-      <div className="rounded-lg border border-border-subtle bg-surface p-3">
+      <div className="rounded-lg border border-border-subtle bg-surface p-4 shadow-card">
         <StaySearchForm
           initial={
             stay ?? {

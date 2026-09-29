@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Button } from "@/components/ui/Button";
+import { THead, Table, TableFrame, Td, Th } from "@/components/ui/Table";
 import { FormDialog } from "@/components/ui/FormDialog";
 import { Select } from "@/components/ui/Select";
 import { TextField } from "@/components/ui/TextField";
@@ -40,7 +41,7 @@ export function RoomPackagesPanel({
   const e = estimate.data;
 
   return (
-    <div className="flex flex-col gap-3 border-t border-border-subtle p-4">
+    <div className="flex flex-col gap-3 border-t border-border-subtle p-5">
       <div className="flex flex-wrap items-center gap-2">
         <h3 className="text-sm font-semibold">Packages</h3>
         {manage ? (
@@ -64,7 +65,7 @@ export function RoomPackagesPanel({
                 {p.code} · {p.name}
               </span>
               <span className="text-xs text-fg-muted">
-                ×{p.quantity} · {formatShortDate(p.startDate)} → {formatShortDate(p.endDate)}
+                Qty {p.quantity} · {formatShortDate(p.startDate)} → {formatShortDate(p.endDate)}
               </span>
               {manage && businessDate !== null && p.startDate > businessDate ? (
                 <Button
@@ -95,28 +96,17 @@ export function RoomPackagesPanel({
       {estimate.isLoading ? <p className="text-sm text-fg-muted">Calculating…</p> : null}
       {estimateError ? <p className="text-sm text-danger">{estimateError.message}</p> : null}
       {e ? (
-        <div className="relative overflow-x-auto">
-          <table className="w-full min-w-[520px] text-sm">
-            <caption className="sr-only">Estimated folio charges per night</caption>
-            <thead className="text-left text-xs text-fg-secondary">
+        <TableFrame label="Estimated folio charges per night">
+          <Table caption="Estimated folio charges per night" minWidth="32rem">
+            <THead>
               <tr>
-                <th scope="col" className="py-1 pr-3 font-medium">
-                  Night
-                </th>
-                <th scope="col" className="py-1 pr-3 font-medium">
-                  Line
-                </th>
-                <th scope="col" className="py-1 pr-3 text-end font-medium">
-                  Net
-                </th>
-                <th scope="col" className="py-1 pr-3 text-end font-medium">
-                  Tax
-                </th>
-                <th scope="col" className="py-1 text-end font-medium">
-                  Total
-                </th>
+                <Th>Night</Th>
+                <Th>Line</Th>
+                <Th numeric>Net</Th>
+                <Th numeric>Tax</Th>
+                <Th numeric>Total</Th>
               </tr>
-            </thead>
+            </THead>
             <tbody className="tabular-nums">
               {e.nights.flatMap((night) =>
                 night.lines.map((line, index) => (
@@ -124,7 +114,7 @@ export function RoomPackagesPanel({
                     key={`${night.date}-${index}`}
                     className={index === 0 ? "border-t border-border-subtle" : undefined}
                   >
-                    <td className="py-1 pr-3 whitespace-nowrap">
+                    <Td className="h-9 py-1.5 whitespace-nowrap">
                       {index === 0 ? (
                         <>
                           {formatDate(night.date)}
@@ -133,36 +123,36 @@ export function RoomPackagesPanel({
                           ) : null}
                         </>
                       ) : null}
-                    </td>
-                    <td className="py-1 pr-3">
+                    </Td>
+                    <Td className="h-9 py-1.5">
                       {line.description}
-                      {line.quantity > 1 ? ` ×${line.quantity}` : ""}
-                    </td>
-                    <td className="py-1 pr-3 text-end">
+                      {line.quantity > 1 ? ` · qty ${line.quantity}` : ""}
+                    </Td>
+                    <Td numeric className="h-9 py-1.5">
                       {formatCurrency(line.net, e.currencyCode, "en", e.minorUnits)}
-                    </td>
-                    <td className="py-1 pr-3 text-end">
+                    </Td>
+                    <Td numeric className="h-9 py-1.5">
                       {formatCurrency(line.taxes, e.currencyCode, "en", e.minorUnits)}
-                    </td>
-                    <td className="py-1 text-end">
+                    </Td>
+                    <Td numeric className="h-9 py-1.5">
                       {formatCurrency(line.total, e.currencyCode, "en", e.minorUnits)}
-                    </td>
+                    </Td>
                   </tr>
                 )),
               )}
             </tbody>
             <tfoot>
               <tr className="border-t border-border font-semibold">
-                <td colSpan={4} className="py-1.5 pr-3">
+                <td colSpan={4} className="px-3 py-2">
                   Estimated total
                 </td>
-                <td className="py-1.5 text-end tabular-nums">
+                <td className="px-3 py-2 text-end tabular-nums">
                   {formatCurrency(e.total, e.currencyCode, "en", e.minorUnits)}
                 </td>
               </tr>
             </tfoot>
-          </table>
-        </div>
+          </Table>
+        </TableFrame>
       ) : null}
       {adding ? (
         <AddPackageDialog

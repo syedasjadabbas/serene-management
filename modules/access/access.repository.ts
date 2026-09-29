@@ -22,6 +22,7 @@ export async function findSessionWithUser(tx: Tx, sessionId: string) {
       user_status: "ACTIVE" | "DISABLED" | "INVITED";
       is_super_admin: boolean;
       default_property_id: string | null;
+      avatar_updated_at: Date | null;
       organization_code: string;
       organization_name: string;
       base_currency: string;
@@ -31,12 +32,13 @@ export async function findSessionWithUser(tx: Tx, sessionId: string) {
     SELECT s."id", s."revoked_at", s."expires_at", s."created_at",
            u."id" AS "user_id", u."organization_id", u."password_changed_at", u."email",
            u."display_name", u."locale", u."status"::text AS "user_status", u."is_super_admin",
-           u."default_property_id",
+           u."default_property_id", ua."updated_at" AS "avatar_updated_at",
            o."code" AS "organization_code", o."name" AS "organization_name",
            o."base_currency", o."status"::text AS "organization_status"
     FROM "auth_sessions" s
     JOIN "users" u ON u."id" = s."user_id"
     JOIN "organizations" o ON o."id" = u."organization_id"
+    LEFT JOIN "user_avatars" ua ON ua."user_id" = u."id"
     WHERE s."id" = ${sessionId}::uuid`;
   const row = rows[0];
   if (!row) return null;
@@ -55,6 +57,7 @@ export async function findSessionWithUser(tx: Tx, sessionId: string) {
       status: row.user_status,
       isSuperAdmin: row.is_super_admin,
       defaultPropertyId: row.default_property_id,
+      avatarUpdatedAt: row.avatar_updated_at,
       organization: {
         id: row.organization_id,
         code: row.organization_code,

@@ -1,5 +1,6 @@
 import { type TextareaHTMLAttributes, forwardRef, useId } from "react";
 import { cn } from "./cn";
+import { controlClass, fieldErrorClass, fieldHintClass, fieldLabelClass } from "./field";
 
 export interface TextAreaProps extends Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, "id"> {
   label: string;
@@ -18,7 +19,7 @@ export const TextArea = forwardRef<HTMLTextAreaElement, TextAreaProps>(function 
     .join(" ");
   return (
     <div className={cn("flex flex-col gap-1", className)}>
-      <label htmlFor={id} className="text-xs font-medium text-fg-secondary">
+      <label htmlFor={id} className={fieldLabelClass}>
         {label}
       </label>
       <textarea
@@ -28,18 +29,15 @@ export const TextArea = forwardRef<HTMLTextAreaElement, TextAreaProps>(function 
         rows={rows}
         aria-invalid={error ? true : undefined}
         aria-describedby={describedBy || undefined}
-        className={cn(
-          "rounded-md border bg-surface px-2.5 py-1.5 text-sm text-fg placeholder:text-fg-muted",
-          error ? "border-danger" : "border-border hover:border-border-strong",
-        )}
+        className={controlClass(Boolean(error), "px-3 py-2")}
       />
       {hint ? (
-        <p id={`${id}-hint`} className="text-xs text-fg-muted">
+        <p id={`${id}-hint`} className={fieldHintClass}>
           {hint}
         </p>
       ) : null}
       {error ? (
-        <p id={`${id}-error`} className="text-xs text-danger">
+        <p id={`${id}-error`} className={fieldErrorClass}>
           {error}
         </p>
       ) : null}

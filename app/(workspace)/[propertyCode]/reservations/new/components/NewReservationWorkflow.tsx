@@ -3,10 +3,12 @@
 import { useSearchParams } from "next/navigation";
 import { useEffect } from "react";
 import { StatusPanel } from "@/components/ui/StatusPanel";
-import { cn } from "@/components/ui/cn";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { Stepper } from "@/components/ui/Stepper";
 import { useBusinessDate } from "@/hooks/useBusinessDate";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useProperty } from "@/hooks/useProperty";
+import { formatDate } from "@/lib/utils/format";
 import { isDateOnly } from "@/modules/business-date/business-date.policy";
 import { useBookingDraft } from "../store/bookingDraft.store";
 import { StepDetails } from "./StepDetails";
@@ -84,40 +86,35 @@ export function NewReservationWorkflow() {
   }
 
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-4">
-      <header className="flex flex-wrap items-baseline justify-between gap-2">
-        <h1 className="text-xl font-semibold">{walkIn ? "Walk-in" : "New reservation"}</h1>
-        <p className="text-xs text-fg-muted">Business date {today}</p>
-      </header>
-      <nav aria-label="Booking steps">
-        <ol className="flex flex-wrap gap-1 text-sm">
-          {STEPS.map((label, index) => {
-            const number = (index + 1) as 1 | 2 | 3 | 4;
-            const reachable =
-              number === 1 ||
-              (number === 2 && !!draft.selection) ||
-              (number >= 3 && !!draft.selection && !!draft.guest);
-            return (
-              <li key={label}>
-                <button
-                  type="button"
-                  disabled={!reachable}
-                  aria-current={draft.step === number ? "step" : undefined}
-                  onClick={() => draft.setStep(number)}
-                  className={cn(
-                    "rounded-md border px-3 py-1",
-                    draft.step === number
-                      ? "border-brand bg-brand-subtle font-medium text-brand"
-                      : "border-border-subtle text-fg-secondary enabled:hover:bg-surface-sunken disabled:opacity-50",
-                  )}
-                >
-                  {number}. {label}
-                </button>
-              </li>
-            );
-          })}
-        </ol>
-      </nav>
+    <div className="flex flex-col gap-5">
+      <PageHeader
+        breadcrumbs={[
+          { label: property.code, href: `/${property.code}` },
+          { label: "Reservations", href: `/${property.code}/reservations` },
+          { label: walkIn ? "Walk-in" : "New reservation" },
+        ]}
+        title={walkIn ? "Walk-in" : "New reservation"}
+        description={
+          walkIn
+            ? `Arrives today (business date ${formatDate(today)}): book one room and check in at once.`
+            : `Business date ${formatDate(today)}. Availability, price and permissions are checked again when you create it.`
+        }
+      />
+      <Stepper
+        label="Booking steps"
+        steps={STEPS.map((label, index) => {
+          const number = (index + 1) as 1 | 2 | 3 | 4;
+          const reachable =
+            number === 1 ||
+            (number === 2 && !!draft.selection) ||
+            (number >= 3 && !!draft.selection && !!draft.guest);
+          return {
+            label,
+            state: draft.step === number ? "current" : number < draft.step ? "done" : "upcoming",
+            onSelect: reachable ? () => draft.setStep(number) : undefined,
+          };
+        })}
+      />
       {draft.step === 1 ? (
         <StepStay
           businessDate={today}

@@ -1,81 +1,105 @@
 @import "tailwindcss";
 
 /*
- * SERENE MANAGEMENT design tokens (docs/ARCHITECTURE.md §Design system).
+ * SERENE design tokens (docs/DESIGN_SYSTEM.md).
  *
  * Three layers:
  *   1. Raw palette (--palette-*): never used directly in components.
  *   2. Semantic tokens (--sm-*): redefined per theme (light / dark) and density.
  *   3. Tailwind @theme mapping so utilities read semantic tokens
- *      (bg-surface, text-fg-muted, border-subtle, bg-status-vacant-clean ...).
+ *      (bg-surface, text-fg-muted, border-subtle, bg-nav, shadow-card ...).
  *
- * Operational screens are dense: 13px table text, 32px rows by default,
- * small radii, near-flat surfaces, color reserved for status and action.
+ * Character (docs/NGINAP_UI_MAPPING.md): light, airy, Nginap-inspired —
+ * cool off-white canvas, white cards with minimal elevation, pale mint
+ * secondary surfaces and navigation, fresh green for action, selection and
+ * the active page, charcoal text, brass only for VIP/loyalty. Colour carries
+ * state and action; surfaces stay quiet so operational data reads first.
+ * Every text/background pair below is checked at >= 4.5:1 in both themes.
  */
 
 :root {
   /* --- Raw palette ------------------------------------------------------ */
-  --palette-ink-950: #0d141b;
-  --palette-ink-900: #16202a;
-  --palette-ink-800: #243140;
-  --palette-ink-700: #37475a;
-  --palette-ink-600: #4a5563;
-  --palette-ink-500: #6b7684;
-  --palette-ink-400: #97a1ad;
-  --palette-ink-300: #c3cad2;
-  --palette-ink-200: #dde2e7;
-  --palette-ink-100: #eceff2;
-  --palette-ink-50: #f5f7f8;
+  /* Stone: warm neutrals, a touch of green in the darkest steps. */
+  --palette-stone-950: #0d1310;
+  --palette-stone-900: #17211c;
+  --palette-stone-800: #26302b;
+  --palette-stone-700: #3a443f;
+  --palette-stone-600: #4a554f;
+  --palette-stone-500: #5f6963;
+  --palette-stone-400: #8b938b;
+  --palette-stone-300: #d3d7cf;
+  --palette-stone-200: #e5e8e1;
+  --palette-stone-100: #eceee8;
+  --palette-stone-50: #f4f5f1;
 
-  --palette-pine-900: #072f2d;
-  --palette-pine-800: #0a3d3a;
-  --palette-pine-700: #0e4d4a;
-  --palette-pine-600: #145f5b;
-  --palette-pine-500: #1f7671;
-  --palette-pine-100: #dcebe9;
-  --palette-pine-50: #eef6f5;
+  /* Forest: the brand. */
+  --palette-forest-950: #0b1a13;
+  --palette-forest-900: #10231b;
+  --palette-forest-800: #135c3c;
+  --palette-forest-700: #187049;
+  --palette-forest-600: #2a5f49;
+  --palette-forest-400: #5fbf95;
+  --palette-forest-100: #cfe5d8;
+  --palette-forest-50: #e6f2eb;
 
-  --palette-brass-600: #8a6630;
-  --palette-brass-500: #a07a3f;
-  --palette-brass-100: #f3ead9;
+  /* Brass: restrained accent (active navigation, highlights, loyalty). */
+  --palette-brass-700: #8a6420;
+  --palette-brass-500: #b08a45;
+  --palette-brass-300: #d6b06c;
+  --palette-brass-100: #f4ebd8;
 
   /* --- Semantic: surfaces & text (light) ----------------------------- */
-  --sm-canvas: var(--palette-ink-50);
+  --sm-canvas: #f5f8f6;
   --sm-surface: #ffffff;
-  --sm-surface-sunken: var(--palette-ink-100);
+  --sm-surface-sunken: #edf3ef;
   --sm-surface-raised: #ffffff;
-  --sm-surface-inverse: var(--palette-ink-900);
-  --sm-overlay: rgb(13 20 27 / 0.45);
+  --sm-surface-inverse: var(--palette-stone-900);
+  --sm-overlay: rgb(13 19 16 / 0.42);
 
-  --sm-border-subtle: var(--palette-ink-200);
-  --sm-border: var(--palette-ink-300);
-  --sm-border-strong: var(--palette-ink-400);
+  --sm-border-subtle: #e3ebe6;
+  --sm-border: #d3ded7;
+  /* Form-control outline: >= 3:1 against surface (WCAG 1.4.11). */
+  --sm-border-strong: #879690;
 
-  --sm-fg: var(--palette-ink-900);
-  --sm-fg-secondary: var(--palette-ink-600);
-  --sm-fg-muted: var(--palette-ink-500);
+  --sm-fg: #1d2521;
+  --sm-fg-secondary: #4f5b55;
+  --sm-fg-muted: #5f6b65;
   --sm-fg-inverse: #ffffff;
 
-  --sm-brand: var(--palette-pine-700);
-  --sm-brand-hover: var(--palette-pine-800);
-  --sm-brand-subtle: var(--palette-pine-50);
+  --sm-brand: #15823c;
+  --sm-brand-hover: #126d33;
+  --sm-brand-subtle: #f0f9f3;
+  /* Stronger mint for icon tiles and decorative fills only (never behind text). */
+  --sm-brand-muted: #dcf0e3;
   --sm-brand-fg: #ffffff;
-  --sm-accent: var(--palette-brass-500);
+  --sm-accent: var(--palette-brass-700);
   --sm-accent-subtle: var(--palette-brass-100);
-  --sm-focus: #1d6fd8;
+  --sm-focus: #2563c9;
+
+  /* Navigation rail: pale mint panel; the current page is a solid green pill. */
+  --sm-nav: #eef4f0;
+  --sm-nav-raised: #e3ede7;
+  --sm-nav-border: #dfe8e3;
+  --sm-nav-fg: #3f4b45;
+  --sm-nav-fg-muted: #5f6b65;
+  --sm-nav-fg-active: #ffffff;
+  --sm-nav-fg-hover: #1d2521;
+  /* Active item: solid brand pill (white text 4.9:1). */
+  --sm-nav-active: #15823c;
+  --sm-nav-indicator: #15823c;
 
   /* --- Semantic: feedback ------------------------------------------- */
-  --sm-success: #1f7a4d;
-  --sm-success-subtle: #e4f3ea;
-  --sm-warning: #a15c07;
-  --sm-warning-subtle: #fbf0dc;
+  --sm-success: #1d7348;
+  --sm-success-subtle: #e3f1e8;
+  --sm-warning: #9a5507;
+  --sm-warning-subtle: #fbefd9;
   --sm-danger: #b42318;
-  --sm-danger-subtle: #fbe7e5;
+  --sm-danger-subtle: #fbe8e5;
   --sm-info: #1d5fb8;
-  --sm-info-subtle: #e3edfa;
+  --sm-info-subtle: #e4edf8;
 
-  /* --- Semantic: room status (always paired with a code/icon) -------- */
-  --sm-status-vacant-clean: #1f7a4d;
+  /* --- Semantic: room status (always paired with a label or code) ---- */
+  --sm-status-vacant-clean: #1d7348;
   --sm-status-vacant-dirty: #b45309;
   --sm-status-occupied-clean: #1d5fb8;
   --sm-status-occupied-dirty: #b42318;
@@ -88,45 +112,80 @@
   /* --- Semantic: reservation status ---------------------------------- */
   --sm-res-reserved: #1d5fb8;
   --sm-res-due-in: #0f766e;
-  --sm-res-in-house: #1f7a4d;
-  --sm-res-due-out: #a15c07;
-  --sm-res-checked-out: #6b7684;
+  --sm-res-in-house: #1d7348;
+  --sm-res-due-out: #9a5507;
+  --sm-res-checked-out: #626b66;
   --sm-res-cancelled: #b42318;
   --sm-res-no-show: #7f1d1d;
-  --sm-res-waitlisted: #4a5563;
+  --sm-res-waitlisted: #4a554f;
 
-  /* --- Density (default: comfortable-compact) ----------------------- */
-  --sm-row-height: 2rem; /* 32px table rows */
-  --sm-control-height: 2rem; /* inputs, selects, buttons */
-  --sm-control-height-touch: 2.75rem; /* housekeeping / tablet workflows */
-  --sm-control-height-sm: 1.75rem; /* compact secondary actions */
+  /* --- Data visualisation: ordered categorical series ---------------- */
+  --sm-chart-1: #15823c;
+  --sm-chart-2: #b08a45;
+  --sm-chart-3: #4f86c6;
+  --sm-chart-4: #9ccfae;
+  --sm-chart-5: #c2674f;
+  --sm-chart-grid: #e3ebe6;
+  --sm-chart-axis: var(--palette-stone-500);
+
+  /* --- Elevation ------------------------------------------------------ */
+  --sm-shadow-card: 0 1px 2px rgb(20 40 30 / 0.04);
+  --sm-shadow-raised: 0 1px 3px rgb(20 40 30 / 0.08), 0 1px 2px rgb(20 40 30 / 0.04);
+  --sm-shadow-overlay: 0 12px 32px rgb(20 40 30 / 0.14), 0 2px 6px rgb(20 40 30 / 0.05);
+
+  /* --- Density ---------------------------------------------------------- */
+  --sm-row-height: 2.5rem; /* 40px table rows */
+  --sm-control-height: 2.25rem; /* 36px inputs, selects, buttons */
+  --sm-control-height-touch: 2.75rem; /* 44px housekeeping / tablet workflows */
+  --sm-control-height-sm: 1.75rem; /* 28px compact secondary actions */
+
+  /* --- Layering: named levels only, never ad-hoc z-values ------------ */
+  --z-sticky: 20;
+  --z-rail: 30;
+  --z-popover: 40;
+  --z-skip: 50;
 
   color-scheme: light;
 }
 
-/* Dark theme: explicit toggle, or system preference unless light is forced. */
+/*
+ * Dark theme: opt-in only (data-theme="dark" on <html>). The product is
+ * light by default and does not follow the operating system, so a dark OS
+ * setting never turns the PMS dark (docs/NGINAP_UI_MAPPING.md §4).
+ * Surfaces are green-black rather than blue-grey so the brand carries over;
+ * status and brand colours are lightened to keep >= 4.5:1 on every surface.
+ * The primary button inverts (light forest fill, dark text).
+ */
 :root[data-theme="dark"] {
-  --sm-canvas: var(--palette-ink-950);
-  --sm-surface: #111a22;
-  --sm-surface-sunken: #0b1117;
-  --sm-surface-raised: #17222c;
-  --sm-surface-inverse: var(--palette-ink-100);
+  --sm-canvas: var(--palette-stone-950);
+  --sm-surface: #141c18;
+  --sm-surface-sunken: #0a0f0c;
+  --sm-surface-raised: #1a241f;
+  --sm-surface-inverse: var(--palette-stone-100);
   --sm-overlay: rgb(0 0 0 / 0.6);
-  --sm-border-subtle: #1f2b36;
-  --sm-border: #2b3946;
-  --sm-border-strong: #3d4d5c;
-  --sm-fg: #e6eaee;
-  --sm-fg-secondary: #b3bcc6;
-  --sm-fg-muted: #8793a0;
-  --sm-fg-inverse: var(--palette-ink-900);
-  --sm-brand: #2a938c;
-  --sm-brand-hover: #33a8a0;
-  --sm-brand-subtle: #0f2927;
-  --sm-accent: #c79c5a;
-  --sm-accent-subtle: #2b2416;
-  --sm-focus: #5b9cf0;
-  /* Status foregrounds lightened for dark surfaces (>= 5.7:1 on surface,
-     raised and *-subtle; also the text colour on the danger button). */
+  --sm-border-subtle: #232e29;
+  --sm-border: #2f3c36;
+  --sm-border-strong: #5a6a62;
+  --sm-fg: #e7ece9;
+  --sm-fg-secondary: #b4beb9;
+  --sm-fg-muted: #8c9892;
+  --sm-fg-inverse: var(--palette-stone-900);
+  --sm-brand: var(--palette-forest-400);
+  --sm-brand-hover: #7ccfa9;
+  --sm-brand-subtle: #15261e;
+  --sm-brand-muted: #1a3327;
+  --sm-brand-fg: var(--palette-forest-950);
+  --sm-accent: var(--palette-brass-300);
+  --sm-accent-subtle: #2a2317;
+  --sm-focus: #6aa5f5;
+  --sm-nav: #09110d;
+  --sm-nav-raised: #15241c;
+  --sm-nav-active: #187049;
+  --sm-nav-fg: #d2ddd7;
+  --sm-nav-fg-muted: #9aada3;
+  --sm-nav-fg-hover: #ffffff;
+  --sm-nav-indicator: #d6b06c;
+  --sm-nav-border: #17261e;
   --sm-success: #4cc38a;
   --sm-warning: #f5b54a;
   --sm-danger: #f97066;
@@ -135,42 +194,34 @@
   --sm-warning-subtle: #2c1f0b;
   --sm-danger-subtle: #2e1310;
   --sm-info-subtle: #0f1f36;
+  --sm-status-vacant-clean: #4cc38a;
+  --sm-status-vacant-dirty: #f0a35a;
+  --sm-status-occupied-clean: #7cb4f5;
+  --sm-status-occupied-dirty: #f97066;
+  --sm-status-inspected: #4fc9bd;
+  --sm-status-pickup: #e8b84a;
+  --sm-status-out-of-order: #a1a1aa;
+  --sm-status-out-of-service: #8c9892;
+  --sm-status-hold: #a5a6f6;
+  --sm-res-reserved: #7cb4f5;
+  --sm-res-due-in: #4fc9bd;
+  --sm-res-in-house: #4cc38a;
+  --sm-res-due-out: #f5b54a;
+  --sm-res-checked-out: #8c9892;
+  --sm-res-cancelled: #f97066;
+  --sm-res-no-show: #f19999;
+  --sm-res-waitlisted: #b4beb9;
+  --sm-chart-1: #5fbf95;
+  --sm-chart-2: #d6b06c;
+  --sm-chart-3: #7cb4f5;
+  --sm-chart-4: #9fcdb4;
+  --sm-chart-5: #e8917b;
+  --sm-chart-grid: #232e29;
+  --sm-chart-axis: #8c9892;
+  --sm-shadow-card: 0 0 0 transparent;
+  --sm-shadow-raised: 0 1px 3px rgb(0 0 0 / 0.4);
+  --sm-shadow-overlay: 0 12px 32px rgb(0 0 0 / 0.5);
   color-scheme: dark;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --sm-canvas: var(--palette-ink-950);
-    --sm-surface: #111a22;
-    --sm-surface-sunken: #0b1117;
-    --sm-surface-raised: #17222c;
-    --sm-surface-inverse: var(--palette-ink-100);
-    --sm-overlay: rgb(0 0 0 / 0.6);
-    --sm-border-subtle: #1f2b36;
-    --sm-border: #2b3946;
-    --sm-border-strong: #3d4d5c;
-    --sm-fg: #e6eaee;
-    --sm-fg-secondary: #b3bcc6;
-    --sm-fg-muted: #8793a0;
-    --sm-fg-inverse: var(--palette-ink-900);
-    --sm-brand: #2a938c;
-    --sm-brand-hover: #33a8a0;
-    --sm-brand-subtle: #0f2927;
-    --sm-accent: #c79c5a;
-    --sm-accent-subtle: #2b2416;
-    --sm-focus: #5b9cf0;
-    /* Status foregrounds lightened for dark surfaces (>= 5.7:1 on surface,
-       raised and *-subtle; also the text colour on the danger button). */
-    --sm-success: #4cc38a;
-    --sm-warning: #f5b54a;
-    --sm-danger: #f97066;
-    --sm-info: #7cb4f5;
-    --sm-success-subtle: #10281c;
-    --sm-warning-subtle: #2c1f0b;
-    --sm-danger-subtle: #2e1310;
-    --sm-info-subtle: #0f1f36;
-    color-scheme: dark;
-  }
 }
 
 :root[data-density="touch"] {
@@ -192,29 +243,34 @@
   --font-sans: var(--font-plex-sans), var(--font-plex-arabic), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-plex-mono), ui-monospace, monospace;
 
-  /* Type scale tuned for dense operational UI */
-  --text-2xs: 0.6875rem; /* 11px: badges, meta */
+  /* Type scale (ratio ~1.14): dense data at 13px, reading text at 14px. */
+  --text-2xs: 0.6875rem; /* 11px: meta, chart ticks */
   --text-2xs--line-height: 1rem;
-  --text-xs: 0.75rem; /* 12px: secondary cells, labels */
+  --text-xs: 0.75rem; /* 12px: labels, secondary cells, badges */
   --text-xs--line-height: 1rem;
   --text-sm: 0.8125rem; /* 13px: table body, controls */
   --text-sm--line-height: 1.25rem;
   --text-base: 0.875rem; /* 14px: body */
   --text-base--line-height: 1.375rem;
-  --text-lg: 1rem; /* 16px: panel titles */
+  --text-lg: 1rem; /* 16px: card and dialog titles */
   --text-lg--line-height: 1.5rem;
-  --text-xl: 1.125rem; /* 18px: page titles */
-  --text-xl--line-height: 1.625rem;
-  --text-2xl: 1.375rem; /* 22px: rare, report headers */
-  --text-2xl--line-height: 1.875rem;
+  --text-xl: 1.25rem; /* 20px: detail and legacy page titles */
+  --text-xl--line-height: 1.75rem;
+  --text-2xl: 1.5rem; /* 24px: page titles (PageHeader), key figures */
+  --text-2xl--line-height: 2rem;
 
-  --radius-xs: 2px;
-  --radius-sm: 3px;
-  --radius-md: 4px;
-  --radius-lg: 6px;
+  /* Medium radii: 8px controls, 12px cards and dialogs. */
+  --radius-xs: 3px;
+  --radius-sm: 5px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
 
-  --shadow-raised: 0 1px 2px rgb(13 20 27 / 0.06), 0 1px 1px rgb(13 20 27 / 0.04);
-  --shadow-overlay: 0 8px 24px rgb(13 20 27 / 0.16), 0 2px 6px rgb(13 20 27 / 0.08);
+  --shadow-card: var(--sm-shadow-card);
+  --shadow-raised: var(--sm-shadow-raised);
+  --shadow-overlay: var(--sm-shadow-overlay);
+
+  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
 
   --color-canvas: var(--sm-canvas);
   --color-surface: var(--sm-surface);
@@ -232,10 +288,20 @@
   --color-brand: var(--sm-brand);
   --color-brand-hover: var(--sm-brand-hover);
   --color-brand-subtle: var(--sm-brand-subtle);
+  --color-brand-muted: var(--sm-brand-muted);
   --color-brand-fg: var(--sm-brand-fg);
   --color-accent: var(--sm-accent);
   --color-accent-subtle: var(--sm-accent-subtle);
   --color-focus: var(--sm-focus);
+  --color-nav: var(--sm-nav);
+  --color-nav-raised: var(--sm-nav-raised);
+  --color-nav-border: var(--sm-nav-border);
+  --color-nav-fg: var(--sm-nav-fg);
+  --color-nav-fg-muted: var(--sm-nav-fg-muted);
+  --color-nav-fg-active: var(--sm-nav-fg-active);
+  --color-nav-fg-hover: var(--sm-nav-fg-hover);
+  --color-nav-active: var(--sm-nav-active);
+  --color-nav-indicator: var(--sm-nav-indicator);
   --color-success: var(--sm-success);
   --color-success-subtle: var(--sm-success-subtle);
   --color-warning: var(--sm-warning);
@@ -261,11 +327,22 @@
   --color-res-cancelled: var(--sm-res-cancelled);
   --color-res-no-show: var(--sm-res-no-show);
   --color-res-waitlisted: var(--sm-res-waitlisted);
+  --color-chart-1: var(--sm-chart-1);
+  --color-chart-2: var(--sm-chart-2);
+  --color-chart-3: var(--sm-chart-3);
+  --color-chart-4: var(--sm-chart-4);
+  --color-chart-5: var(--sm-chart-5);
+  --color-chart-grid: var(--sm-chart-grid);
+  --color-chart-axis: var(--sm-chart-axis);
 
   --spacing-row: var(--sm-row-height);
   --spacing-control: var(--sm-control-height);
   --spacing-control-touch: var(--sm-control-height-touch);
   --spacing-control-sm: var(--sm-control-height-sm);
+  /* Navigation rail width (lg and up). */
+  --spacing-rail: 15rem;
+  /* Collapsed rail: icons only. */
+  --spacing-rail-collapsed: 4.5rem;
 }
 
 /* --- Base ---------------------------------------------------------------- */
@@ -285,9 +362,34 @@
     font-variant-numeric: tabular-nums;
   }
 
+  h1,
+  h2,
+  h3 {
+    text-wrap: balance;
+  }
+
   :focus-visible {
     outline: 2px solid var(--sm-focus);
-    outline-offset: 1px;
+    outline-offset: 2px;
+  }
+
+  /* Native checkboxes and radios take the brand colour. */
+  input[type="checkbox"],
+  input[type="radio"] {
+    accent-color: var(--sm-brand);
+  }
+
+  /* Native date/time pickers follow the theme. */
+  input[type="date"],
+  input[type="time"],
+  input[type="datetime-local"],
+  input[type="month"] {
+    color-scheme: inherit;
+  }
+
+  ::selection {
+    background: var(--sm-brand-subtle);
+    color: var(--sm-fg);
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -298,6 +400,81 @@
       animation-iteration-count: 1 !important;
       transition-duration: 0.01ms !important;
       scroll-behavior: auto !important;
+    }
+  }
+}
+
+/* Skeleton shimmer: a slow sweep, static under reduced motion. */
+@keyframes sm-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
+@utility skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--sm-surface-sunken) 0%,
+    var(--sm-border-subtle) 50%,
+    var(--sm-surface-sunken) 100%
+  );
+  background-size: 200% 100%;
+  animation: sm-shimmer 1.6s linear infinite;
+}
+
+/*
+ * Brand loader (components/brand/BrandLoader.tsx): the S of the mark draws,
+ * holds, then clears forward, on an ease-in-out loop; the bar sweeps across
+ * its track. Under reduced motion the mark stays fully drawn (the global
+ * rule would otherwise freeze it on its cleared last frame) and the bar is
+ * hidden by the component.
+ */
+/*
+ * The S path is ~41.8 units long: a 43-unit dash with a 60-unit gap, moved
+ * from +46 (hidden before the start, round cap included) through 0 (whole
+ * S, caps covered) to -46 (hidden past the end). Real units, because
+ * Chromium ignores pathLength for dash values set from CSS.
+ */
+@keyframes sm-mark-draw {
+  0% {
+    stroke-dashoffset: 46;
+  }
+  45%,
+  72% {
+    stroke-dashoffset: 0;
+  }
+  100% {
+    stroke-dashoffset: -46;
+  }
+}
+
+@keyframes sm-indeterminate {
+  from {
+    translate: -100% 0;
+  }
+  to {
+    translate: 260% 0;
+  }
+}
+
+@layer components {
+  .sm-mark-draw {
+    stroke-dasharray: 43 60;
+    stroke-dashoffset: 0;
+    animation: sm-mark-draw 2.6s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+  }
+
+  .sm-indeterminate {
+    animation: sm-indeterminate 1.5s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .sm-mark-draw,
+    .sm-indeterminate {
+      animation: none !important;
     }
   }
 }

@@ -64,7 +64,7 @@ export function StepDetails() {
 
   return (
     <section
-      className="flex flex-col gap-4 rounded-lg border border-border-subtle bg-surface p-4"
+      className="flex flex-col gap-4 rounded-lg border border-border-subtle bg-surface p-5 shadow-card"
       aria-label="Booking details"
     >
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">

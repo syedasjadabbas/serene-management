@@ -192,6 +192,7 @@ Implemented in `20260924000100_constraints` unless noted as schema-level:
 | Payments positive; refunds ≤ payment; deposits linked to a reservation; card last4 digits only                                                    | Checks                                                                                           |
 | One OPEN cashier shift per user & property; one RUNNING night audit; one live HK task per room/date/type; one OPEN discrepancy per room/date/type | Partial uniques (schema)                                                                         |
 | Role scope ⇔ property id                                                                                                                          | Check                                                                                            |
+| Profile pictures: JPEG, PNG or WebP only; 1 byte–256 KB and `byte_size = octet_length(data)` — `20261120090000_user_avatars`                      | Checks on `user_avatars`                                                                         |
 
 Custom SQLSTATEs: `SM001` (immutable/append-only violation), `SM002` (closed folio), `SM003` (rate-plan derivation or block pickup guard, Phase 6). The HTTP layer maps them to `BUSINESS_RULE_VIOLATION` (mapping completed in Phase 1, see API_CONVENTIONS.md §5).
 

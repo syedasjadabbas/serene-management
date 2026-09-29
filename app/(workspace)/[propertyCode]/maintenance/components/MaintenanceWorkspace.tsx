@@ -1,5 +1,7 @@
 "use client";
 
+import { ToggleGroup } from "@/components/ui/ToggleGroup";
+import { Count } from "@/components/ui/Badge";
 import Link from "next/link";
 import type { Route } from "next";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -122,11 +124,7 @@ export function MaintenanceWorkspace() {
                 )}
               >
                 {VIEW_LABELS[key]}
-                {tabCount[key] !== undefined ? (
-                  <span className="rounded-full bg-surface-sunken px-1.5 text-xs tabular-nums">
-                    {tabCount[key]}
-                  </span>
-                ) : null}
+                {tabCount[key] !== undefined ? <Count>{tabCount[key]}</Count> : null}
               </button>
             </li>
           ))}
@@ -168,24 +166,15 @@ function Toolbar({
   };
   return (
     <div className="flex flex-wrap items-center justify-between gap-2">
-      <div role="group" aria-label="Priority" className="flex flex-wrap gap-1.5">
-        {["", "URGENT", "HIGH", "NORMAL", "LOW"].map((value) => (
-          <button
-            key={value || "all"}
-            type="button"
-            aria-pressed={priority === value}
-            onClick={() => onPriority(value)}
-            className={cn(
-              "rounded-full border px-3 py-1 text-xs",
-              priority === value
-                ? "border-brand bg-brand-subtle font-medium text-brand"
-                : "border-border-subtle text-fg-secondary hover:bg-surface-sunken",
-            )}
-          >
-            {value ? PRIORITY_LABELS[value as keyof typeof PRIORITY_LABELS] : "All priorities"}
-          </button>
-        ))}
-      </div>
+      <ToggleGroup
+        label="Priority"
+        options={["", "URGENT", "HIGH", "NORMAL", "LOW"].map((value) => ({
+          value,
+          label: value ? PRIORITY_LABELS[value as keyof typeof PRIORITY_LABELS] : "All priorities",
+        }))}
+        value={priority}
+        onChange={onPriority}
+      />
       <form role="search" onSubmit={submit} className="flex gap-2">
         <label htmlFor="maintenance-search" className="sr-only">
           Search by title, request number or room
