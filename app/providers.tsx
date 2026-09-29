@@ -3,6 +3,7 @@
 import { useState, type ReactNode } from "react";
 import { Provider } from "react-redux";
 import { config as zodConfig } from "zod";
+import { ServiceWorkerRegistration } from "@/components/offline/ServiceWorkerRegistration";
 import { makeStore } from "@/lib/api/store";
 
 // Zod v4 probes `new Function("")` once to decide whether it may compile
@@ -15,5 +16,10 @@ if (typeof window !== "undefined") zodConfig({ jitless: true });
 
 export function Providers({ children }: { children: ReactNode }) {
   const [store] = useState(makeStore);
-  return <Provider store={store}>{children}</Provider>;
+  return (
+    <Provider store={store}>
+      <ServiceWorkerRegistration />
+      {children}
+    </Provider>
+  );
 }

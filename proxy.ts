@@ -11,7 +11,8 @@ import { verifyAccessToken } from "@/lib/auth/tokens";
  * authorizes on its own. API routes are excluded by the matcher.
  */
 
-const PUBLIC_PATHS = new Set(["/login", "/refresh", "/reset-password"]);
+// "/offline" is the offline shell: static, no server data (app/(offline)/offline).
+const PUBLIC_PATHS = new Set(["/login", "/refresh", "/reset-password", "/offline"]);
 
 export async function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
@@ -60,7 +61,10 @@ function contentSecurityPolicy(nonce: string): string {
 export const config = {
   matcher: [
     {
-      source: "/((?!api|_next/static|_next/image|favicon.ico).*)",
+      // The service worker, manifest and icon are public static files: they
+      // must load without a session (sign-in page, offline shell).
+      source:
+        "/((?!api|_next/static|_next/image|favicon.ico|sw.js|manifest.webmanifest|icon.svg).*)",
       missing: [
         { type: "header", key: "next-router-prefetch" },
         { type: "header", key: "purpose", value: "prefetch" },

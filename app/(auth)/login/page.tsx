@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import type { Route } from "next";
 import { getServerSession } from "@/lib/auth/session";
 import { safeNextPath } from "@/lib/auth/redirect";
+import { ClearOfflineDataOnMount } from "@/components/offline/ClearOfflineDataOnMount";
 import { LoginForm } from "./components/LoginForm";
 
 export const metadata: Metadata = { title: "Sign in" };
@@ -14,6 +15,7 @@ export default async function LoginPage({ searchParams }: PageProps<"/login">) {
 
   return (
     <section>
+      <ClearOfflineDataOnMount />
       <p className="hidden text-2xs font-semibold tracking-[0.16em] text-brand uppercase lg:block">
         SERENE MANAGEMENT
       </p>

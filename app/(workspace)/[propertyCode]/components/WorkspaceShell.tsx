@@ -2,6 +2,7 @@ import { type ReactNode, Suspense } from "react";
 import { AppShell } from "@/components/workspace/AppShell";
 import { UserMenu } from "@/components/workspace/UserMenu";
 import { BusinessDateBadge } from "./BusinessDateBadge";
+import { OfflineControls } from "./OfflineControls";
 import { PropertySwitcher } from "./PropertySwitcher";
 import { PropertyGlobalSearch } from "./PropertyGlobalSearch";
 import { WorkspaceNav } from "./WorkspaceNav";
@@ -30,6 +31,7 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
       search={<PropertyGlobalSearch />}
       actions={
         <>
+          <OfflineControls />
           <BusinessDateBadge />
           <div className="hidden sm:block">
             <UserMenu />

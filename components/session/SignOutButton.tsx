@@ -5,8 +5,12 @@ import { useDispatch } from "react-redux";
 import { Button, type ButtonProps } from "@/components/ui/Button";
 import { baseApi } from "@/lib/api/baseApi";
 import { useLogoutMutation } from "@/lib/api/endpoints/session.api";
+import { clearOfflineData } from "@/lib/offline/db";
 
-/** Signs out, clears every cached server response, and returns to the login page. */
+/**
+ * Signs out, clears every cached server response and the offline copy in
+ * this browser, and returns to the login page.
+ */
 export function SignOutButton(props: Omit<ButtonProps, "onClick" | "pending">) {
   const router = useRouter();
   const dispatch = useDispatch();
@@ -17,6 +21,7 @@ export function SignOutButton(props: Omit<ButtonProps, "onClick" | "pending">) {
     // cleared by the server response; a stale session still expires).
     await logout().catch(() => undefined);
     dispatch(baseApi.util.resetApiState());
+    await clearOfflineData();
     router.replace("/login");
     router.refresh();
   }
