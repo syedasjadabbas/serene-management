@@ -7,7 +7,12 @@ import { login } from "@/modules/identity/identity.service";
 export const POST = definePublicRoute({
   body: loginSchema,
   // Per-IP brute-force brake; per-account lockout is enforced by the service.
-  rateLimit: { name: "auth.login.ip", limit: 20, windowMs: 60_000 },
+  rateLimit: {
+    name: "auth.login.ip",
+    limit: 20,
+    windowMs: 60_000,
+    onStoreFailure: "deny",
+  },
   handler: async ({ body, meta }) => {
     const { result, tokens } = await login(meta, body);
     const response = NextResponse.json({ data: result });

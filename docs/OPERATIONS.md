@@ -225,6 +225,8 @@ Development keeps the single owner role (`npm run db:setup`), so `ops:db-check` 
 | `idempotency_keys`          | expired more than **7 days** ago             | The replay window is 24 hours; expired keys are already reusable.                                                                                                         |
 | `outbox_events` PUBLISHED   | published more than **30 days** ago          | Delivered; kept a month for troubleshooting.                                                                                                                              |
 | `outbox_events` FAILED      | occurred more than **90 days** ago           | Kept longer for investigation.                                                                                                                                            |
+| `rate_limit_windows`        | window ended more than **1 day** ago         | Windows last at most an hour; the table is UNLOGGED and restarts empty after a crash anyway (D59).                                                                        |
+| `background_jobs` finished  | finished more than **30 days** ago           | What a job did is on record elsewhere (the night audit run, the audit log). QUEUED and RUNNING jobs are never pruned.                                                     |
 | `outbox_events` **PENDING** | **never**                                    | No publisher exists yet (D40). These are the only record of events a future integration must deliver. The count is reported on every run so a growing backlog is visible. |
 
 How it behaves:
@@ -242,6 +244,8 @@ Retention maintenance (batches of 1000):
   idempotencyKeys      340 deleted (older than 7 days)
   outboxPublished      0 deleted (older than 30 days)
   outboxFailed         0 deleted (older than 90 days)
+  rateLimitWindows     2310 deleted (older than 1 days)
+  backgroundJobs       14 deleted (older than 30 days)
   outbox PENDING       5120 retained (never pruned)
 ```
 
@@ -251,18 +255,50 @@ The durations are defined in `modules/retention/retention.policy.ts`; change the
 
 The application uses one connection pool per process (`lib/db/pool-config.ts`). Every setting is explicit:
 
-| Variable                                  | Default | Range        | Meaning                                                                                   |
-| ----------------------------------------- | ------- | ------------ | ----------------------------------------------------------------------------------------- |
-| `DATABASE_POOL_MAX`                       | 10      | 1–50         | Connections per application process                                                       |
-| `DATABASE_CONNECT_TIMEOUT_MS`             | 5000    | 500–60000    | Wait for a new connection before failing the request                                      |
-| `DATABASE_STATEMENT_TIMEOUT_MS`           | 30000   | 1000–600000  | Any single statement is cancelled after this (`57014`)                                    |
-| `DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_MS` | 60000   | 1000–3600000 | A transaction left idle (a bug) is ended so it cannot hold row locks                      |
-| (fixed)                                   | UTC     | —            | Session `TimeZone` (D29); `application_name=serene-management` identifies the connections |
+| Variable                                  | Default | Range                       | Meaning                                                                                          |
+| ----------------------------------------- | ------- | --------------------------- | ------------------------------------------------------------------------------------------------ |
+| `DATABASE_POOL_MAX`                       | 10      | 1–50                        | Connections per application process (several instances: budget ÷ instances, SCALABILITY §32)     |
+| `DATABASE_POOL_MIN`                       | 0       | 0–max                       | Idle connections kept open at least                                                              |
+| `DATABASE_POOL_IDLE_TIMEOUT_MS`           | 120000  | 1000–3600000                | An idle connection above the minimum is closed after this long (30 s churned under live updates) |
+| `DATABASE_POOL_MAX_LIFETIME_S`            | 0       | 0–86400                     | Replace pooled connections after this long (0 never; use hours: recycling costs)                 |
+| `DATABASE_POOLER`                         | none    | none, pgbouncer-transaction | What DATABASE_URL points at; see "Connection topology" below                                     |
+| `DATABASE_CONNECT_TIMEOUT_MS`             | 5000    | 500–60000                   | Wait for a new connection before failing the request                                             |
+| `DATABASE_STATEMENT_TIMEOUT_MS`           | 30000   | 1000–600000                 | Any single statement is cancelled after this (`57014`)                                           |
+| `DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_MS` | 60000   | 1000–3600000                | A transaction left idle (a bug) is ended so it cannot hold row locks                             |
+| `SEARCH_CONCURRENCY`                      | 3       | 1–8                         | Per-type queries one global search runs at once (connections it may hold; SCALABILITY §28)       |
+| `REALTIME_ENABLED`                        | 1       | 0/1                         | Live-update streams (SCALABILITY §31); 0 = every screen polls as before                          |
+| `REALTIME_DATABASE_URL`                   | —       | URL                         | Session connection for the one LISTEN per instance; set when DATABASE_URL is transaction-pooled  |
+| `JOB_WORKER`                              | inline  | inline, off                 | Run a background job worker in this process (§7); off = leave jobs to `npm run worker`           |
+| `JOB_WORKER_CONCURRENCY`                  | 1       | 1–8                         | Jobs one process runs at once (each holds pool connections while it works)                       |
+| `JOB_POLL_INTERVAL_MS`                    | 5000    | 500–60000                   | Idle workers look for due jobs this often (inserts also wake them through LISTEN)                |
+| `JOB_LEASE_MS`                            | 60000   | 10000–600000                | A claimed job's lease, renewed every third; a dead worker's job is re-claimed after it expires   |
+| `REPORT_HEAVY_CONCURRENCY`                | 1       | 1–16                        | Heavy reports (guest ledger, roll-forward, …) computed at once per process (SCALABILITY §33)     |
+| `REPORT_HEAVY_WAIT_MS`                    | 30000   | 0–120000                    | How long a heavy report waits for its slot before answering 429 `REPORTS_BUSY`                   |
+| (fixed)                                   | UTC     | —                           | Session `TimeZone` (D29); `application_name=serene-management` identifies the connections        |
+
+**Connection topology (SCALABILITY §32, ARCHITECTURE D64).**
+
+- Each instance opens up to `DATABASE_POOL_MAX` connections, plus one LISTEN connection for live updates
+  and one for its job worker (`JOB_WORKER=inline`; the worker shares the pool). A separate `npm run
+worker` process counts as an instance. Keep instances × (max + 2) + 10 (migrations, backups,
+  monitoring, administrators) within `max_connections`. `npm run ops:db-check` prints how many fit.
+- Up to about 6 instances, connect directly and lower `DATABASE_POOL_MAX` as instances grow (e.g. 4 × 5).
+  Beyond that, or with autoscaling, use PgBouncer in transaction mode:
+  1. Point `DATABASE_URL` at PgBouncer and set `DATABASE_POOLER=pgbouncer-transaction`. The session
+     settings are then not sent; set them on the runtime role:
+     `ALTER ROLE serene_app SET TimeZone = 'UTC'; ALTER ROLE serene_app SET statement_timeout = '30s'; ALTER ROLE serene_app SET idle_in_transaction_session_timeout = '60s';`
+  2. Set `REALTIME_DATABASE_URL` to a direct (session) connection: LISTEN does not work through a
+     transaction pooler, and startup refuses the pooled mode without it.
+     `MIGRATION_DATABASE_URL` and the backup commands also stay direct.
+  3. PgBouncer: `pool_mode = transaction`, `default_pool_size` about 2–4 × the database server's cores,
+     `max_client_conn` ≥ instances × `DATABASE_POOL_MAX`. Named prepared statements are not used, so
+     `max_prepared_statements` is not needed.
+  4. Run `npm run ops:db-check`: it fails when the zone is not UTC or a timeout is off.
 
 Notes:
 
 - **Reports.** Row-level reports are capped at 20 000 rows (refused beyond it, never cut) and run within the normal statement timeout; the JSON view pages 500 rows at a time and the CSV export streams every row.
-- **Long jobs.** The night audit commit raises its own statement timeout to 5 minutes for its transaction only (`runInTransaction({ statementTimeoutMs })`). Interactive transactions keep their own limit: 15 s by default, 300 s for the night audit commit.
+- **Long jobs.** The night audit runs in a background job (§7), not in the request. Its commit raises its own statement timeout to 5 minutes for its transaction only (`runInTransaction({ statementTimeoutMs })`). Interactive transactions keep their own limit: 15 s by default, 300 s for the night audit commit.
 - **Sizing.** Total connections are (application processes × `DATABASE_POOL_MAX`) + maintenance and backup jobs + a few for administration. They must stay well under PostgreSQL's `max_connections` (100 by default). One process with 10 connections suits a hotel group on a small server. **Do not raise the pool to fix slowness.** Find the slow query first (`pg_stat_activity`, `pg_stat_statements`), because more connections usually add lock contention.
 - **Tuning.** These values are starting points. Tune them against the server's CPU count and the measured load.
 - **PgBouncer.** The settings travel as startup `options`. A transaction-pooling PgBouncer does not forward them, so either:
@@ -270,7 +306,31 @@ Notes:
   - use session pooling.
   - Prisma interactive transactions and advisory locks require that a transaction stays on one server connection, which transaction pooling does provide.
 
-## 7. Scheduling (no worker process)
+## 7. Background jobs
+
+Work too long for a request (today: the night audit) is queued in the `background_jobs` table and executed by a worker (SCALABILITY §33, ARCHITECTURE D65). There is no broker: PostgreSQL is the queue.
+
+**Where workers run.**
+
+- **Default (`JOB_WORKER=inline`):** every application process runs one worker next to its requests. Nothing else to deploy; a single-server installation needs nothing more.
+- **Separate workers:** set `JOB_WORKER=off` on the web processes and run `npm run worker` (`node --conditions=react-server dist/ops/worker.mjs`) under the process manager (systemd, NSSM, pm2), with the application's environment. Use this to keep long audits off the web processes' event loop, or to run workers on another host.
+- Any mix is safe, on any number of hosts: a job is claimed by exactly one worker at a time (`FOR UPDATE SKIP LOCKED`), and every write a worker makes is fenced on its lease.
+
+**What happens when things fail.**
+
+| Event                                      | Result                                                                                                                                        |
+| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Worker process killed, host lost           | Its lease (`JOB_LEASE_MS`, 60 s) expires; any worker reclaims the job and retries it after 5 s · 2^(n−1) (at most 5 min).                     |
+| Database restarts or the connection drops  | The attempt fails (or its lease expires) and is retried with backoff; the night audit commit rolled back as a whole, so nothing is half-done. |
+| Every attempt fails (night audit: 3)       | The job is FAILED; the run is marked FAILED (`JOB_FAILED`) and the business date reopened. Nothing was posted.                                |
+| A worker comes back after losing its lease | Every write it tries matches nothing (fencing); it stops.                                                                                     |
+| Shutdown (SIGTERM/SIGINT)                  | Stops claiming, waits up to 60 s (inline: 10 s) for running jobs; anything still running is re-claimed elsewhere when its lease expires.      |
+
+**Monitoring.** `npm run worker -- --stats` prints the queue's health as JSON: queued, due, running, expired leases, failed in the last 24 h, and the oldest due job's age in seconds. Alert when `oldestDueSeconds` grows past a few minutes (no worker is running) or `failedLast24h` is not 0. Workers print one JSON line per job event (no payloads). A run whose job no worker holds can be recovered from its page (Recover / Cancel audit).
+
+**Draining.** `npm run worker -- --once` runs every due job, then exits (maintenance windows, or when no worker is deployed).
+
+## 8. Scheduling
 
 Recurring jobs are plain commands started by the operating system's scheduler. Run them from the application directory, with the same environment as the application.
 
@@ -295,7 +355,7 @@ Create the backup and verify tasks the same way.
 
 Schedule the backup before the maintenance run, and both away from the hotel's night audit time.
 
-## 8. Continuous integration
+## 9. Continuous integration
 
 `.github/workflows/ci.yml` runs on every push and pull request. It does the following, and never deploys, pushes or tags:
 

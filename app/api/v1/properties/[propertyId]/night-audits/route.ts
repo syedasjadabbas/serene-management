@@ -18,9 +18,11 @@ export const GET = definePropertyRoute({
 });
 
 /**
- * Runs night audit for the current business date (high-risk, reason and
- * Idempotency-Key required). Answers the run: COMPLETED, or FAILED with the
- * step and reason (nothing posted, the date still open).
+ * Starts night audit for the current business date (high-risk, reason and
+ * Idempotency-Key required). 202: the run is RUNNING and a background job
+ * executes it (docs/SCALABILITY.md §33); follow it with GET …/{runId} until
+ * COMPLETED, or FAILED with the step and reason (nothing posted, the date
+ * still open). 409/422 refusals are answered at once, as before.
  */
 export const POST = definePropertyRoute({
   permission: "nightaudit:run",
@@ -28,6 +30,6 @@ export const POST = definePropertyRoute({
   body: startNightAuditSchema,
   idempotent: true,
   rateLimit: { name: "nightaudit.start", limit: 10, windowMs: 60_000 },
-  status: 201,
+  status: 202,
   handler: ({ ctx, body, idempotency }) => startNightAudit(ctx, body, idempotency),
 });

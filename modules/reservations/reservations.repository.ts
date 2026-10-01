@@ -1,5 +1,5 @@
 import "server-only";
-import type { Prisma } from "@/generated/prisma/client";
+import { Prisma, type ReservationStatus } from "@/generated/prisma/client";
 import type { Tx } from "@/lib/db/prisma";
 
 /**
@@ -361,57 +361,167 @@ export type LockedReservationRoom = NonNullable<Awaited<ReturnType<typeof lockRe
 
 // --- Queries -------------------------------------------------------------------------
 
-const listSelect = {
-  id: true,
-  reservationId: true,
-  lineNumber: true,
-  status: true,
-  arrivalDate: true,
-  departureDate: true,
-  adults: true,
-  children: true,
-  currencyCode: true,
-  createdAt: true,
-  reservationType: { select: { deductsInventory: true } },
-  reservation: {
-    select: {
-      confirmationNumber: true,
-      bookedAt: true,
-      channel: { select: { code: true } },
-      // Room ids, counted in the service: a relation `_count` compiles to an
-      // aggregate over the whole reservation_rooms table (docs/SCALABILITY.md).
-      rooms: { select: { id: true } },
-    },
-  },
-  primaryGuest: {
-    select: { id: true, firstName: true, lastName: true, title: true, vipLevelId: true },
-  },
-  roomType: { select: { code: true, name: true } },
-  room: { select: { number: true } },
-  ratePlan: { select: { code: true } },
-  sourceCode: { select: { code: true } },
-} as const satisfies Prisma.ReservationRoomSelect;
+/** The sort keys of a reservation list page (the page is loaded by id afterwards). */
+const pageKeySelect = { id: true, arrivalDate: true, createdAt: true } as const;
+export type ReservationPageKey = { id: string; arrivalDate: Date; createdAt: Date };
+type ListSort = { field: "arrivalDate" | "createdAt"; direction: "asc" | "desc" };
 
-export type ReservationListRow = Prisma.ReservationRoomGetPayload<{ select: typeof listSelect }>;
-
-export function findReservationRoomsPage(
+/** The first `take` reservation rooms matching `where`, in `orderBy`: their sort keys only. */
+export function findReservationRoomPageKeys(
   tx: Tx,
   where: Prisma.ReservationRoomWhereInput,
   orderBy: Prisma.ReservationRoomOrderByWithRelationInput[],
   take: number,
-) {
-  return tx.reservationRoom.findMany({ where, orderBy, take, select: listSelect });
+): Promise<ReservationPageKey[]> {
+  return tx.reservationRoom.findMany({ where, orderBy, take, select: pageKeySelect });
 }
 
-/** Stay totals for a page of reservation rooms, aggregated in PostgreSQL. */
-export async function sumNightAmounts(tx: Tx, reservationRoomIds: string[]) {
-  if (reservationRoomIds.length === 0) return new Map<string, string>();
-  const rows = await tx.reservationRoomNight.groupBy({
-    by: ["reservationRoomId"],
-    where: { reservationRoomId: { in: reservationRoomIds } },
-    _sum: { rateAmount: true },
+export interface ReservationListRow {
+  id: string;
+  reservation_id: string;
+  line_number: number;
+  status: ReservationStatus;
+  arrival_date: Date;
+  departure_date: Date;
+  adults: number;
+  children: number;
+  currency_code: string;
+  deducts_inventory: boolean;
+  confirmation_number: string;
+  booked_at: Date;
+  channel_code: string | null;
+  reservation_rooms: number;
+  guest_id: string;
+  first_name: string;
+  last_name: string;
+  vip_level_id: string | null;
+  room_type_code: string;
+  room_type_name: string;
+  room_number: string | null;
+  rate_plan_code: string;
+  source_code: string;
+  /** Sum of the stay's night rates; null when it has no nights. */
+  total: string | null;
+  /** Minor units of `currencyCode` (2 when the currency is not configured). */
+  minor_units: number;
+}
+
+/**
+ * The reservation list rows with these ids (a page, at most one per id), in
+ * `sort` order then id, with everything the list shows: the booking, guest,
+ * room type, room, rate plan, source and channel codes, the reservation's
+ * room count, the stay total and the currency's minor units. One statement:
+ * relation selects sent one per relation plus the totals and the currency
+ * (12 per page, docs/SCALABILITY.md §30). Each lookup follows its relation
+ * (property and id); the property filter repeats the page's scope. Codes are
+ * scalar subqueries rather than joins: a nine-table join took ≈11 ms to plan
+ * on every request (statements are not prepared), the subqueries ≈1.3 ms.
+ */
+export function findReservationListRows(
+  tx: Tx,
+  propertyId: string,
+  ids: string[],
+  sort: ListSort,
+  currencyCode: string,
+): Promise<ReservationListRow[]> {
+  const key =
+    sort.field === "arrivalDate" ? Prisma.sql`rr."arrival_date"` : Prisma.sql`rr."created_at"`;
+  const direction = sort.direction === "asc" ? Prisma.sql`ASC` : Prisma.sql`DESC`;
+  return tx.$queryRaw<ReservationListRow[]>`
+    SELECT rr."id", rr."reservation_id", rr."line_number", rr."status"::text AS "status",
+           rr."arrival_date", rr."departure_date", rr."adults", rr."children", rr."currency_code",
+           (SELECT t."deducts_inventory" FROM "reservation_types" t
+             WHERE t."property_id" = rr."property_id" AND t."id" = rr."reservation_type_id") AS "deducts_inventory",
+           res."confirmation_number", res."booked_at",
+           (SELECT ch."code" FROM "channels" ch
+             WHERE ch."property_id" = res."property_id" AND ch."id" = res."channel_id") AS "channel_code",
+           (SELECT count(*)::int FROM "reservation_rooms" x
+             WHERE x."property_id" = res."property_id" AND x."reservation_id" = res."id") AS "reservation_rooms",
+           g."id" AS "guest_id", g."first_name", g."last_name", g."vip_level_id",
+           (SELECT ty."code" FROM "room_types" ty
+             WHERE ty."property_id" = rr."property_id" AND ty."id" = rr."room_type_id") AS "room_type_code",
+           (SELECT ty."name" FROM "room_types" ty
+             WHERE ty."property_id" = rr."property_id" AND ty."id" = rr."room_type_id") AS "room_type_name",
+           (SELECT rm."number" FROM "rooms" rm
+             WHERE rm."property_id" = rr."property_id" AND rm."id" = rr."room_id") AS "room_number",
+           (SELECT rp."code" FROM "rate_plans" rp
+             WHERE rp."property_id" = rr."property_id" AND rp."id" = rr."rate_plan_id") AS "rate_plan_code",
+           (SELECT sc."code" FROM "source_codes" sc
+             WHERE sc."property_id" = rr."property_id" AND sc."id" = rr."source_code_id") AS "source_code",
+           (SELECT sum(n."rate_amount")::text FROM "reservation_room_nights" n
+             WHERE n."reservation_room_id" = rr."id") AS "total",
+           COALESCE((SELECT c."minor_units" FROM "currencies" c WHERE c."code" = ${currencyCode}), 2)::int
+             AS "minor_units"
+    FROM "reservation_rooms" rr
+    JOIN "reservations" res ON res."property_id" = rr."property_id" AND res."id" = rr."reservation_id"
+    JOIN "guests" g ON g."id" = rr."primary_guest_id"
+    WHERE rr."property_id" = ${propertyId}::uuid
+      AND rr."id" IN (${Prisma.join(ids.map((id) => Prisma.sql`${id}::uuid`))})
+    ORDER BY ${key} ${direction}, rr."id" ${direction}`;
+}
+
+/** Ids of guests passing every name filter, at most `take` (reservation search candidates). */
+export function findGuestIdsByName(tx: Tx, filters: Prisma.GuestWhereInput[], take: number) {
+  return tx.guest.findMany({ where: { AND: filters }, select: { id: true }, take });
+}
+
+/** The property's room with exactly this number (unique per property), if any. */
+export function findRoomByNumber(tx: Tx, propertyId: string, number: string) {
+  return tx.room.findUnique({
+    where: { propertyId_number: { propertyId, number } },
+    select: { id: true },
   });
-  return new Map(rows.map((r) => [r.reservationRoomId, r._sum.rateAmount?.toFixed(4) ?? "0.0000"]));
+}
+
+/**
+ * The sort keys of the reservation rooms that pass `filters` and match ANY of `branches`
+ * (the text search: confirmation, cancellation number, external reference,
+ * room, guest name), in `sort` order then id, at most `take`.
+ *
+ * Each branch is its own query with the same filters, order and limit, and
+ * the page is cut from their union. This returns the same rows as one query
+ * on "filters AND (b1 OR b2 …)": the first `take` rows of a union are always
+ * among the first `take` rows of its parts, and (sort key, id) is a total
+ * order. The single OR spans four joined tables, so no index can serve it:
+ * PostgreSQL walked the property's whole history in sort order, joining each
+ * row, until the page filled — seconds for a text that matches little or
+ * nothing (docs/SCALABILITY.md §29). Alone, each branch uses its own index.
+ */
+export async function findReservationRoomPageKeysMatching(
+  tx: Tx,
+  filters: Prisma.ReservationRoomWhereInput[],
+  branches: Prisma.ReservationRoomWhereInput[],
+  sort: ListSort,
+  take: number,
+): Promise<ReservationPageKey[]> {
+  const orderBy: Prisma.ReservationRoomOrderByWithRelationInput[] = [
+    { [sort.field]: sort.direction },
+    { id: sort.direction },
+  ];
+  const candidates = new Map<string, { row: ReservationPageKey; key: number }>();
+  // One after another: each is a short indexed read, and one search should not
+  // take several pool connections (running them at once was measured: no gain
+  // under load, docs/SCALABILITY.md §29).
+  for (const branch of branches) {
+    const rows = await tx.reservationRoom.findMany({
+      where: { AND: [...filters, branch] },
+      orderBy,
+      take,
+      select: pageKeySelect,
+    });
+    for (const row of rows) {
+      candidates.set(row.id, { row, key: row[sort.field].getTime() });
+    }
+  }
+  // The query's order: the sort key, then the id (uuid order is the order of its
+  // lowercase hex text).
+  const sign = sort.direction === "asc" ? 1 : -1;
+  return [...candidates.values()]
+    .sort(
+      (a, b) => sign * (a.key - b.key || (a.row.id < b.row.id ? -1 : a.row.id > b.row.id ? 1 : 0)),
+    )
+    .slice(0, take)
+    .map((candidate) => candidate.row);
 }
 
 export function findReservationDetail(tx: Tx, propertyId: string, reservationId: string) {

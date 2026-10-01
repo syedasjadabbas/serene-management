@@ -21,6 +21,14 @@ export const RETENTION_DAYS = {
   outboxPublished: 30,
   /** Outbox events a publisher gave up on (kept longer for investigation). */
   outboxFailed: 90,
+  /** Rate-limit windows that ended (a window lasts at most an hour). */
+  rateLimitWindows: 1,
+  /**
+   * Finished background jobs (SUCCEEDED, FAILED, CANCELLED). What they did is
+   * on record elsewhere (the night audit run and the audit log); the job row
+   * only served the requester's status page and investigation.
+   */
+  backgroundJobs: 30,
 } as const;
 
 /**
@@ -31,7 +39,13 @@ export const RETENTION_DAYS = {
 export const OUTBOX_PENDING_RETAINED = true;
 
 export type RetentionTarget =
-  "authSessions" | "passwordResetTokens" | "idempotencyKeys" | "outboxPublished" | "outboxFailed";
+  | "authSessions"
+  | "passwordResetTokens"
+  | "idempotencyKeys"
+  | "outboxPublished"
+  | "outboxFailed"
+  | "rateLimitWindows"
+  | "backgroundJobs";
 
 export const RETENTION_TARGETS: readonly RetentionTarget[] = [
   "authSessions",
@@ -39,6 +53,8 @@ export const RETENTION_TARGETS: readonly RetentionTarget[] = [
   "idempotencyKeys",
   "outboxPublished",
   "outboxFailed",
+  "rateLimitWindows",
+  "backgroundJobs",
 ];
 
 /** Rows older than the cutoff (their expiry, revocation, use or publication) are removed. */

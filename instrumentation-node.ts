@@ -14,3 +14,13 @@ try {
   console.error(error instanceof Error ? error.message : "Invalid server environment");
   process.exit(1);
 }
+
+// Background job worker inside this process (JOB_WORKER=inline, the default;
+// docs/SCALABILITY.md §33). Started after the environment check passed.
+if (serverEnv().JOB_WORKER === "inline") {
+  void import("./lib/jobs/inline")
+    .then(({ startInlineWorker }) => startInlineWorker())
+    .catch((error: unknown) => {
+      console.error("Job worker failed to start", error instanceof Error ? error.name : error);
+    });
+}

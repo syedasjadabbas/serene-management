@@ -34,6 +34,7 @@ POST   /api/v1/guests/{guestId}/merge
 GET    /api/v1/accounts?type=COMPANY
 GET    /api/v1/users · POST /api/v1/users · PATCH /api/v1/users/{userId}
 GET    /api/v1/roles · PUT /api/v1/roles/{roleId}/permissions
+GET    /api/v1/jobs/{jobId}                         # a background job the caller started: status, attempts, progress, result or error; any other job 404 (§14)
 ```
 
 **Property-scoped**:
@@ -78,9 +79,9 @@ HTTP method semantics: `GET` safe and cacheable by RTK Query; `POST` create or c
 ```
 GET  night-audits/readiness                 # pre-audit checklist (nightaudit:read)
 GET  night-audits                           # run history, keyset pages (nightaudit:read)
-POST night-audits                           # run the audit: { reason } + Idempotency-Key (nightaudit:run, HIGH); 201 with the run
-GET  night-audits/{runId}                   # run, steps, summary (nightaudit:read)
-POST night-audits/{runId}/recover           # stale run: { reason } (nightaudit:run, HIGH)
+POST night-audits                           # start the audit: { reason } + Idempotency-Key (nightaudit:run, HIGH); 202 with the RUNNING run and its job; 409/422 refusals at once
+GET  night-audits/{runId}                   # run, steps, summary, job (queued / running + stage / retrying / finished) (nightaudit:read); poll while RUNNING
+POST night-audits/{runId}/recover           # stale run, or cancel one whose job has not started: { reason } (nightaudit:run, HIGH); 409 NIGHT_AUDIT_IN_PROGRESS while a worker holds it
 GET  reports                                # catalog filtered by permission
 GET  reports/{reportKey}?from&to&roomTypeId&risk&offset&limit   # JSON { columns, rows (one page), totals (all rows), notes, page }
 GET  reports/{reportKey}/export?…           # CSV, every row, streamed (reports:export + the report's permission)
@@ -117,6 +118,8 @@ GET   /api/v1/properties/{id}/front-desk/departures?q=&filter=&cursor=&limit=   
 GET   /api/v1/properties/{id}/front-desk/rooms?filter=&roomTypeId=              room board (occupancy, readiness, today's arrival)
 GET   /api/v1/properties/{id}/rooms/board?filter=&floorId=&roomTypeId=&offset=&limit=   room board: counts over every room, items paged (default 1 000, max 2 000) with `page { offset, limit, total }` (Phase 10, M11)
 GET   /api/v1/properties/{id}/rooms/picker                                  active rooms (id, number, room type) for pickers (rooms:read)
+GET   /api/v1/properties/{id}/search?q=                                     global search (2-100 characters): every type the caller may read at the property, ≤5 each, normalized, no URLs (SCALABILITY §28)
+GET   /api/v1/search?q=                                                     organization global search: guest and company profiles, each with the permitted property it opens in
 POST  /api/v1/properties/{id}/front-desk/walk-ins                book + check in (one transaction), 201
 GET   /api/v1/properties/{id}/reservation-rooms/{rrId}/room-options           rooms usable for the remaining nights, with readiness
 POST  /api/v1/properties/{id}/reservation-rooms/{rrId}/check-in              { version, roomId?, acceptNotReady?, reason? } → stay, 201
@@ -282,7 +285,7 @@ Lists:
 }
 ```
 
-- `201 Created` for creations (body contains the created resource); `200` otherwise; `202 Accepted` for background jobs (night audit reports, exports) with a job resource to poll.
+- `201 Created` for creations (body contains the created resource); `200` otherwise; `202 Accepted` when the work continues in a background job (the night audit start): the body is the resource being worked on (the RUNNING run) with its `job`. See §14.
 - Response DTOs are explicit (`<domain>.types.ts`); never return Prisma rows directly (no leaking internal columns, hashes or ciphertexts).
 - Money: `{ "amount": "1250.0000", "currency": "PKR" }` or `amount` + a sibling `currencyCode` on the resource.
 - Every response carries `x-request-id`.
@@ -311,7 +314,7 @@ Lists:
 | `BUSINESS_RULE_VIOLATION`  | 422  | Valid input rejected by a rule (no availability, balance not zero, closed folio)  |
 | `INVALID_STATE_TRANSITION` | 422  | State machine forbids the transition                                              |
 | `BUSINESS_DATE_LOCKED`     | 423  | Night audit in progress / date closed                                             |
-| `RATE_LIMITED`             | 429  | With `Retry-After`                                                                |
+| `RATE_LIMITED`             | 429  | With `Retry-After`; `details.reason` `REPORTS_BUSY` when heavy reports are full   |
 | `INTERNAL_ERROR`           | 500  | Unexpected; logged with stack; message generic                                    |
 | `PAYMENT_PROVIDER_ERROR`   | 502  | Gateway declined/unavailable; `details.providerCode`                              |
 
@@ -391,13 +394,24 @@ Rules: messages are safe to show; the client localizes by `code` (+ `details`), 
 
 - One command = one service method = one `prisma.$transaction` (see ARCHITECTURE.md §5 for lock order and retries).
 - External calls (payment gateway, door locks, email) never run inside a database transaction; they use the two-step pattern (pending record → external call → completion) or the outbox.
-- Long-running operations (night audit, exports, rooming list import) return `202` with a job/run resource.
+- Long-running operations return `202` and continue in a background job (scalability phase 6, ARCHITECTURE D65, SCALABILITY §33). Implemented for the night audit start:
+  - The request validates, authorizes and does the short part (Phase A), and queues the job **in the same transaction**: a job exists exactly when its command committed. Refusals (409, 422, 423) are answered by the request, as before.
+  - The response is the resource being worked on (the run) with a public `job`: `{ id, status: QUEUED|RUNNING|SUCCEEDED|FAILED|CANCELLED, attempts, maxAttempts, stage, runAfter, error }`. Clients poll the resource (RTK Query `pollingInterval` while RUNNING, paused in background tabs) or `GET /jobs/{jobId}`.
+  - `GET /api/v1/jobs/{jobId}` answers only the user who started the job, in their organization, while they can still reach its property; every other caller gets 404. It never returns the payload, internal errors, the worker or the lease.
+  - The job re-checks the starter's permission when it runs; a user who lost it gets a FAILED run (`PERMISSION_REVOKED`), never work done in their name.
+- Reports and CSV exports stay synchronous (measured: at most 2.8 s server time each, row cap 20 000). Six heavy report keys run at most `REPORT_HEAVY_CONCURRENCY` (default 1) at a time per process; others wait up to `REPORT_HEAVY_WAIT_MS`, then `429 RATE_LIMITED` (`REPORTS_BUSY`, `Retry-After: 5`).
 
 ## 15. Real-time events
 
-**As implemented (Phase 9)**: commands write outbox events in their transaction (ARCHITECTURE D35); the SSE endpoint below is not built yet.
+**As implemented (scalability phase 4, ARCHITECTURE D63, SCALABILITY §31)**: `GET /api/v1/properties/{propertyId}/events` (Server-Sent Events), any user with access to the property; topics are limited to what they may read there.
 
-`GET /api/v1/properties/{propertyId}/events` (Server-Sent Events): `event: room.status_changed` / `data: { roomId, … }`. Events are hints to refetch (tag invalidation), never the source of truth; payloads contain ids and changed fields, no sensitive data.
+- `event: ready` `data: {"topics":[…],"live":true|false}`
+- `event: change` `data: {"t":["frontdesk","rooms",…],"x":"<txid>"}`: data of these topics changed. Refetch through the normal API (tag invalidation); the event is never the source of truth and carries no record data.
+- `event: degraded` / `event: live`: this instance stopped / resumed receiving notifications (poll meanwhile).
+- `event: reauth`: the stream ends (access changed or the token expires, at most 15 min); reconnect.
+- `204`: live updates are switched off (`REALTIME_ENABLED=0`); keep polling. Reconnects: 30 per minute per user.
+
+Commands still write integration outbox events (D35) separately.
 
 ## 16. Example handler (target shape, Phase 1)
 

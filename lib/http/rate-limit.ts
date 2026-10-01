@@ -1,11 +1,17 @@
 import "server-only";
+import { prisma } from "@/lib/db/prisma";
+import { PostgresRateLimitStore } from "@/lib/db/rate-limit-store";
+import { serverEnv } from "@/lib/env";
+import { AppError } from "./errors";
+import { logServerError } from "./log";
 
 /**
- * Fixed-window rate limiting behind a store abstraction (G11). The default
- * store keeps windows in process memory, which is adequate for the single
- * application instance we run; a multi-instance deployment registers a
- * shared store (PostgreSQL or Redis) with `setRateLimitStore` without
- * touching the callers (docs/ARCHITECTURE.md D39).
+ * Fixed-window rate limiting behind a store abstraction (G11). Production uses
+ * the PostgreSQL store (lib/db/rate-limit-store.ts): every application
+ * instance counts in the same windows, so limits do not multiply with the
+ * number of instances (scalability phase 2, docs/SCALABILITY.md §26).
+ * `RATE_LIMIT_STORE=memory` keeps windows in process memory, which is only
+ * correct for a single instance (unit tests, local experiments).
  *
  * Keys are chosen by the caller: authenticated requests are limited per user
  * (colleagues behind one hotel NAT do not share a bucket), anonymous ones
@@ -17,6 +23,13 @@ export interface RateLimitRule {
   name: string;
   limit: number;
   windowMs: number;
+  /**
+   * When the shared store cannot be reached: "deny" refuses the request
+   * (security limits: sign-in, password reset and change, token refresh);
+   * "allow" (default) serves it unlimited and logs, so an abuse brake never
+   * takes the application down with it.
+   */
+  onStoreFailure?: "deny" | "allow";
 }
 
 export interface RateLimitResult {
@@ -83,11 +96,22 @@ export class MemoryRateLimitStore implements RateLimitStore {
   }
 }
 
-let store: RateLimitStore = new MemoryRateLimitStore();
+let store: RateLimitStore | null = null;
+
+function currentStore(): RateLimitStore {
+  store ??=
+    serverEnv().RATE_LIMIT_STORE === "memory"
+      ? new MemoryRateLimitStore()
+      : new PostgresRateLimitStore(prisma);
+  return store;
+}
 
 export function setRateLimitStore(next: RateLimitStore): void {
   store = next;
 }
+
+/** Last failure log per rule: one line per minute, not one per request. */
+const lastFailureLog = new Map<string, number>();
 
 /**
  * Bucket key of a request: the user when authenticated, otherwise the
@@ -108,7 +132,22 @@ export async function consumeRateLimit(
   key: string,
   now = Date.now(),
 ): Promise<RateLimitResult> {
-  const window = await store.hit(`${rule.name}:${key}`, rule.windowMs, now);
+  let window: { count: number; resetAt: number };
+  try {
+    window = await currentStore().hit(`${rule.name}:${key}`, rule.windowMs, now);
+  } catch (error) {
+    if (now - (lastFailureLog.get(rule.name) ?? 0) >= 60_000) {
+      lastFailureLog.set(rule.name, now);
+      logServerError(`rate-limit:${rule.name}`, error);
+    }
+    if (rule.onStoreFailure === "deny") {
+      throw new AppError(
+        "INTERNAL_ERROR",
+        "This is temporarily unavailable. Please try again shortly.",
+      );
+    }
+    return { allowed: true, retryAfterSeconds: 0 };
+  }
   return {
     allowed: window.count <= rule.limit,
     retryAfterSeconds:
@@ -118,5 +157,5 @@ export async function consumeRateLimit(
 
 /** Test helper: forget all windows. */
 export async function resetRateLimits(): Promise<void> {
-  await store.clear();
+  await currentStore().clear();
 }

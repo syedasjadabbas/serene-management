@@ -4,11 +4,14 @@ import { baseApi } from "../baseApi";
 
 /**
  * Night audit (Phase 8). Starting a run carries an Idempotency-Key chosen
- * when the dialog opens; a completed run rolls the business date, so every
- * operational list and the business date itself are refetched.
+ * when the dialog opens. The run executes in a background job (202 RUNNING);
+ * the run page follows it, and when it finishes the business date has rolled
+ * (or reopened), so every operational list and the business date itself are
+ * refetched (NIGHT_AUDIT_ROLLED_TAGS) — at the start too, as the date is
+ * then IN_AUDIT.
  */
 
-const ROLLED = [
+export const NIGHT_AUDIT_ROLLED_TAGS = [
   "BusinessDate",
   "NightAudit",
   "Report",
@@ -60,7 +63,7 @@ export const nightAuditApi = baseApi.injectEndpoints({
         headers: { "Idempotency-Key": idempotencyKey },
       }),
       transformResponse: (response: ApiSuccess<RunView>) => response.data,
-      invalidatesTags: [...ROLLED],
+      invalidatesTags: [...NIGHT_AUDIT_ROLLED_TAGS],
     }),
     recoverNightAudit: build.mutation<
       RunView,

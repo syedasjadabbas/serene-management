@@ -65,6 +65,7 @@ export const LOGIN_ACCOUNT_LIMIT: RateLimitRule = {
   name: "auth.login.account",
   limit: 10,
   windowMs: 15 * 60_000,
+  onStoreFailure: "deny",
 };
 /** Two tabs refreshing with the same token within this window is a race, not theft. */
 const REFRESH_RACE_GRACE_MS = 20_000;
@@ -420,6 +421,7 @@ export const PASSWORD_CHANGE_LIMIT: RateLimitRule = {
   name: "auth.password.change",
   limit: 5,
   windowMs: 15 * 60_000,
+  onStoreFailure: "deny",
 };
 const INVALID_RESET =
   "This reset link is invalid or has expired. Ask an administrator for a new one.";

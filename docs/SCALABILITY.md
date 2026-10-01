@@ -1,6 +1,8 @@
 # Scalability program — toward 100 000 requests per second
 
-Status: **phase 1 (audit, baseline, evidence-backed fixes) done**. SERENE MANAGEMENT has
+Status: **phases 1–6 done**: audit, baseline and fixes; authentication and shared rate limiting
+(§25–26); search (§28–30); live updates (§31); connection pooling (§32); background jobs (§33).
+SERENE MANAGEMENT has
 **not** been shown to handle 100 000 requests per second, and nothing in this document claims
 it. What it does contain:
 
@@ -706,3 +708,1241 @@ k6 run -e TOKENS=tokens.json -e BENCH_USERS=200 -e RATE=50 -e DURATION=30s scrip
 DATABASE_URL=… node scripts/load/monitor.mjs <server pid> 30 out.json
 DATABASE_URL=… node scripts/load/pg-sample.mjs 20
 ```
+
+---
+
+# Phase 2 — authentication hot path and shared rate limiting
+
+## 25. Authentication hot path
+
+### 25.1 Flow before the change (audited)
+
+1. `proxy.ts`, pages only: JWT signature and expiry check (no database).
+2. API: `lib/http/route.ts` `authenticate`. It verifies the JWT (`jose` HS256; claims are user,
+   organization and session only) and then calls `resolveSession`, which ran **three sequential
+   statements**, each its own pool checkout:
+   1. session ⋈ user ⋈ organization ⟕ avatar;
+   2. role grants;
+   3. active properties with current business dates.
+3. The rules applied in JavaScript:
+   - The session must exist, not be revoked, not be expired, and match the claims.
+   - The user and the organization must be ACTIVE.
+   - A session opened before the last password change is dead.
+   - Grant keys must be catalog permissions.
+   - An organization grant (or super admin) reaches every active property; otherwise only the
+     properties with property grants.
+4. Nothing was cached.
+
+**MEASURED on the benchmark database** (raw driver, per statement):
+
+- Execution: 0.05–0.27 ms.
+- Round trip: 0.6–1.3 ms.
+- Planning: ≈1 ms for the three together.
+
+**Finding.** `user_role_assignments` had **no index usable by `user_id` alone**. Both unique
+indexes are partial on `property_id`, so the grants lookup scanned every assignment of every
+organization. MEASURED with 100 000 assignments: 8.7 ms execution per authentication.
+
+### 25.2 Change
+
+1. **One statement** (`findSessionAccess`, `modules/access/access.repository.ts`). The same three
+   reads are scalar subqueries of one SELECT keyed by the session id.
+   - The grants subquery is the former query verbatim.
+   - The properties subquery returns the user's reachable superset: super admin, any
+     organization-scope assignment, or an assignment at that property.
+   - `resolveSession` keeps every check and applies the exact property rule, so a property the
+     grants do not reach can never appear.
+   - A first version with a CTE was rejected: PostgreSQL planned it in 1.5–2.5 ms per call,
+     slower than the three statements.
+2. **Index `user_role_assignments_user_id_idx`.** Migration `20261201090000`, CONCURRENTLY.
+3. **Nothing is cached.** Logout, disable, password change, session revocation, and role or
+   permission changes all take effect on the very next request, as before. No short-lived cache
+   was introduced: the measured gain did not need one, and no invalidation channel exists.
+
+### 25.3 Before / after
+
+MEASURED on the benchmark database (100 000 role assignments), production build, one instance,
+closed model, 20 s per cell. A = previous code, B = one statement, Ai = previous code plus the
+index, C = one statement plus the index (shipped).
+
+| Request                      | Metric (16 users unless noted) |       A (before) |                B |              Ai |           C (after) |
+| ---------------------------- | ------------------------------ | ---------------: | ---------------: | --------------: | ------------------: |
+| `/me`                        | req/s                          |              178 |              187 |             265 |             **327** |
+|                              | p50 / p95 / p99 ms             | 84.8 / 120 / 141 | 79.8 / 122 / 148 | 55.9 / 82 / 101 |  **45.6 / 68 / 85** |
+|                              | auth p50 (Server-Timing)       |          67.7 ms |             55.2 |            44.2 |            **28.2** |
+|                              | auth p50, **1 user**           |          11.7 ms |             14.4 |             4.0 |             **3.7** |
+|                              | PostgreSQL CPU per request     |          7.41 ms |             6.71 |            0.86 |            **0.84** |
+| business date (typical read) | req/s                          |              143 |              153 |             222 |             **241** |
+|                              | p50 / p95 / p99 ms             |  106 / 147 / 175 |   99 / 138 / 169 |   69 / 94 / 108 |    **63 / 85 / 95** |
+|                              | auth p50                       |          73.8 ms |             56.1 |            45.6 |            **30.1** |
+| dashboard (permission-heavy) | req/s                          |               97 |               98 |             122 |             **131** |
+|                              | p50 / p95 / p99 ms             |  155 / 210 / 273 |  154 / 203 / 272 | 124 / 159 / 207 | **116 / 147 / 189** |
+|                              | auth p50                       |          54.9 ms |             41.8 |            35.7 |            **20.0** |
+
+**Statements per request** (MEASURED by `tests/integration/request-overhead.test.ts` and
+`session-resolution.test.ts`):
+
+- Authentication: **3 → 1**.
+- `/me`: 3 → 1.
+- A property read such as business date: 4 → 2.
+
+**Attribution:**
+
+- The index removes the database cost: 7.4 → 0.86 ms of PostgreSQL CPU per `/me`.
+- One statement removes queueing, i.e. fewer pool checkouts and Prisma calls. With the index in
+  place, auth p50 under 16 users drops 44 → 28 ms and `/me` throughput rises 23%.
+- One user sees little difference (4.0 → 3.7 ms): planning, not round trips, dominates there.
+
+**Security semantics (MEASURED by tests):**
+
+- A differential test compares the new resolver with the previous algorithm (reproduced in the
+  test) for organization, property, mixed, two-property, super-admin and grant-less users, plus:
+  - inactive properties;
+  - other organizations' roles;
+  - non-catalog permission keys;
+  - system roles.
+- A mutation (dropping the `status = 'ACTIVE'` filter) is caught.
+- Expired token, deleted session, mismatched claims, inactive organization, a permission removed
+  from a role and a lost organization grant are each rejected on the next request.
+- Existing suites cover revocation on logout, refresh rotation and reuse, disable, password
+  change and property-grant removal. All pass.
+
+## 26. Shared rate limiting
+
+### 26.1 Audit
+
+- **Interface:** `RateLimitStore { hit(id, windowMs, now) → { count, resetAt }; clear() }` with
+  `setRateLimitStore`. The only caller is `consumeRateLimit`, used by `lib/http/route.ts` (route
+  limits and the pre-authentication write guard) and `identity.service`.
+
+**Limits:**
+
+| Rule                        | Limit / window   | Key   | On store failure |
+| --------------------------- | ---------------- | ----- | ---------------- |
+| `auth.login.ip`             | 20 / 1 min       | IP    | **deny**         |
+| `auth.login.account`        | 10 / 15 min      | email | **deny**         |
+| `auth.password.reset.ip`    | 10 / 1 min       | IP    | **deny**         |
+| `auth.password.reset.issue` | 10 / 1 h         | user  | **deny**         |
+| `auth.password.change`      | 5 / 15 min       | user  | **deny**         |
+| `auth.refresh.ip`           | 60 / 1 min       | IP    | **deny**         |
+| `api.write.ip`              | 300 / 1 min      | IP    | allow            |
+| `availability.central`      | 60 / 1 min       | user  | allow            |
+| `reports.run` / `.export`   | 120 / 30 per min | user  | allow            |
+| `billing.write`             | 120 / 1 min      | user  | allow            |
+| `groups.pickup`             | 120 / 1 min      | user  | allow            |
+| `nightaudit.start`          | 10 / 1 min       | user  | allow            |
+| `me.avatar`                 | 20 / 15 min      | user  | allow            |
+
+Account lockout (5 failures, database row lock, D45) was already global and is unchanged.
+
+**Before (in process memory; ESTIMATED from the round-robin behaviour, MEASURED at 2 and 4
+instances).** With N instances, each limit allowed up to N× its budget. For per-account sign-in
+attempts per 15 min:
+
+| Instances | 1   | 2   | 10  | 50  | 100   |
+| --------- | --- | --- | --- | --- | ----- |
+| Allowed   | 10  | 20  | 100 | 500 | 1 000 |
+
+Counters also reset on every deploy or restart.
+
+### 26.2 Options compared
+
+| Option                                 | Latency per hit         | Atomicity                           | Horizontal scaling                                                    | Failure behaviour                   | Operations                               |
+| -------------------------------------- | ----------------------- | ----------------------------------- | --------------------------------------------------------------------- | ----------------------------------- | ---------------------------------------- |
+| Process memory (before)                | µs                      | per process only                    | **wrong**: N× limits                                                  | none                                | none                                     |
+| **PostgreSQL table** (chosen)          | 0.6 ms p50 (MEASURED)   | row lock of `ON CONFLICT DO UPDATE` | ~5–7K hits/s from one client here (MEASURED); scales with the primary | same fate as the app's own database | none new; one table, pruned by retention |
+| Redis (`INCR` + `EXPIRE`)              | ~0.2–0.5 ms (ESTIMATED) | atomic commands                     | 100K+ ops/s                                                           | separate failure domain             | new service and dependency, HA to run    |
+| Load balancer / gateway limits (nginx) | none                    | per node                            | per node, IP keys only                                                | —                                   | cannot key by account or user            |
+
+**Chosen:** PostgreSQL. It is already the system's dependency, so an outage of the store is an
+outage of the app. It is atomic, and there is no new service or dependency. Only rate-limited
+requests touch it: writes, sign-in, refresh, reset, availability, reports; ordinary reads do not.
+
+**PROPOSED:** revisit Redis when rate-limited requests approach a few thousand per second per
+primary, or when the primary's write load needs relief.
+
+### 26.3 Implementation
+
+- **Table `rate_limit_windows`** (`key` PK, `count`, `reset_at`, index on `reset_at`).
+  - Migration `20261201090100`, `UNLOGGED`: no WAL for short-lived counters. It is emptied after
+    a crash and not copied to physical replicas, so windows restart; accepted.
+  - Expired rows are pruned by `ops:maintenance` (target `rateLimitWindows`, 1 day).
+- **`PostgresRateLimitStore`** (`lib/db/rate-limit-store.ts`). One statement:
+  `INSERT … ON CONFLICT (key) DO UPDATE SET count = CASE WHEN reset_at <= now THEN 1 ELSE count + 1 END, …
+RETURNING count, reset_at`.
+  - **Atomicity:** the conflicting row is locked for the update, so concurrent hits from any
+    instance are serialised and each sees a distinct count.
+  - **Clock:** windows use the caller's clock, as before. Instance skew of milliseconds does not
+    matter to minute-long windows.
+  - **Long keys:** keys over 400 characters are stored as a SHA-256.
+- **Selection.** Default store PostgreSQL (`RATE_LIMIT_STORE=postgres`); `memory` is for single
+  processes only (unit tests).
+- **Failure policy** (per rule, `onStoreFailure`):
+  - **deny:** every `auth.*` rule (sign-in by IP and account, reset completion and issuance,
+    password change, refresh). A store failure answers 500 "temporarily unavailable" and never
+    admits unthrottled guessing.
+  - **allow** (default): everything else. The request is served unlimited, and the failure is
+    logged once per minute per rule, so an abuse brake cannot take the application down.
+  - Both paths are logged without request data.
+- **Tests' client addresses** start at a random offset per worker. Parallel test files now share
+  the store, just as production instances do.
+
+### 26.4 Measurements
+
+**Store (MEASURED, bench database, raw driver):**
+
+- One hit: p50 0.60 ms, p95 0.89, p99 1.05.
+- 10 connections: 4 886 hits/s with distinct keys, 6 869 hits/s on one hot key.
+- **10 000 concurrent increments on one key produced count 10 000, with no lost updates.**
+
+**Request overhead (MEASURED, one instance, 8 users closed, 20 s, memory store → shared store):**
+
+| Request                            | memory     | shared     | Note                                                                  |
+| ---------------------------------- | ---------- | ---------- | --------------------------------------------------------------------- |
+| guest note (write, `api.write.ip`) | 64.5 req/s | 67.6 req/s | no measurable cost (within noise)                                     |
+| failed sign-in                     | 96.8 /s    | 89.8 /s    | two limit hits (IP, account) plus argon2 (−7%)                        |
+| successful sign-in                 | 64.7 /s    | 54.0 /s    | argon2-bound; −17%, of which the two 0.6 ms statements explain little |
+| password-reset attempt             | 424 /s     | 295 /s     | cheapest request: one extra statement is −30% (p50 17.5 → 25.7 ms)    |
+
+**Horizontal (MEASURED, 1/2/4 `next start` instances on this laptop):**
+
+- One unknown account got 14 wrong-password attempts, alternating instance and client address.
+- `/me` used 32 users across the instances, round-robin.
+
+| Instances | Shared store: allowed before 429 | Memory store: allowed before 429 | `/me` req/s (shared / memory) |
+| --------: | -------------------------------- | -------------------------------- | ----------------------------- |
+|         1 | **10**                           | 10                               | 333 / 294                     |
+|         2 | **10**                           | 14 of 14 (never limited)         | 464 / 455                     |
+|         4 | **10**                           | 14 of 14 (never limited)         | 487 / 476                     |
+
+- **Switching instances never reset the budget.** It also survived restarts: re-running the
+  benchmark's own sign-ins within 15 minutes met the account limit (429), which the memory store
+  forgot on every restart.
+- `/me` scaling flattens at 4 instances because this 4-core laptop runs out of CPU (§17).
+
+**Browser QA (MEASURED; production build behind TLS, headless Chrome):**
+
+- Normal sign-in, navigation and property switching SDX ↔ SMR and to `/organization` work.
+- Five wrong passwords give the generic message and lock the account; the correct password is
+  refused while locked. After the lock expires sign-in succeeds and the failure count resets.
+- A disabled user gets 401 on the next API request, is sent to `/login` on navigation, and
+  cannot sign in.
+- After a password change the current browser continues, another device's session gets 401, the
+  old password fails and the new one works.
+- Sign-out clears the cookie and the old token gets 401.
+- With the access cookie removed, the session is silently restored by the refresh token.
+- No console errors.
+
+## 27. Remaining bottlenecks after phase 2
+
+Unchanged from §20, minus the two items this phase removed:
+
+- **ESTIMATED:** authentication is now one indexed statement (≈0.8 ms PostgreSQL CPU per request
+  here). The per-request floor is the Next.js framework (≈1.5 ms CPU) plus the handler's own SQL.
+- Rate limits are now correct at any instance count. Their database load is one statement per
+  rate-limited request.
+- **Still open:**
+  - polling (the busiest screens done in §31);
+  - global search (done in §28);
+  - the single primary and connection pooling (PgBouncer; the new store works through a
+    transaction pooler, since it is one autocommit statement);
+  - synchronous night audit and reports;
+  - a production-like test environment.
+- **Not claimed:** 100 000 requests per second.
+
+## 28. Unified global search
+
+The palette (Ctrl/Cmd+K) used to send **six authenticated requests per debounced keystroke**, one per
+record type, and three more when it opened (room picker, room board and rate plans, ≈160 KB), which it
+then filtered in the browser. Now it sends **one** request per debounced query:
+
+- `GET /api/v1/properties/{id}/search?q=` for the property workspace;
+- `GET /api/v1/search?q=` for the organization workspace (guest and company profiles).
+
+### 28.1 Audit of the former sources
+
+| Type         | Endpoint                                  | Permission                                                 | Scope                                         | Query (limit 5)                                                                                                 | Before p50, 1 user           |
+| ------------ | ----------------------------------------- | ---------------------------------------------------------- | --------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | ---------------------------- |
+| Reservations | `properties/{id}/reservations?q=`         | `reservations:read` at P                                   | property                                      | OR of confirmation, cancellation number, external reference, room and guest-name tokens; ordered by arrival, id | 60 ms                        |
+| Guests       | `guests?q=`                               | `guests:read` anywhere; UI: at P                           | organization, facts from permitted properties | trigram `search_name`, confirmation through permitted properties                                                | 205 ms                       |
+| Folios       | `properties/{id}/folios?view=all&q=`      | `billing:read` at P                                        | property                                      | name, confirmation or room; ordered by guest name, id                                                           | **410 ms** (758 ms for "al") |
+| Companies    | `accounts?q=`                             | `accounts:read` anywhere; UI: at P                         | organization                                  | normalized name or code                                                                                         | 27 ms                        |
+| Groups       | `properties/{id}/groups?q=`               | `groups:read` at P                                         | property                                      | code or name                                                                                                    | 28 ms                        |
+| Maintenance  | `properties/{id}/maintenance?view=all&q=` | `maintenance:read` at P                                    | property                                      | number, title, room                                                                                             | 30 ms                        |
+| Rooms        | picker + board, filtered in the browser   | `rooms:read` and (`housekeeping:read` or `frontdesk:read`) | property                                      | every word in number or room type code                                                                          | on open                      |
+| Rate plans   | `rate-plans`, filtered in the browser     | `rates:read`                                               | property                                      | every word in code or name                                                                                      | on open                      |
+
+No source depends on another. The browser waited for all six (`Promise.all`), so the slowest one, folio
+search, set the latency.
+
+### 28.2 Changes
+
+- **One endpoint per workspace** (`modules/search`).
+  - The route authenticates once. The service includes a type only when the caller holds its read
+    permission. For the property search that is at P, exactly as the palette gated it; rooms also need
+    a board to open on.
+  - Each type runs through its own existing service, with its own query schema, limit 5, scope and
+    order. Search semantics are unchanged.
+  - Groups come back in a fixed order, with no empty groups, at most 5 per type and 40 in total.
+  - A type that fails is omitted and logged, as the palette omitted it.
+- **Normalized results.**
+  - Each result has: `type`, `id`, `title`, `subtitle`, `meta`, `vip`, `propertyCode`, `targetId`, and
+    `roomView` for rooms.
+  - The server never sends a URL. The palette builds the route from the type (`searchResultRoute`:
+    well-formed property code and UUID, fixed templates). It opens the route only when the property is
+    one of the user's own.
+  - The displayed fields are those the palette showed before. Folio balances appear only with
+    `billing:read`.
+- **Rooms and rate plans moved to the server.**
+  - Each is one statement: `findRoomsForSearch` in raw SQL, and `findRatePlansForSearch` without the
+    list's relations.
+  - The previous word-matching rule (`lib/utils/text-match.ts`) is applied to the result.
+  - With Prisma relation selects they had cost 3 and 6 statements.
+- **Folio search** (`findFolioListPage`).
+  - Guest name, confirmation and room number are now separate branches. Each takes its own first page
+    in list order (guest name, id); the page is cut from their union.
+  - This returns the same rows as filtering on the OR and cutting once, and each branch can use its
+    index. Before, the OR across three tables scanned the property's reservation rooms.
+  - Verified identical on 144 recorded cases (every view, 12 terms, 2 page sizes, 2 pages, cursors).
+  - Standalone timings: khan 287 → 119 ms; "al" 1077 → 159 ms. No new index.
+- **Client.**
+  - A lazy RTK Query sends one request per 200 ms debounced text. Leaving that text cancels the
+    request in flight (`AbortController`); the same text never starts a second one, and a cached text
+    starts none.
+  - A response is shown only if it answers the text and property on screen (`isCurrentSearch`).
+  - Loading, empty and error states (with retry). Keyboard navigation and visuals are unchanged.
+- **Concurrency.**
+  - A search runs at most `SEARCH_CONCURRENCY` types at a time (default 3; slowest types first).
+  - One request therefore holds at most 3 of the pool's connections.
+- **`Server-Timing`** (opt-in `SERVER_TIMING=1`) adds `search-<type>;dur=` for each type.
+
+### 28.3 Measurements
+
+Setup:
+
+- The benchmark database of §4.
+- One `next start` production instance, with `SERVER_TIMING=1`.
+- k6 at 1/8/16/32 virtual users, 20 s per run, no think time.
+- Two search terms: `khan` (typical) and `al` (broad).
+- "Before" is the build of §25–27. PostgreSQL CPU comes from performance counters; per-search values
+  divide its average by the search rate.
+
+**MEASURED**, one search = one debounced keystroke:
+
+| Case                  | Req/search | Searches/s | p50     | p95  | p99  | PG CPU ms/search | Errors |
+| --------------------- | ---------- | ---------- | ------- | ---- | ---- | ---------------- | ------ |
+| before khan, 1 user   | 6          | 2.4        | 411     | 506  | 568  | 144              | 0      |
+| after khan, 1 user    | **1**      | 6.5        | **147** | 194  | 200  | 113              | 0      |
+| before al, 1 user     | 6          | 1.2        | 758     | 971  | 1021 | 267              | 0      |
+| after al, 1 user      | 1          | 4.3        | 219     | 284  | 314  | 136              | 0      |
+| before khan, 8 users  | 6          | 4.1        | 1884    | 2507 | 2979 | 402              | 0      |
+| after khan, 8 users   | 1          | 12.7       | 576     | 998  | 1140 | 186              | 0      |
+| after al, 8 users     | 1          | 9.3        | 828     | 1162 | 1364 | 318              | 0      |
+| before khan, 16 users | 6          | 3.9        | 3864    | 4988 | 5785 | —                | 0      |
+| after khan, 16 users  | 1          | 12.2       | 1239    | 1690 | 1873 | 307              | 0      |
+| before khan, 32 users | 6          | 4.1        | 7657    | 9714 | 9751 | —                | 6.6 %  |
+| after khan, 32 users  | 1          | 12.3       | 2578    | 2861 | 3056 | 169              | 0      |
+
+- Palette open: 3 requests (≈160 KB) → 0.
+- Pool: at most 11–15 PostgreSQL connections at every load (pool 10 plus the monitor's).
+
+Where the gain comes from: the old six-request fan-out, run against the new build (the folio fix
+included), gives:
+
+| Case           | Searches/s | p50  | p95  | p99  | App CPU ms/search |
+| -------------- | ---------- | ---- | ---- | ---- | ----------------- |
+| khan, 1 user   | 5.9        | 157  | 214  | 249  | 11.5              |
+| khan, 8 users  | 11.4       | 641  | 1099 | 1363 | 42.9              |
+| khan, 32 users | 11.3       | 2798 | 3006 | 3364 | 34.7              |
+
+- **Most of the latency** came from the folio query.
+- **Unification** gives:
+  - 6× fewer HTTP requests, and 5 fewer authentication statements per search;
+  - no preloads when the palette opens;
+  - ≈40 % less application CPU per search (25 vs 43 ms at 8 users);
+  - ≈10 % more throughput at saturation.
+
+**DB statements per search, MEASURED** (integration fixture, `countStatements`):
+
+- Six requests: 29 statements.
+- Unified: 26 statements. That is the same six searches minus five authentications, plus one
+  statement each for rooms and rate plans.
+
+**Sequential vs hybrid vs parallel, MEASURED** (`SEARCH_CONCURRENCY` 1 / 3 / 8):
+
+| Users, term                      | 1 (sequential)     | 3 (hybrid, chosen) | 8 (parallel)       |
+| -------------------------------- | ------------------ | ------------------ | ------------------ |
+| 1, khan: p50 / searches/s        | 214 ms / 4.2       | 147 ms / 6.5       | 154 ms / 6.1       |
+| 1, al: p50                       | 240 ms             | 219 ms             | 222 ms             |
+| 8, khan: p50 / p95 / searches/s  | 682 / 986 / 12.0   | 576 / 998 / 12.7   | 599 / 993 / 12.6   |
+| 32, khan: p50 / p95 / searches/s | 2146 / 3351 / 13.8 | 2578 / 2861 / 12.3 | 2644 / 3104 / 11.7 |
+
+- Sequential adds the types' times together at low load, where the palette is used.
+- Fully parallel takes up to 8 pool connections per keystroke, starving other requests, for no latency
+  gain over 3.
+- 3 has the best low-load latency and the best p95 at saturation.
+
+**Correctness, MEASURED:**
+
+- The unified results were compared field by field with what the old palette showed, using the old
+  client mapping on recorded responses: 26 property/term cases, 228 hits, 0 differences.
+- Folio list: 144/144 recorded cases identical.
+
+### 28.4 Security
+
+- Integration tests (`tests/integration/global-search.test.ts`) cover:
+  - type gating per property and split permissions;
+  - multi-property scoping, checked against the rows' `property_id`;
+  - organization routing to a permitted property;
+  - no permitted type (empty groups);
+  - cross-organization;
+  - an inaccessible property (403);
+  - anonymous, forged, signed-out and disabled sessions (401);
+  - limits, deterministic order, normalization, routes;
+  - equality with the per-type endpoints.
+- Unit tests (`tests/unit/search-policy.test.ts`) cover:
+  - route templates;
+  - rejected codes and ids (path traversal, open redirect, unknown types);
+  - the stale-response guard.
+
+### 28.5 Browser QA (production build behind the local TLS proxy, bench database)
+
+- **Organization GM, property workspace:**
+  - One request per debounced query: rapid "khan" gave 1 request.
+  - Slow typing gave one request per pause; a text already cached gave none.
+  - Opening the palette sent no preload.
+  - Arrow keys and Enter work. Reservation, room, folio, company and group results open their pages.
+  - Empty results show the empty state.
+- **Slow network (1.5 s):**
+  - "zhang" then "khan": the "zhang" request was cancelled, and its results never appeared.
+- **Offline:**
+  - "Search is unavailable" appears, with a retry that succeeds after reconnecting.
+- **Property switch:**
+  - The request goes to the other property.
+- **Organization workspace:**
+  - Guests only, opening in the lowest permitted property.
+- **Multi-property GM (SDX and SMR):**
+  - Each workspace is scoped to its property; organization guests open in SDX.
+- **Front desk agent (SMR only):**
+  - Searching SDX directly: 403.
+- **Housekeeper (SDX):**
+  - The hint lists rooms only; "khan" finds nothing, "101" finds rooms.
+- **Sign-out during a search:**
+  - The next keystroke gets 401, the refresh fails, and the app redirects to `/login?next=…`.
+- **Console:**
+  - No application errors. The only entries are the browser's network logs of the deliberate
+    offline, 403 and 401 cases.
+
+### 28.6 Remaining
+
+- **MEASURED, pre-existing:** reservation search takes ≈1.9 s for a text that matches nothing
+  (`zzqxv`, 400k reservation rooms).
+  - Its OR across confirmation, room and guest name, ordered by arrival with `LIMIT 6`, walks the
+    property's whole history when nothing matches. It stops early for common texts.
+  - The unified search waits for it, as the old palette did.
+  - Done in §29: the per-branch top-N rewrite used for folios, with the same record-and-compare check.
+- **ESTIMATED:** at saturation this instance does ≈12 searches/s. Search is bounded by PostgreSQL work
+  on 400k-row histories, not by request count.
+- **Not claimed:** 100 000 requests per second.
+
+## 29. Reservation search
+
+### 29.1 Path and root cause
+
+The path is:
+Reservations screen (URL-synced `q`, `state`, date ranges, room type, source, `sort`) →
+`GET /properties/{id}/reservations` (`reservations:read`, property from the path) → `listReservations` →
+`findReservationRoomsPage` → one Prisma `findMany`.
+
+With `q`, the service added one OR to the filters:
+
+- confirmation prefix and, for bare digits, `-<digits>` contained;
+- cancellation number;
+- external reference;
+- room number;
+- every guest-name word.
+
+Prisma compiles each relation filter into its own join: `reservations` twice, `rooms` and `guests`. The OR
+can only be tested after those joins, and no index serves an OR across four tables. So PostgreSQL walked the
+property's reservation rooms in the sort order (`property_id, arrival_date` index), joined every row four
+times, and stopped only when the page was full.
+
+- For a text matching many rows, that is early.
+- For a text matching few or no rows, that is the whole history: **203,794 rows** at SMR.
+
+**MEASURED plans** (EXPLAIN ANALYZE of the page statement, SMR, `limit` 25; case 9 is the Global Search shape
+with `limit` 5):
+
+| Case                  | Before: execution | Before: buffers | After: execution (all branches) | After: buffers |
+| --------------------- | ----------------- | --------------- | ------------------------------- | -------------- |
+| 1 no match (`zzqxv`)  | 3,395 ms          | 3,250,104       | 0.6 ms                          | 25             |
+| 2 exact confirmation  | 7,509 ms          | 4,065,452       | 5.4 ms                          | 192            |
+| 3 guest name (`khan`) | 255 ms            | 55,124          | 16.4 ms                         | 5,686          |
+| 4 room number         | 475 ms            | 355,325         | 20.8 ms                         | 6,989          |
+| 5 broad (`al`)        | 8.5 ms            | 5,955           | 3.0 ms                          | 1,876          |
+| 6 + arrival range     | 25 ms             | 18,212          | 10.6 ms                         | 5,713          |
+| 7 + state             | 159 ms            | 53,731          | 7.2 ms                          | 5,686          |
+| 8 second page         | 154 ms            | 61,366          | 14.2 ms                         | 10,198         |
+| 9 no match, `limit` 5 | 2,543 ms          | 3,250,101       | 0.2 ms                          | 22             |
+
+After the change:
+
+- a rare pair of common name words (`ahmed zhang`, `limit` 5) executes in 6 ms; in the intermediate version
+  of the change it took 617 ms and read 1.0M buffers;
+- two-letter texts that match nothing (`zz`, `qx`) execute in 76–90 ms. The trigram index cannot serve
+  words under 3 characters.
+
+### 29.2 Change (`listReservations`, `findReservationRoomsPageMatching`)
+
+- **One query per kind of match.** Each OR arm runs as its own `findMany`, with the same filters, cursor,
+  sort, and `limit + 1`. Each selects only the id and the sort keys.
+  - The page is cut from the union: merge in (sort key, id) order, drop duplicates, keep `limit + 1`.
+  - A final query loads those rows with the existing select.
+  - This is the same page as the single OR query: the first N rows of a union are always among the first
+    N rows of its parts, and (sort key, id) is a total order.
+  - Filters, cursor semantics, fields and `nextCursor` are unchanged. The filters stay in the same Prisma
+    `where`, not re-implemented in SQL.
+  - The branches run one after another. Running them at once was measured (§29.5): no gain under load,
+    and more pool connections per request.
+- **Room number.** The room is looked up first (`rooms(property_id, number)` is unique), and the branch
+  becomes `room_id = …`. A number that is no room adds no branch.
+  - As a filter on the joined room, a missing room made the planner walk the whole history (183 ms,
+    204k buffers at `limit` 5).
+- **Guest name.** Guests passing the same `contains` filters are looked up first (trigram index, at most
+  501):
+  - none → no branch;
+  - ≤ 500 → `primary_guest_id IN (…)` (primary-guest index);
+  - more → the former relation filter. The walk in sort order meets matches early when they are that
+    common.
+  - Words shorter than 3 characters cannot use the trigram index. The lookup would read the whole index
+    (160–230 ms), so they keep the relation filter.
+  - The lookup costs 1.3–2.6 ms, including common words (`ahmed`: 17,250 guests).
+- **No new index.** Every branch uses an existing index:
+  - trigram on `reservations.confirmation_number` and `guests.search_name`;
+  - `reservation_rooms(property_id, cancellation_number)`, `(property_id, room_id)`, `(primary_guest_id)`;
+  - `reservations(property_id, external_reference)`;
+  - `rooms(property_id, number)`.
+- **Statements.** With text there are up to 18 instead of 12: the room and guest lookups, up to 4–5
+  branches, and the page load. With no match there are 6 instead of 11. Without text the path is
+  unchanged.
+
+### 29.3 Result equivalence (MEASURED)
+
+- **Recorded API responses** (bench database, before vs after):
+  - 984 cases, 1,641 pages, 18,309 rows: **984/984 identical** (items, order, fields, cursors, statuses);
+  - 18 terms × 3 sorts × 9 filter sets × 2 properties × page sizes 5/20, each followed through its cursor
+    for up to 3 pages;
+  - terms: no match, names, words in either order, `o'`, `__`, a 1-character text (400), confirmation full,
+    prefix and suffix, a multi-room confirmation, `PREFIX-number`, room, digits.
+  - Filter sets: states, arrival, departure and created ranges, room type + source, channel, guest.
+- **Integration oracle** (`tests/integration/reservation-search.test.ts`):
+  - Every page chain is compared with the former single query, run directly: 19 terms × 4 filters ×
+    3 sorts × page sizes 2/5/50 = **684 full pagination chains, identical**.
+  - Both name strategies are covered (a surname shared by 520 guests), as are short texts, cancellation
+    numbers and external references (none exist in the bench data).
+
+### 29.4 Security
+
+- Integration tests cover:
+  - cross-property and cross-organization isolation for every kind of match;
+  - another organization's property (403);
+  - single-property, multi-property and organization-wide users;
+  - no `reservations:read` (403);
+  - anonymous, signed-out and disabled sessions (401);
+  - an inactive property (403).
+- Existing suites (reservations, filters, global search, multi-property, RBAC isolation, front desk):
+  119/119 passed.
+
+### 29.5 Load (MEASURED; one `next start` instance, k6 `reservationSearch` class with `limit` 20, 20 s runs, fixed term, alternating SMR/SDX)
+
+| Term                  | Users | Before searches/s | Before p50 / p95 / p99 (ms) | Before errors | After searches/s | After p50 / p95 / p99 (ms) | After errors | PG CPU ms/search before → after |
+| --------------------- | ----- | ----------------- | --------------------------- | ------------- | ---------------- | -------------------------- | ------------ | ------------------------------- |
+| no match `zzqxv`      | 1     | 0.3               | 3227 / 3469 / 3517          | 0             | 80.3             | 12 / 15 / 18               | 0            | 461 → 1.6                       |
+|                       | 8     | 0.7               | 7825 / 25370 / 26328        | 0             | 169.8            | 45 / 57 / 67               | 0            | 6147 → 2.7                      |
+|                       | 16    | 0.9               | 14733 / 22448 / 26365       | 30 %          | 183.2            | 84 / 103 / 147             | 0            | 5546 → 2.4                      |
+|                       | 32    | 2.5               | 6928 / 21801 / 24917        | 86.5 %        | 179.4            | 167 / 240 / 312            | 0            | 1997 → 2.8                      |
+| confirmation `276374` | 1     | 0.2               | 4843 / 5398 / 5406          | 0             | 48.4             | 19 / 26 / 32               | 0            | 1622 → 2.9                      |
+|                       | 8     | 0.4               | 13307 / 15849 / 20912       | 0             | 107.8            | 71 / 90 / 106              | 0            | 9433 → 6.2                      |
+|                       | 16    | 1.5               | 5175 / 15531 / 22691        | 55.8 %        | 105.3            | 146 / 182 / 196            | 0            | 3218 → 6.9                      |
+|                       | 32    | 3.5               | 5231 / 18689 / 18769        | 89.8 %        | 102.5            | 292 / 403 / 473            | 0            | 1523 → 6.6                      |
+| name `khan`           | 1     | 5.0               | 187 / 274 / 303             | 0             | 24.3             | 38 / 55 / 67               | 0            | 65 → 11                         |
+|                       | 8     | 39.9              | 84 / 601 / 760              | 0             | 61.2             | 125 / 159 / 198            | 0            | 36 → 34                         |
+|                       | 16    | 46.8              | 241 / 839 / 1008            | 0             | 56.2             | 273 / 350 / 376            | 0            | 44 → 40                         |
+|                       | 32    | 48.9              | 563 / 1072 / 1227           | 0             | 57.8             | 533 / 629 / 651            | 0            | 33 → 40                         |
+| broad `al`            | 1     | 37.1              | 25 / 33 / 38                | 0             | 44.0             | 22 / 28 / 34               | 0            | 5.8 → 4.4                       |
+|                       | 8     | 75.9              | 100 / 132 / 154             | 0             | 72.2             | 106 / 139 / 156            | 0            | 15.8 → 9.2                      |
+|                       | 16    | 76.9              | 202 / 253 / 277             | 0             | 72.0             | 214 / 262 / 275            | 0            | 18.2 → 8.6                      |
+|                       | 32    | 76.2              | 401 / 495 / 560             | 0             | 77.0             | 405 / 453 / 481            | 0            | 19.6 → 8.3                      |
+
+- Before, the errors were pool connection timeouts: searches that walked the history held the 10
+  connections past the 5 s connect timeout. PostgreSQL CPU was pinned at ≈5 cores.
+- After, peak PostgreSQL CPU was under 2.4 cores in every run.
+- **Broad texts** stay within run-to-run noise (±5 %), with lower PostgreSQL CPU.
+- **`khan` at 8 users:** p50 is higher (84 → 125 ms), but p95 is 601 → 159 ms and throughput is +53 %.
+- **Branches at once** (6 in flight), measured and not adopted:
+  - `khan` at 32 users: 57.8 → 60.8 searches/s;
+  - `al` at 32 users: 77.0 → 84.1 searches/s;
+  - Global Search `khan` at 8 and 32 users: unchanged (655 → 658 ms, 2940 → 2975 ms);
+  - it only helps a single user.
+
+**Global Search** (`unifiedSearch`, MEASURED):
+
+| Term     | Users | Before searches/s | Before p50 / p95 / p99 (ms) | Before errors | Before reservations p50 | After searches/s | After p50 / p95 / p99 (ms) | After errors | After reservations p50 |
+| -------- | ----- | ----------------- | --------------------------- | ------------- | ----------------------- | ---------------- | -------------------------- | ------------ | ---------------------- |
+| no match | 1     | 0.4               | 2310 / 2501 / 2502          | 0             | 2297 ms                 | 40.7             | 23 / 31 / 38               | 0            | 8 ms                   |
+|          | 8     | 0.8               | 5712 / 21288 / 21289        | 0             | 5693 ms                 | 64.8             | 118 / 152 / 183            | 0            | 82 ms                  |
+|          | 32    | 2.3               | 9667 / 25379 / 30295        | 7.3 %         | 5068 ms                 | 65.6             | 467 / 556 / 604            | 0            | 379 ms                 |
+| `khan`   | 1     | 5.5               | 171 / 244 / 263             | 0             | 26 ms                   | 5.2              | 183 / 219 / 245            | 0            | 61 ms                  |
+|          | 8     | 11.9              | 608 / 1017 / 1201           | 0             | 315 ms                  | 11.8             | 655 / 996 / 1269           | 0            | 503 ms                 |
+|          | 32    | 11.6              | 2712 / 3133 / 3310          | 0             | 2176 ms                 | 10.4             | 2940 / 3353 / 3402         | 0            | 2656 ms                |
+| `al`     | 1     | 3.8               | 258 / 306 / 351             | 0             | 18 ms                   | 3.7              | 258 / 314 / 340            | 0            | 22 ms                  |
+|          | 8     | 9.0               | 833 / 1243 / 1351           | 0             | 38 ms                   | 9.1              | 826 / 1259 / 1407          | 0            | 41 ms                  |
+|          | 32    | 9.8               | 3195 / 3736 / 4295          | 0             | 2718 ms                 | 9.3              | 3391 / 3905 / 4044         | 0            | 3146 ms                |
+
+- The reservation type no longer dominates a no-match search.
+- For `khan` and `al`, Global Search is bound by guests and folios (§28). Its totals stay within the
+  run-to-run spread measured in §28.3: 576–617 ms at 8 users and 2578–2970 ms at 32 users for `khan`.
+
+### 29.6 Browser QA (production build behind the local TLS proxy, bench database)
+
+- **Organization GM on the Reservations screen:**
+  - Every screen showed the API's own rows: normal search, no match (empty state), confirmation (1 row,
+    no "Load more"), two-word name, room, arrival range, state, and combined filters with sort.
+  - Typing plus Search updates the URL.
+  - "Load more" twice gives 150 unique rows.
+  - SDX after switching property shows SDX results.
+- **Global Search:**
+  - Reservation results appear and open.
+  - A no-match text shows "No results" 328 ms after typing (the 200 ms debounce included).
+- **Other users:**
+  - A multi-property GM gets both properties.
+  - A front desk agent (SMR only) gets "Access denied" on SDX, and a 403 from the API.
+  - A housekeeper (no `reservations:read`) gets "Access denied" and a 403.
+- **Console:** no application errors; only the browser's logs of those two deliberate 403 probes.
+
+### 29.7 Remaining
+
+- **ESTIMATED:** at saturation this instance serves 100–180 reservation searches/s for selective texts
+  and 55–80 for common ones. The limit is now Prisma relation loads (≈9 statements for the page) and the
+  Next.js event loop, not PostgreSQL.
+- **PROPOSED:**
+  - Load the page's relations in one statement (done in §30).
+  - Global Search for common texts is bound by guests and folios (§28).
+- **Not claimed:** 100 000 requests per second.
+
+## 30. Reservation list page loading
+
+### 30.1 Before (MEASURED)
+
+A reservation list page cost **12 statements** after authentication:
+
+- the page query, via Prisma with `listSelect`;
+- nine relation loads, one per relation (reservation type, guest, reservation, channel, the reservation's
+  rooms, source code, room type, rate plan, room);
+- the totals aggregate;
+- the currency lookup.
+
+A text search with results cost 17–18 statements, since its final page load was the same. The list
+endpoint saturated at ≈81 requests/s with PostgreSQL at ≈0.5 cores: the time went to round trips and
+Prisma, not to the database.
+
+### 30.2 Change (`listReservations`, `findReservationRoomPageKeys`, `findReservationListRows`)
+
+- **Keys first.** The page is selected as before, with the same `where`, `orderBy` and `limit + 1`, or
+  the text-search branches of §29. Only the id and sort keys are read; the cursor is built from them as
+  before.
+- **Then one statement** loads those rows (`rr.id IN (…)` and the property) in the same order (sort key,
+  then id). It returns every field the list shows:
+  - the codes: reservation type, channel, room type, room, rate plan, source;
+  - the reservation's room count;
+  - the stay total (sum of night rates);
+  - the currency's minor units, with the same fallback of 2.
+- **Scalar subqueries, not joins, for the codes.** Measured on 50 rows, median of 30 runs, identical
+  rows:
+  - a nine-table join: 11.3 ms planning + 1.9 ms execution;
+  - reservations and guests joined, codes as subqueries: 1.3 + 3.1 ms;
+  - joining room types as well: 1.6 + 2.8 ms;
+  - passing ids as one array instead of a list: no difference.
+  - Prisma's statements are not prepared, so the join was planned on every request. The first build with
+    joins raised PostgreSQL CPU per list request from 6.4 to 22.5 ms.
+- **Mapping.** The response mapping is unchanged apart from reading the new column names. An empty page
+  skips the load entirely, including the currency lookup.
+- **Not used:** Prisma's `relationJoins` is still a preview feature in 7.10, and enabling it switches
+  every query in the application to join loading.
+- **No new index, no migration.**
+
+**Statements per request, MEASURED** (in-process capture on the bench data):
+
+| Case                          | Before | After |
+| ----------------------------- | ------ | ----- |
+| List page, any sort or filter | 12     | 2     |
+| Text search with results      | 17–18  | 6–7   |
+| Text search without results   | 6      | 5     |
+
+Each figure excludes the one authentication statement. The integration test pins the list page at 3
+including authentication.
+
+### 30.3 Equivalence (MEASURED)
+
+- **Recorded API responses, bench data:** 1,080 cases, 1,869 pages, 23,697 rows, **1,080/1,080
+  identical** (items, field order, totals, cursors, statuses).
+  - They cover 18 texts and no text × 3 sorts × 9 filter sets × 2 properties × page sizes 5/20/50, with
+    up to 3 pages each.
+  - The §29 recording (984 cases) is also still identical.
+- **Integration oracle** (`reservation-search.test.ts`):
+  - Every page is compared with the former relation selects, totals aggregate, currency lookup and
+    mapping: 6 texts × 3 filters × 3 sorts × page sizes 3/50, every page, identical.
+  - The fixture covers assigned and unassigned rooms, a multi-room booking and a cancellation.
+  - The statement count is asserted.
+
+### 30.4 Load (MEASURED; one `next start` instance, 20 s runs)
+
+**List** (`reservationList`, 50 rows, no text):
+
+| Users | Before req/s | Before p50 / p95 / p99 (ms) | Before PG CPU ms/req | Before active conn max/avg | After req/s | After p50 / p95 / p99 (ms) | After PG CPU ms/req | After active conn max/avg |
+| ----- | ------------ | --------------------------- | -------------------- | -------------------------- | ----------- | -------------------------- | ------------------- | ------------------------- |
+| 1     | 54.7         | 18 / 22 / 25                | 4.8                  | 6 / 0.6                    | 60.9        | 15 / 21 / 25               | 1.6                 | 1 / 0.6                   |
+| 8     | 83.6         | 92 / 114 / 141              | 6.6                  | 5 / 1.0                    | 133.4       | 57 / 73 / 84               | 4.8                 | 5 / 2.0                   |
+| 16    | 80.6         | 192 / 244 / 263             | 6.8                  | 5 / 1.3                    | 133.3       | 114 / 160 / 187            | 4.1                 | 6 / 2.0                   |
+| 32    | 80.9         | 377 / 494 / 567             | 6.4                  | 5 / 1.1                    | 132.1       | 229 / 300 / 357            | 4.1                 | 5 / 1.8                   |
+
+**Name search** (`reservationSearch`, `khan`, 20 rows):
+
+| Users | Before req/s | Before p50 / p95 / p99 (ms) | Before PG CPU ms/req | Before active conn max/avg | After req/s | After p50 / p95 / p99 (ms)  | After PG CPU ms/req | After active conn max/avg |
+| ----- | ------------ | --------------------------- | -------------------- | -------------------------- | ----------- | --------------------------- | ------------------- | ------------------------- |
+| 1     | 24.1         | 40 / 48 / 53                | 13.4                 | 4 / 0.8                    | 25.3        | 37 / 48 / 61                | 6.5                 | 1 / 0.9                   |
+| 8     | 58.8         | 131 / 162 / 174             | 34.6                 | 5 / 3.2                    | 70.5–75.8   | 102–109 / 124–138 / 140–159 | 41.7–43.3           | 8 / 3.9                   |
+| 16    | 58.2         | 261 / 338 / 450             | 39.5                 | 8 / 3.2                    | 75.6        | 203 / 262 / 303             | 46.5                | 8 / 4.6                   |
+| 32    | 59.7         | 520 / 612 / 684             | 36.4                 | 7 / 3.3                    | 73.5–75.5   | 408–411 / 494–529 / 570–620 | 44.8–47.0           | 8–10 / 4.4–4.5            |
+
+- No errors in any run. The pool (10) was never exhausted.
+- **List:** +63 % throughput, −39 % p50 and −39 % p95 at 32 users, with less PostgreSQL CPU per request.
+- **Name search:** +23–29 % throughput and lower p50/p95/p99 at every load from 8 users. PostgreSQL CPU
+  per search is **higher** at 8–32 users (35–40 → 42–47 ms, repeated runs), while PostgreSQL stays under
+  3.5 of 8 cores. It is lower at 1 user.
+  - ESTIMATED: the name branch of §29 dominates this text (≈5.7k buffers a search). More of them run per
+    second, so each costs more CPU through contention.
+
+### 30.5 Browser QA (production build behind the local TLS proxy, bench database)
+
+All the §29.6 scenarios pass unchanged:
+
+- search, no match, confirmation, name, room;
+- date, state and combined filters with sort;
+- typed search;
+- "Load more" (150 unique rows);
+- property switching;
+- Global Search reservation results;
+- multi-property, restricted and no-permission users.
+
+Totals, rooms and codes render as before. The only console entries are the browser's logs of the
+deliberate 403 probes.
+
+## 31. Live updates instead of polling
+
+### 31.1 Audit of polling
+
+Pollers pause while the tab is hidden or unfocused. MEASURED browser volume on the bench database, idle
+screens, 5 minutes, before the change: **4 requests a minute on each operational screen, 2 on any other
+property page.**
+
+| Screen                                   | Interval | Endpoint(s)                                                                    | Purpose                                   | PG CPU per request (MEASURED) | Stale acceptable?                                           | Push?                                                                                                    |
+| ---------------------------------------- | -------- | ------------------------------------------------------------------------------ | ----------------------------------------- | ----------------------------- | ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| Header badge (every property page)       | 60 s     | `business-date`                                                                | Business date, audit state, property time | 2.1 ms                        | Minutes: it changes only at the audit and at local midnight | **Yes (converted)**: widest reach; nearly every poll was for nothing                                     |
+| Front desk                               | 60 s     | `front-desk/summary`; `arrivals`, `in-house` or `departures` (first page)      | Tab counts, work lists                    | 43 / 46 ms                    | Short: arrivals and check-ins happen at the desk            | **Yes (converted)**: heaviest per user                                                                   |
+| Room board (front desk and housekeeping) | 60 s     | `rooms/board`                                                                  | Room statuses                             | 41 ms                         | Short                                                       | **Yes (converted)**                                                                                      |
+| Housekeeping                             | 60 s     | `housekeeping/summary`, `housekeeping/tasks` (first page)                      | Counts, task list                         | 4.4 / 4.7 ms                  | Short: task assignment                                      | **Yes (converted)**: same screen as the board                                                            |
+| Maintenance                              | 60 s     | `maintenance/summary`, `maintenance` (first page)                              | Counts, requests                          | cheap                         | Minutes                                                     | No (remaining): lower benefit                                                                            |
+| Dashboard                                | 120 s    | `dashboard`, front desk, housekeeping and maintenance summaries, arrivals card | Overview                                  | 43 ms (summary)               | Minutes                                                     | No (remaining): already 120 s. It shares the converted queries' cache, so events refresh those parts too |
+| Night audit run                          | none     | —                                                                              | —                                         | —                             | —                                                           | —                                                                                                        |
+| Connectivity probe                       | 60 s     | `/api/health/live`                                                             | Offline detection                         | no database, no session       | —                                                           | No: costs nothing                                                                                        |
+| Offline snapshot                         | 10 min   | front desk lists, board                                                        | Offline copy                              | as above                      | Yes                                                         | No: rare                                                                                                 |
+
+Per user and minute, the converted screens cost ≈ 86–91 ms of PostgreSQL CPU (front desk, board) or
+≈ 48 ms (housekeeping), whether or not anything changed.
+
+### 31.2 Approaches compared
+
+- **Short-polling improvements** (conditional requests, versions): every request still authenticates and
+  reads. The cost still scales with users × time, not with changes.
+- **WebSockets:** bidirectional, which is not needed. It needs a custom server or upgrade handling beside
+  Next.js route handlers, and its own authentication.
+- **Server-sent events (chosen):**
+  - a plain authenticated `GET` through the existing route pipeline (session, property access, rate
+    limit);
+  - one-way; reconnectable;
+  - works with `next start` behind the existing reverse proxies (`no-transform`, `X-Accel-Buffering: no`).
+- **Event source across instances:**
+  - PostgreSQL `LISTEN/NOTIFY`, fired by row triggers in the writing transaction;
+  - not in-memory subscribers, and no broker: nothing measured needs one.
+  - The existing integration outbox (`outbox_events`, D35) covers bookings and payments, not room,
+    housekeeping or maintenance changes, and nothing dispatches it. The triggers see every writer: API,
+    night audit, scripts.
+
+### 31.3 Design
+
+- **Migration `20261215090000_realtime_notifications`:**
+  - Triggers on the tables the converted screens read (`reservation_rooms`, `stays`, `reservations`,
+    `reservation_notes`, `room_assignments`, `rooms`, `room_service_blocks`, `housekeeping_tasks`,
+    `maintenance_requests`, `business_dates`) run `pg_notify('serene_changes', {p, t, x})`: the property,
+    the topics and the transaction id.
+  - NOTIFY is transactional (a rollback sends nothing) and deduplicated within a transaction. There is
+    **no row data** in it.
+  - Access triggers (`auth_sessions` revoked, `users` status or password, `user_role_assignments`,
+    `role_permissions`, `properties` and `organizations` status) notify `serene_access`.
+- **Each instance** holds one LISTEN connection (`lib/realtime/hub.ts`, backoff 1–30 s). While it is down,
+  streams get `degraded` and clients poll; when it is back, streams get `live` and clients refetch what may
+  have changed.
+- **Stream** `GET /api/v1/properties/{id}/events` (`definePropertyRoute`, 30 connects/min per user):
+  - Topics are limited to the user's read permissions at that property: `frontdesk:read` → front desk,
+    `rooms:read` → board, `housekeeping:read` → housekeeping; the business date needs property access
+    only.
+  - Events carry topic names and the transaction id only; the client refetches through the normal
+    authorized API.
+  - Notifications of one burst are merged for 200 ms. There is a heartbeat every 25 s.
+  - The stream ends with `reauth` on any access change affecting it, or when the access token expires
+    (at most 15 min). The client then reconnects and is authenticated again.
+  - `REALTIME_ENABLED=0` answers 204: every screen polls as before.
+- **Client** (`PropertyRealtime`, one stream per tab):
+  - It is read with `fetch`: a 401 refreshes the session, 403 and 204 stop, errors back off 1–30 s with
+    jitter.
+  - While live, the converted queries stop polling (a 10-minute safety refetch remains) and events
+    invalidate their cache tags:
+    - the first change after a quiet period at once;
+    - then at most once per topic gap (front desk and board 60 s, housekeeping 15 s, business date at
+      once);
+    - each after a random 0–5 s spread.
+  - Duplicate transaction ids are ignored.
+  - Hidden tabs defer refetches and close the stream after 60 s; data possibly stale after a (re)connect
+    is refetched once.
+  - While not live, screens poll exactly as before.
+- **Business date:** while live, it is refetched on audit events and just after the property's local
+  midnight. The property time shown advances from the last server value (`usePropertyClock`), not from
+  the browser clock.
+
+### 31.4 Request volume (MEASURED)
+
+**Real browser, idle screens, 5 minutes, requests per minute** (the connectivity probe, 1/min, included):
+
+| Screen                                             | Before | After |
+| -------------------------------------------------- | ------ | ----- |
+| Front desk                                         | 4      | 1     |
+| Room board                                         | 4      | 1.2   |
+| Housekeeping                                       | 4      | 1     |
+| Maintenance (not converted; badge no longer polls) | 4      | 3     |
+| Dashboard (not converted)                          | 4      | 3     |
+| Any other property page                            | 2      | 1     |
+
+**Front desk staff simulation.** Two `next start` instances; users alternate between them. Changes are
+room updates committed at SMR at the given rate (Poisson). Each run lasts 4 min and is measured over its
+last ≈ 3 min.
+
+| Users | Changes/min | Before req/min (per user) | After req/min (per user) | Change |
+| ----- | ----------- | ------------------------- | ------------------------ | ------ |
+| 8     | 0           | 23.7 (2.96)               | 0 (0)                    | −100 % |
+| 16    | 0           | 47.3 (2.96)               | 0 (0)                    | −100 % |
+| 32    | 0           | 95.4 (2.98)               | 0 (0)                    | −100 % |
+| 8     | 1           | 23.7 (2.96)               | 11.0 (1.37)              | −54 %  |
+| 16    | 1           | 47.3 (2.96)               | 14.4 (0.90)              | −70 %  |
+| 32    | 1           | 95.4 (2.98)               | 65.8 (2.06)              | −31 %  |
+| 8     | 4           | 23.7 (2.96)               | 16.4 (2.05)              | −31 %  |
+| 16    | 4           | 47.3 (2.96)               | 32.9 (2.06)              | −30 %  |
+| 32    | 4           | 95.4 (2.98)               | 65.7 (2.05)              | −31 %  |
+
+- The realized change count varies per run, so the "1 change/min" rows differ.
+- The first design refetched each topic at most every 30 s. At 1 change/min it already cost as much as
+  polling: 8 users, 21.9 req/min. Hence the 60 s gap for heavy screens: a busy property is capped below
+  polling, and a quiet one costs nothing.
+
+### 31.5 Database impact (MEASURED)
+
+- **Connections:**
+  - Before: at most 3 active and 6 open.
+  - Idle after: 2 open, the two LISTEN sessions.
+  - Busy after: at most 2–8 active and up to 15 open.
+- **PostgreSQL CPU:** 0–4 % of the machine in every run. At these user counts the difference is below
+  what the counters resolve; per request, see §31.1.
+- **Rows read per minute:**
+  - Idle: 78.8k–298k → ≈ 2.5k (the samplers only).
+  - With changes: similar to or above polling, e.g. 32 users: 298k–300k before, 369k–375k after, despite
+    31 % fewer requests.
+  - Refetches arrive in waves. Measured with 32 screens:
+    - within 2 s: 17 % more rows per request pair than one at a time;
+    - within 5 s: the same as one at a time (hence the 5 s spread);
+    - after more than 30 s idle: the pool had closed its connections (`POOL_IDLE_TIMEOUT_MS` 30 s), and
+      each wave opened ≈ 10 new PostgreSQL sessions and read 26 % more rows (catalog warm-up).
+  - **PROPOSED:** a longer pool idle timeout (e.g. 120 s) for instances serving live updates, measured
+    first.
+- **Trigger cost on writes:** 0.06 ms median per single-row write (warm; 8–9 ms once per connection while
+  the function compiles); 4.8 ms for 300 rows in one statement; 156 ms of a 3.5 s update of 5,000
+  reservation rooms (4 %).
+
+### 31.6 Update latency (MEASURED)
+
+- **Commit → event at the client**, both instances, 8–32 streams:
+  - p50 214–217 ms, p95 215–248 ms, p99 216–250 ms, of which 200 ms is the merge window;
+  - 0 errors in 9 runs.
+- **Instance A → instance B:**
+  - API commands (mark room dirty/clean) on A, stream on B: 19 of 19 successful commands delivered; the
+    20th was rejected (422) and committed nothing.
+  - p50 206 ms, p95 211 ms after the command's response.
+- **Browser, command → board data on screen:** 2.2–3.8 s. That is the 0–5 s spread plus the refetch.
+  Before it was up to 60 s (≈ 30 s on average).
+
+### 31.7 Failure and reconnect (MEASURED)
+
+- **LISTEN session killed on both instances:**
+  - every stream got `degraded` within 30 ms and `live` again after 966–981 ms;
+  - the streams stayed open, and the next change arrived in 219 ms.
+- **Browser offline 20 s:** no stream attempts while offline; reconnected 8 ms after coming online; each
+  stale screen was refetched once.
+- **Hidden tab:** the stream closed after 60.0 s, with no refetch while hidden; it reconnected 3 ms after
+  the tab was shown, with one refetch per screen.
+- **Access change** (role assignment updated): the server ended the stream, and the client reconnected in
+  48 ms (200).
+- **Sign-out:** one reconnect attempt (401, refresh refused), then none.
+
+### 31.8 Security (integration tests `tests/integration/realtime.test.ts`, unit `tests/unit/realtime.test.ts`)
+
+- The stream requires a session (401) and access to the property: another property of the organization,
+  or another organization's, gets 403.
+- Topics are limited to the read permissions held at the property.
+- A change reaches only its property's streams, never another property or organization. Events contain
+  only `t` and `x`.
+- A rolled-back transaction sends nothing; one transaction's rows arrive as one event.
+- A business date initialization notifies every topic.
+- A second hub (a second instance) hears the same change.
+- Sign-out, disabling the user, removing their role and deactivating the property each end the stream at
+  once. A reconnect is refused (401 or 403), and an unrelated property's stream stays open.
+
+### 31.9 Remaining
+
+- **Maintenance screen** (60 s) and **dashboard** (120 s) still poll. Converting them is the same pattern:
+  the `maintenance` topic already fires from `maintenance_requests`.
+- **Rows read with changes:** the pool idle timeout (§31.5), and a property-level cache of identical
+  refetches (many screens ask the same question after one change): **PROPOSED**, not measured.
+- **Deployment:**
+  - One LISTEN connection per instance.
+  - `REALTIME_DATABASE_URL` must be a session (not transaction-pooled) connection.
+  - Proxies must not buffer `text/event-stream`, and idle timeouts must exceed 25 s (the heartbeat).
+- **Not claimed:** 100 000 requests per second.
+
+## 32. Connection pooling and PgBouncer readiness
+
+### 32.1 Connection lifecycle (audited)
+
+| Path                                                                    | Connection                                                                                                 | Held for                                                                                                        |
+| ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| API requests, services, repositories                                    | the Prisma client's `pg.Pool` (one per instance)                                                           | one statement (`pool.query`) or one interactive transaction (`runInTransaction`: `maxWait` 5 s, `timeout` 15 s) |
+| Authentication, rate-limit store (`rate_limit_windows`)                 | the same pool                                                                                              | one statement each                                                                                              |
+| Live updates (§31)                                                      | one dedicated `pg.Client` per instance (`LISTEN`, `application_name` `serene-management-realtime`)         | the life of the process                                                                                         |
+| Night audit, reports                                                    | the same pool; the audit commit raises `statement_timeout` for its own transaction (`set_config(…, true)`) | its transaction                                                                                                 |
+| Ops commands (`seed`, `maintenance`, `backup`, `db-check`, `bootstrap`) | their own short-lived clients or pools                                                                     | the command                                                                                                     |
+
+- No session state is used anywhere:
+  - no `SET` outside a transaction;
+  - no session advisory locks (only `pg_advisory_xact_lock`);
+  - no cursors, temporary tables, `PREPARE`, or `LISTEN` outside the hub.
+- The Prisma pg adapter sends unnamed prepared statements (no `statementNameGenerator`).
+- **Pool defaults before this phase:** `max` 10, idle timeout 30 s (a constant), no minimum, no lifetime,
+  acquisition timeout (`connectionTimeoutMillis`) 5 s.
+- The benchmark server allows `max_connections` 100 (3 reserved) on 8 cores.
+
+### 32.2 Measured behaviour (MEASURED; one 8-core host shared by PostgreSQL, the instances and k6; default k6 mix, closed model, 30 s runs)
+
+"Pool wait" is the time a request spent waiting for pooled connections. It is new: the Server-Timing
+entry `db-acquire` (SERVER_TIMING=1) comes from a wrapper on `pool.connect`, attributed per request with
+`AsyncLocalStorage`.
+
+| Instances × users | req/s | p50 / p95 / p99 ms | Pool wait p95 ms | PG CPU    | Active conns avg / max | Open conns |
+| ----------------- | ----- | ------------------ | ---------------- | --------- | ---------------------- | ---------- |
+| 1 × 8             | 111.4 | 57 / 130 / 482     | 5.5              | 2.2 cores | 3.1 / 7                | 10         |
+| 1 × 16            | 135.4 | 102 / 226 / 453    | 112              | 2.0       | 3.6 / 8                | 10         |
+| 1 × 32            | 139.0 | 189 / 471 / 588    | 540              | 2.1       | 3.5 / 9                | 10         |
+| 2 × 8             | 142.0 | 43 / 95 / 490      | 2.9              | 3.1       | 4.3 / 8                | 20         |
+| 2 × 16            | 152.3 | 87 / 201 / 562     | 26               | 4.2       | 4.6 / 9                | 20         |
+| 2 × 32            | 146.3 | 176 / 524 / 741    | 370              | 4.1       | 5.1 / 13               | 20         |
+| 4 × 8             | 116.5 | 47 / 125 / 538     | 3.4              | 3.7       | 4.2 / 8                | 40         |
+| 4 × 16            | 114.4 | 89 / 359 / 1014    | 7.7              | 3.3       | 5.4 / 14               | 40         |
+| 4 × 32            | 146.8 | 174 / 503 / 793    | 114              | 4.5       | 6.1 / 13               | 40         |
+
+- **Open connections:** exactly instances × `max` (10/20/40), so total connections are bounded. With live
+  updates, one LISTEN connection per instance is added: 4 instances holding 32 streams had 44
+  connections.
+- **No connection creation under steady load** (0 new sessions per run). No errors or timeouts.
+- **No leaks:** after idling past the idle timeout, every run had 0 open application connections and 0
+  `idle in transaction`. LISTEN connections stay at 1 per instance.
+- **Where the time goes:**
+  - At most 17 connections were ever active, 3–6 on average.
+  - Pool wait grows with users per instance, while PostgreSQL stays at 2–4.5 of 8 cores. The single-threaded
+    instance is the per-instance limit.
+  - The host as a whole is the limit: the plateau is ≈ 140–165 req/s, whatever the instance count.
+  - More connections do not help: `max` 20 on 4 instances (80 open) gave 156 req/s and a worse p99
+    (1167 ms).
+
+### 32.3 Idle churn (the §31.5 finding)
+
+Waves of 32 users (front desk summary + arrivals, spread over 5 s), 52 s apart, on 2 instances. The
+figures are averages over 4 waves, each wave after idling.
+
+| Pool setting                         | New PG sessions per wave | Rows per request pair | Request p50 / p95 ms | Pool wait p95 ms |
+| ------------------------------------ | ------------------------ | --------------------- | -------------------- | ---------------- |
+| idle timeout 30 s (former default)   | 4.5                      | 10,146                | 42 / 150             | 41               |
+| **idle timeout 120 s (new default)** | 0.5                      | 9,189                 | 38 / 52              | 0.2              |
+| idle timeout 300 s                   | 0                        | 9,031                 | 39 / 67              | 0.3              |
+| idle timeout 30 s, `min` 2           | 0.3                      | 9,075                 | 41 / 77              | 0.4              |
+
+- With 30 s, the pool closed its connections between waves, and each wave reopened them. A new backend
+  warms its catalog caches: ≈ 10 % more rows read, and 3× the p95.
+- 120 s keeps them through the live-update gap (60 s); every pool still drains to zero after 2 minutes
+  without traffic.
+- Under steady load the two timeouts measured the same. Alternating 1-instance runs, 8/16/32 users,
+  30 s → 120 s:
+  - throughput 137.8 → 138.5, 142.2 → 137.9, 141.7 → 139.4 req/s;
+  - p95 100 → 97, 213 → 222, 469 → 467 ms.
+
+### 32.4 Other settings tested (MEASURED)
+
+| Setting                            | Run    | Result                                                                                                |
+| ---------------------------------- | ------ | ----------------------------------------------------------------------------------------------------- |
+| `max` 5                            | 1 × 32 | 124 req/s, pool wait p95 784 ms (vs 139, 540): too small for one busy instance                        |
+| `max` 5                            | 4 × 32 | 165 req/s, 143 / 548 / 831 ms, 20 open (vs 147 req/s, 174 / 503 / 793, 40 open)                       |
+| `max` 5, 32 streams held           | 4 × 32 | 164 req/s, p50 139 ms, **24 connections** (vs 154 req/s, p50 159, 44 with `max` 10)                   |
+| `max` 20                           | 4 × 32 | 156 req/s, p99 1167 ms, **80 open** (near `max_connections`), pool wait ≈ 0                           |
+| lifetime 20 s (to price recycling) | 2 × 16 | 32 connections replaced in 30 s; 125 req/s (vs 152), rows/request +8 %                                |
+| acquisition timeout 1 s            | 1 × 32 | no errors, but only because the longest wait was 0.8 s; `max` 5 reached 1.2 s (p99), which would fail |
+
+**Chosen defaults:**
+
+- **Idle timeout:** 30 s → 120 s (`DATABASE_POOL_IDLE_TIMEOUT_MS`).
+- **Unchanged:** `max` 10 (one instance needs it), `min` 0, lifetime 0 (recycling costs; use hours, not
+  seconds, when needed), acquisition timeout 5 s.
+- The idle timeout, minimum and lifetime are now settings.
+
+### 32.5 PgBouncer
+
+- **Compatibility** (analysed; PgBouncer itself was not installed):
+  - **Transaction mode works:**
+    - interactive transactions run on one server connection;
+    - statements are unnamed prepared statements, so no `max_prepared_statements` is needed;
+    - transaction-level settings and advisory locks only;
+    - no session state.
+  - **Two exceptions:**
+    - The session settings are startup `options`, which PgBouncer rejects. With
+      `DATABASE_POOLER=pgbouncer-transaction` they are not sent and must be set on the runtime role;
+      `ops:db-check` fails when the zone is not UTC or a timeout is off.
+    - LISTEN needs a session. `REALTIME_DATABASE_URL` (direct) is **required** in that mode (env
+      validation), and the listener always connects directly.
+  - Migrations and backups keep direct URLs.
+- **Is it required?** Not at the measured scale.
+  - PostgreSQL's CPU and the host's CPU, not connections, bound throughput; at most 17 connections were
+    active.
+  - At `max_connections` 100, 7 instances of `max` 10 fit, keeping 10 for operations (`ops:db-check`
+    prints this budget); with `max` 5, 14 fit.
+  - PgBouncer becomes justified when:
+    - instances × `max` exceeds that budget (autoscaling, many small instances, serverless);
+    - connection storms on deploys need absorbing;
+    - more instances must share a fixed number of server connections.
+
+### 32.6 Recommended topology (PROPOSED)
+
+- **Up to ≈ 6 instances: no PgBouncer.**
+  - Keep the total within `max_connections` − 10: `DATABASE_POOL_MAX` = budget ÷ instances. For
+    example, 4 instances × 5: measured equal or better throughput with half the connections.
+  - `DATABASE_POOL_IDLE_TIMEOUT_MS` 120000.
+- **More instances, or autoscaling:**
+  - PgBouncer in transaction mode in front of `DATABASE_URL` (`DATABASE_POOLER=pgbouncer-transaction`),
+    `default_pool_size` ≈ 2–4 × PostgreSQL cores.
+  - Session settings on the runtime role.
+  - `REALTIME_DATABASE_URL` and `MIGRATION_DATABASE_URL` direct: one LISTEN connection per instance
+    counts against `max_connections`.
+- **Beyond one database server:** read replicas for reports, measured first.
+
+### 32.7 Remaining
+
+- The per-instance event loop and the database server's CPU: see §20 and §27.
+- The LISTEN connections grow with instances, one each. Past ≈ 50 instances a shared notification relay
+  (one listener fanning out) would replace them: **PROPOSED**, not needed now.
+- **Not claimed:** 100 000 requests per second.
+
+## 33. Background jobs and the worker
+
+### 33.1 Audit of heavy work inside requests (MEASURED; benchmark clone `serene_bench_na1`, SMR/SDX, one `next start` instance, `SERVER_TIMING=1`)
+
+Every endpoint that can run for seconds was listed from the code (night audit, readiness, 23 reports in JSON and CSV, the organization performance export, organization reports) and measured on the widest range each accepts (366 days ending at the business date). Rows read come from `pg_stat_database` deltas (12 s flush wait); memory is the server's working set around the request.
+
+| Operation                                   | Server time (one user)              | Rows read         | Notes                                                                                            |
+| ------------------------------------------- | ----------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------ |
+| `POST night-audits` (SDX, quiet)            | **11,070 ms** (checks 10,376)       | 2.03 M            | working set 200 → 175 MB; first attempt after a restart 32.8 s                                   |
+| `POST night-audits` (SMR, 16-user mix)      | **25,683 ms**                       | —                 | the request held a connection and the client for the whole audit                                 |
+| Successful audit, 1,000 rooms in house      | ≈ 15.0 s                            | —                 | integration performance test (`night-audit.performance.test.ts`); the commit may run up to 300 s |
+| `GET night-audits/readiness`                | 12–23 s warm, > 30 s cold (`57014`) | ≈ 2 GB of buffers | the same checks; `findUnbalancedFolios` is 95 % of it (§33.8)                                    |
+| `guest-ledger` CSV                          | 2,790 ms (JSON 2,969)               | 3.12 M            |                                                                                                  |
+| `ledger-roll-forward` CSV                   | 546 ms                              | 2.14 M            |                                                                                                  |
+| `cancellations` CSV                         | 1,490 ms                            | 1.12 M            |                                                                                                  |
+| `arrivals` / `departures` CSV               | 422 after 914 / 802 ms              | 849 k / 850 k     | refused (`REPORT_TOO_LARGE`) only after reading the rows; working set 246 → 284 MB               |
+| `revenue-by-code` CSV                       | 365 ms                              | 538 k             |                                                                                                  |
+| `housekeeping` CSV                          | 231 ms                              | 22.8 k            | 10,960 rows, 810 KB                                                                              |
+| tax, adjustments, package-revenue, payments | 111–268 ms                          | —                 |                                                                                                  |
+| every other report                          | < 150 ms                            | —                 | manager-flash JSON 462 ms                                                                        |
+
+Under concurrency (16-user k6 mix, 45 s):
+
+- **Night audit:** the mix was unchanged while an audit ran (89.6 → 91.2 req/s; p50/p95/p99 148/331/633 → 151/338/673 ms). The audit uses one connection at a time. Its cost was the request itself: a 11–33 s request, longer than many proxy timeouts, holding the browser tab, with the commit allowed up to 300 s.
+- **Heavy exports:** 4 users exporting the guest ledger back to back made each export take 11.3 s (p50) and cut everyone else's throughput from 100.2 to 63.0 req/s (p95 293 → 563 ms, p99 604 → 881 ms).
+
+**Decision.**
+
+- **Night audit → background job.** It is the only operation whose single execution is longer than a request should be.
+- **Reports and exports stay synchronous.** None takes more than 2.8 s alone; the 20,000-row cap bounds them. Their problem is concurrency, not duration, so they get a per-process slot limit (§33.6). They do not get background files: that would add storage, download links and expiry for no measured gain.
+
+### 33.2 Choosing the queue
+
+| Option                                     | Verdict                                                                                                                                                                                                                                                                                |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The existing outbox (`outbox_events`, D35) | Not a job queue: integration events with no lease, attempts, owner or result, and never dispatched (PENDING rows are kept for a future integration). Mixing the two would change its retention and meaning.                                                                            |
+| Redis + BullMQ, RabbitMQ, Kafka            | New infrastructure to deploy, secure, back up and monitor, for a few audits per property per day. The job must commit with the night audit's own data; a broker would need a second, non-transactional write.                                                                          |
+| pg-boss, graphile-worker                   | PostgreSQL-backed, but a new dependency with its own schema and migrations outside Prisma. The needed subset is small (`modules/jobs`, `lib/jobs`).                                                                                                                                    |
+| **`background_jobs` table (chosen)**       | Same database, same transaction as the command, same backups, no new process type required. `FOR UPDATE SKIP LOCKED` claims, leases with fencing, LISTEN/NOTIFY wake-up (the phase 4 pattern). Measured headroom: ~100–270 jobs/s (§33.5), several orders of magnitude above the need. |
+
+### 33.3 Design (ARCHITECTURE D65; `modules/jobs`, `lib/jobs`, migration `20261220090000_background_jobs`)
+
+- **Enqueue.** `enqueueJob(tx, scope, { kind, payload, dedupeKey, maxAttempts })` runs in the command's transaction: a job exists exactly when its command committed. A partial unique index allows one QUEUED or RUNNING job per `dedupe_key`. The insert trigger `NOTIFY serene_jobs, kind` wakes idle workers.
+- **Claim.** `UPDATE … SET status = 'RUNNING', attempts = attempts + 1, locked_by = worker, locked_until = now() + lease FROM (SELECT id … WHERE status = 'QUEUED' AND run_after <= now() ORDER BY run_after, id FOR UPDATE SKIP LOCKED LIMIT 1)`. Concurrent workers skip each other's rows.
+- **Lease and heartbeat.** The worker renews `locked_until` every lease/3 (default lease 60 s), with `SKIP LOCKED`: a row locked by the job's own commit reports "busy", not "lost".
+- **Fencing.** Every later write (progress, success, failure) requires `status = 'RUNNING' AND locked_by = me AND attempts = my attempt`. A handler that commits work locks its job row in that transaction (`assertLease`) and marks the job SUCCEEDED there (`completeIn`). A worker whose lease expired and was taken over can therefore change nothing.
+- **Failure and retry.** A thrown error retries after 5 s · 2^(n−1), capped at 5 min, with 50–100 % jitter. Lost database connections (`08xxx`, `57P01`–`57P03`, `53300`, Prisma `P1001`/`P1017`/…) count as retryable. `JobFailure` is final. After `max_attempts` the job is FAILED and the handler's `onGiveUp` runs.
+- **Crash recovery.** Each worker reclaims expired leases (`FOR UPDATE SKIP LOCKED`) once per poll interval: back to QUEUED with the backoff (`WORKER_LOST`), or FAILED when the attempts are used up.
+- **Where it runs.** In every application process (`JOB_WORKER=inline`, started from `instrumentation-node.ts`), or in separate processes (`npm run worker`), or both. SIGTERM stops claiming and waits for running jobs; anything left is reclaimed after its lease.
+- **Visibility.** `GET /api/v1/jobs/{id}` returns status, attempts, public progress (a stage name and counts), the result or a safe error to the user who started the job, in their organization, while they can reach its property; everyone else gets 404. Payload, internal error, worker and lease are never returned.
+- **Retention.** Finished jobs are pruned after 30 days (`ops:maintenance`, target `backgroundJobs`).
+
+**Night audit as a job.**
+
+- `POST night-audits` keeps Phase A in the request: business date `FOR UPDATE`, Idempotency-Key, the RUNNING run, date IN_AUDIT, audit row. In the same transaction it queues `night_audit.run` (dedupe key per run, 3 attempts) and answers **202** with the run and its job.
+- Every refusal is unchanged and immediate: 409 `BUSINESS_DATE_CHANGED`, 409 `NIGHT_AUDIT_RUNNING`, 422 `DATE_AHEAD`, 423 for postings while IN_AUDIT. A replayed Idempotency-Key returns the same run, never a second job.
+- The worker runs Phases B and C (`executeNightAudit`).
+  - It re-reads the starter's access (`resolveJobActor`): a user disabled or stripped of `nightaudit:run` meanwhile gets a FAILED run (`PERMISSION_REVOKED`), with nothing posted.
+  - A run that is no longer RUNNING is left alone (idempotent re-delivery).
+  - Lock order is business date → run → job in the commit, the failure record and recovery alike.
+  - A lost connection retries the job (the commit rolled back as a whole); any other error fails the run exactly as before.
+- **Two workers can never run the same audit.** Claims are exclusive. After a lease expiry, a late worker's commit fails its `assertLease`; it also needs the business date lock and a RUNNING run, as before.
+- **Recover.**
+  - Refused while a worker holds a live lease (409 `NIGHT_AUDIT_IN_PROGRESS`).
+  - A run whose job has not started can be cancelled at once (`CANCELLED`, job CANCELLED).
+  - A stale run without a live worker is recovered as before (`RECOVERED`); its job is cancelled so it can never run.
+- **UI.** The start dialog navigates to the run page. The page polls every 2 s while RUNNING (paused in background tabs) and shows "Queued", "Running the checks", "Posting and closing the day", or the retry and its time. When the run ends it refreshes the business date and every operational list.
+
+### 33.4 Night audit before / after (MEASURED; same clone, same audits)
+
+The benchmark audits fail at the departure check (38 due-outs with balances), a repeatable 10–25 s of checks used as the identical workload before and after. "Completed" is the run's end as the client saw it by polling every 500 ms.
+
+| Run                                                            | Start request                                        | Completed | Queue wait | Job execution                           |
+| -------------------------------------------------------------- | ---------------------------------------------------- | --------- | ---------- | --------------------------------------- |
+| Before: SDX quiet                                              | 11,070 ms (201, finished)                            | 11,070 ms | —          | —                                       |
+| Before: SMR under the 16-user mix                              | 25,683 ms                                            | 25,683 ms | —          | —                                       |
+| After, inline worker: SDX quiet                                | 472 ms (202; first request after start)              | 11,454 ms | 40 ms      | 10,963 ms                               |
+| After, inline worker: SMR under the mix                        | 640 ms                                               | 19,760 ms | 76 ms      | 19,135 ms                               |
+| After, separate worker: SDX quiet                              | 431 ms (first request)                               | 9,706 ms  | 21 ms      | 9,168 ms                                |
+| After, separate worker: SMR under the mix                      | 523 ms                                               | 22,714 ms | 47 ms      | 22,166 ms                               |
+| After, warm start requests (Server-Timing total)               | quiet 28–48 ms; under the mix 478–585 ms (3 samples) | —         | —          | —                                       |
+| After: full successful audits through the UI (SDX, bench data) | —                                                    | —         | 65 ms      | ≈ 15.5 s (143 rooms, 261 nights posted) |
+
+16-user mix (45 s) without and with an audit running:
+
+| Mode            | Baseline req/s, p50/p95/p99 ms | With audit req/s, p50/p95/p99 ms | PG CPU      | Active conns max / avg | Open conns |
+| --------------- | ------------------------------ | -------------------------------- | ----------- | ---------------------- | ---------- |
+| Before          | 89.6, 148/331/633              | 91.2, 151/338/673                | —           | —                      | —          |
+| Inline worker   | 95.8, 129/354/655              | 111.5, 123/280/528               | 190 → 248 % | 8/3.3 → 10/3.7         | 13 → 15    |
+| Separate worker | 97.6, 136/326/596              | 109.6, 124/288/577               | 227 → 282 % | 7/3.1 → 11/4.1         | 13 → 15    |
+
+- The start request no longer carries the audit: 11–26 s → under 0.7 s, about 30–50 ms warm on a quiet server.
+- The audit itself takes as long as before (same queries). The mix is within run-to-run noise in every mode, as it was before: the audit was never the mix's bottleneck. The first k6 run after a restart is the slower one, so "with audit" reads higher.
+- PostgreSQL CPU and connections while an audit runs: +55–60 percentage points and +1 active connection. They were not sampled before; the work is the same queries (**ESTIMATED** unchanged).
+- Open connections include each instance's LISTEN sessions (live updates + jobs).
+
+### 33.5 Worker throughput and exclusivity (MEASURED)
+
+1,000 short jobs queued at once. Each is a night-audit job whose run does not exist: it resolves the starter's access, finds no run, fails finally and runs the give-up path, about 7 statements. Separate worker processes on the same host as PostgreSQL.
+
+| Processes × concurrency | Jobs/s | Queue wait p50 / p95 | Execution p50 / p95 | Ran twice | Open conns |
+| ----------------------- | ------ | -------------------- | ------------------- | --------- | ---------- |
+| 1 × 1                   | 97.5   | 5.3 / 9.8 s          | 5 / 7 ms            | 0         | 2          |
+| 1 × 4                   | 204.9  | 2.2 / 4.6 s          | 8 / 14 ms           | 0         | 6          |
+| 2 × 4                   | 209.8  | 2.8 / 4.6 s          | 15 / 27 ms          | 0         | 11         |
+| 4 × 4                   | 271.5  | 2.0 / 3.5 s          | 19 / 35 ms          | 0         | 22         |
+
+- **No job ran twice** in 4,000 jobs claimed by up to 16 concurrent claimers (`attempts` = 1 for all; every outcome as expected).
+- Queue wait here is backlog: 1,000 jobs arrive at once. A single job waited 21–76 ms (§33.4).
+- One process at concurrency 1 already handles ≈ 100 short jobs/s, against a need of a few audits per property per day.
+
+### 33.6 Heavy reports: per-process slot (MEASURED)
+
+`HEAVY_REPORT_KEYS` covers the six reports that read 0.5–3.1 M rows over their widest range: guest-ledger, ledger-roll-forward, cancellations, arrivals, departures and revenue-by-code. They run at most `REPORT_HEAVY_CONCURRENCY` at a time per process. Others wait up to `REPORT_HEAVY_WAIT_MS` (30 s), then get 429 `REPORTS_BUSY` with `Retry-After: 5`.
+
+The test: 4 users exporting the 366-day guest ledger back to back, during the 16-user mix (45 s). Runs were alternated, because the host's baseline varied between 84 and 138 req/s from run to run.
+
+| Limit           | Runs | Mix throughput vs its own baseline | Mix p95 vs baseline | PG CPU with exports | Active conns avg | Exports in 45 s (p50 each) |
+| --------------- | ---- | ---------------------------------- | ------------------- | ------------------- | ---------------- | -------------------------- |
+| none (16)       | 5    | −41 % (0.44–0.79)                  | × 2.0               | ≈ 460 %             | 13.0             | 18 (8.8–18.0 s)            |
+| 2               | 2    | −35 % (0.62–0.67)                  | × 1.6               | ≈ 430 %             | 8.3              | 15 (13.1–15.7 s)           |
+| **1 (default)** | 3    | **−21 %** (0.67–0.94)              | **× 1.3**           | **≈ 370 %**         | **5.8**          | 11 (16.3–18.3 s)           |
+
+- One slot halves what four heavy exporters take from everyone else.
+- The price: the exporters themselves wait their turn (p50 per export ≈ 11.8 → 17.6 s, +50 %), and one that waits longer than 30 s gets 429 (1 of 35 requests in these runs).
+- Two slots were no better than no limit within the noise.
+- The limit is per process: N instances allow N at once.
+
+### 33.7 Safety (integration tests `tests/integration/background-jobs.test.ts`, 15 tests; `night-audit.test.ts` updated; unit `jobs.policy.test.ts`, `semaphore.test.ts`)
+
+| Requirement                       | Covered by                                                                                                                                                                                                                                                                                                               |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Concurrent workers, no duplicates | 3 workers drain one audit: exactly 1 attempt, 1 statistics row; throughput runs: 0 of 4,000 re-executed                                                                                                                                                                                                                  |
+| Worker / instance crash           | A claimed job whose lease expires is reclaimed (`WORKER_LOST`, retry due in 2.5–5 s) and completed by the next worker (attempt 2). Browser QA: a worker process killed mid-audit (§33.9)                                                                                                                                 |
+| Late worker after a takeover      | Its commit, `finishJob` and failure record are all refused (`LeaseLostError`, 0 rows); the run stays untouched                                                                                                                                                                                                           |
+| Database disconnect               | A commit that loses its connection (`57P01`) leaves nothing (no statistics, date still IN_AUDIT, run RUNNING); the job retries and completes. Classifier tested separately                                                                                                                                               |
+| Attempts used up                  | After 3 lost leases the job is FAILED, the run FAILED (`JOB_FAILED`) and the date OPEN, with nothing posted                                                                                                                                                                                                              |
+| Duplicate delivery                | A finished job delivered again runs once more, finds the run COMPLETED and changes nothing (same date, ledger and statistics)                                                                                                                                                                                            |
+| Idempotent start                  | The same Idempotency-Key twice: one run, one job                                                                                                                                                                                                                                                                         |
+| Retry / backoff / final failure   | A failing handler is retried after 2.5–5 s and succeeds on attempt 2; one that keeps failing ends FAILED with its compensation called once; `JobFailure` is not retried; unknown kinds are not claimed                                                                                                                   |
+| 409 / 422 preserved               | Two simultaneous starts: one 202, one 409; a start during a commit gets 409 `BUSINESS_DATE_CHANGED`; the next date gets 422 `DATE_AHEAD`; postings during the roll get 423                                                                                                                                               |
+| Cancellation                      | A queued audit is cancelled at once (`CANCELLED`) and never runs; a held one is refused (409 `NIGHT_AUDIT_IN_PROGRESS`) until its lease expires                                                                                                                                                                          |
+| Authorization and isolation       | The job resource answers only its starter (another user at the same property, another organization, an unknown id: 404); no payload, reason, user agent, worker or lease in the body. The starter's permission is re-checked at execution (`PERMISSION_REVOKED`). A starter who lost the property no longer sees the job |
+| Repeated polling                  | 20 concurrent polls: all 200, unchanged state                                                                                                                                                                                                                                                                            |
+
+### 33.8 Readiness and the folio balance check (MEASURED; not changed in this phase)
+
+The readiness view and Phase B both run the night-audit checks. On the benchmark data, `findUnbalancedFolios` takes 12.0–22.7 s warm and over 30 s cold. That cold case is the statement timeout `57014`: readiness answers 500, and an audit started then fails at its checks. The rule re-sums the ledger of every folio that is not CLOSED, and 200,000 SETTLED folios qualify (one index probe each, ≈ 240 k buffer reads).
+
+- **PROPOSED:** compute the ledger sums in one aggregate pass. Measured on the clone: 5.4–7.0 s → 1.7–2.1 s warm, same rows.
+- Alternatively, restrict the candidates to folios changed since the last closed date. This changes the rule (B4), so it needs a decision.
+- Browser QA ran with the statement timeout raised to 120 s for this reason.
+
+### 33.9 Browser QA (production build, local TLS proxy, headless Chrome over CDP, benchmark clone; separate worker processes with a 15 s lease)
+
+Setup: the clone's SDX departures were settled and checked out through the API so its audit can complete; SMR still fails its departure check. Bench user 205 is General Manager at SDX and SMR; 206 is Front Desk Agent at SMR only; 207 is Housekeeper at SDX. The statement timeout was raised to 120 s for this server because of §33.8.
+
+| Scenario                           | Result                                                                                                                                                                                                                                                                          |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Start (SDX, from the dialog)       | The run page opened 0.6 s after submitting: "In progress…", then "Running the checks…" (job RUNNING, stage CHECKS).                                                                                                                                                             |
+| Refresh while running              | After a reload the page showed the same live state and kept polling (2 polls in 4 s).                                                                                                                                                                                           |
+| Completion                         | COMPLETED with the summary (70 rooms, 70 nights, 60 no-shows, 256 tasks) and every step. The header's business date moved to the next date without a reload. Polling stopped (0 requests in 6 s). The job resource showed SUCCEEDED with `result.runId`.                        |
+| Blocking checks                    | On SMR the dialog's Run button stays disabled; the start was then sent as another session would (API from the page).                                                                                                                                                            |
+| 409 / 422                          | A second start while SMR ran: 409 `NIGHT_AUDIT_RUNNING`. A start on SDX after it closed today's date: 422 `DATE_AHEAD`.                                                                                                                                                         |
+| Sign out and back in while running | Signing out ended the session (the run API answered 401). After signing in again, the run's URL showed the run still RUNNING, then FAILED.                                                                                                                                      |
+| Failure                            | FAILED, `PRE_CHECK_FAILED`: "Blocking checks: Departures … Nothing was posted and the business date is still open", with the failed step listing the due-outs.                                                                                                                  |
+| Worker crash and retry             | The worker process running the checks was killed. 12 s later (15 s lease) the next worker had reclaimed the job. The page read "The job stopped responding; it will be retried automatically. Next attempt at 16:47 (1 of 3 used)", with Cancel audit available. Attempt 2 ran. |
+| Retry outcome                      | Attempt 2 ended FAILED `57014` after 124 s: the §33.8 balance check timed out. Likely it was slowed by the killed worker's query, which PostgreSQL keeps running until it finishes or times out (not verified). The run reopened the date, with nothing posted.                 |
+| Unauthorized                       | The agent (no `nightaudit:read`) saw "Access denied" on the run page; the run API answered 403; the job resource answered 404.                                                                                                                                                  |
+| Multi-property isolation           | The agent opened an SDX run: "You do not have access to this property"; the API answered 403 and the SDX job 404. The SDX housekeeper also got 404 for the SDX job (not its starter).                                                                                           |
+| Console                            | Network errors only from the deliberate 401/403/404/409/422 calls. One React hydration error (#418) on the first page load after login. It was not reproduced on a re-run of login and both night-audit pages, and is not in a component changed here.                          |
+
+### 33.10 Remaining
+
+- **The night-audit checks** (§33.8) are now the longest part of an audit and make readiness a slow synchronous GET.
+- **Night-audit Phase C** runs as one transaction of up to 300 s (≈ 15 s for 1,000 rooms). It still blocks postings at its property while it runs, by design.
+- **Heavy reports** remain synchronous and per-process limited. With many instances, or exports beyond 20,000 rows, move them to jobs with stored files. **PROPOSED**; not needed at the measured sizes.
+- **Arrivals and departures** read ≈ 850 k rows before refusing an over-limit range: a count-first guard would refuse in milliseconds. **PROPOSED.**
+- **The queue** polls each worker every 5 s when idle (one indexed query). With hundreds of worker processes, raise `JOB_POLL_INTERVAL_MS`: LISTEN wakes them anyway.
+- **A killed worker's query** keeps running on the database until it ends or times out. `client_connection_check_interval` (PostgreSQL 14+) on the runtime role would cancel it soon after the client is gone. **PROPOSED**, not measured.
+- **Not claimed:** 100,000 requests per second.

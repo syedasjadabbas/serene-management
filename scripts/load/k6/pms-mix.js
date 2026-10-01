@@ -16,7 +16,9 @@
 //   ONLY            run a single request class (per-endpoint baseline); besides the MIX
 //                   classes: healthLive, publicPage, staticAsset, pageFrontDesk, the global
 //                   search sources (searchFolios, searchAccounts, searchGroups,
-//                   searchMaintenance) and globalSearch (all six sources in parallel)
+//                   searchMaintenance), globalSearch (the former six requests of one
+//                   keystroke, in parallel) and unifiedSearch / unifiedSearchOrg (one request);
+//                   anonymous: loginFail, loginOk (needs BENCH_PASSWORD), passwordReset
 //   MODE=vus        closed model instead: VUS users back to back for DURATION
 //   MIX             JSON object of weights overriding the default mix, e.g. '{"me":1}'
 //   SUMMARY         path of the JSON summary written at the end
@@ -108,9 +110,33 @@ function scenario() {
 // the summary only when a threshold references them; these thresholds never fail.
 const thresholds = {
   "http_req_duration{scenario:pms}": ["max>=0"],
+  // One iteration = one user action; for globalSearch, one keystroke (all its requests).
+  "iteration_duration{scenario:pms}": ["max>=0"],
   "http_reqs{scenario:pms}": ["count>=0"],
   "http_req_failed{scenario:pms}": ["rate>=0"],
 };
+for (const source of [
+  "reservationSearch",
+  "guestSearch",
+  "searchFolios",
+  "searchAccounts",
+  "searchGroups",
+  "searchMaintenance",
+]) {
+  thresholds[`http_req_duration{source:${source}}`] = ["max>=0"];
+}
+for (const type of [
+  "reservations",
+  "guests",
+  "rooms",
+  "folios",
+  "companies",
+  "groups",
+  "maintenance",
+  "ratePlans",
+]) {
+  thresholds[`server_search_type_ms{type:${type}}`] = ["max>=0"];
+}
 for (const [name] of classes) {
   thresholds[`http_req_duration{name:${name}}`] = ["max>=0"];
   thresholds[`http_reqs{name:${name}}`] = ["count>=0"];
@@ -135,6 +161,10 @@ const bodyBytes = new Trend("response_bytes");
 // Present only when the server runs with SERVER_TIMING=1.
 const serverAuth = new Trend("server_auth_ms", true);
 const serverTotal = new Trend("server_total_ms", true);
+const serverSearchType = new Trend("server_search_type_ms", true);
+// Pool usage per request (db-acquire): waiting for connections, and new connections opened.
+const serverDbWait = new Trend("server_db_wait_ms", true);
+const serverDbOpened = new Counter("server_db_opened");
 
 function ipFor(index) {
   return `10.77.${Math.floor(index / 250)}.${(index % 250) + 1}`;
@@ -187,6 +217,8 @@ export function setup() {
   return { users, properties, guests, staticAsset: asset ? asset[0] : "/favicon.ico" };
 }
 
+// SEARCH_TERM fixes the term (e.g. a broad "al"); otherwise terms rotate.
+const FIXED_TERM = __ENV.SEARCH_TERM || null;
 const SEARCH_TERMS = [
   "khan",
   "ahmed",
@@ -210,7 +242,7 @@ function addDays(date, days) {
 function requestFor(name, data, n) {
   const p = pick(data.properties, n);
   const base = `${BASE}/api/v1/properties/${p.id}`;
-  const term = pick(SEARCH_TERMS, n);
+  const term = FIXED_TERM || pick(SEARCH_TERMS, n);
   switch (name) {
     case "healthLive":
       return ["GET", `${BASE}/api/health/live`];
@@ -220,6 +252,31 @@ function requestFor(name, data, n) {
       return ["GET", `${BASE}${data.staticAsset}`];
     case "pageFrontDesk":
       return ["GET", `${BASE}/${p.code}/front-desk`];
+    // Sign-in protection (scalability phase 2): anonymous, each from its own address.
+    case "loginFail":
+      return [
+        "POST",
+        `${BASE}/api/v1/auth/login`,
+        JSON.stringify({ email: `nobody.${n}@bench.test`, password: "Wrong-password-123" }),
+      ];
+    case "loginOk":
+      return [
+        "POST",
+        `${BASE}/api/v1/auth/login`,
+        JSON.stringify({
+          email: `bench.user${String((n % USERS) + 1).padStart(4, "0")}@serene.test`,
+          password: __ENV.BENCH_PASSWORD,
+        }),
+      ];
+    case "passwordReset":
+      return [
+        "POST",
+        `${BASE}/api/v1/auth/password/reset`,
+        JSON.stringify({
+          token: `invalid-token-${n}-abcdefghijklmnopqrstuvwxyz`,
+          newPassword: "New-password-12345-long",
+        }),
+      ];
     case "businessDate":
       return ["GET", `${base}/business-date`];
     case "me":
@@ -264,6 +321,11 @@ function requestFor(name, data, n) {
       return ["GET", `${base}/groups?limit=5&q=${term}`];
     case "searchMaintenance":
       return ["GET", `${base}/maintenance?view=all&limit=5&q=${term}`];
+    // Unified global search (scalability phase 2): one request per keystroke.
+    case "unifiedSearch":
+      return ["GET", `${base}/search?q=${term}`];
+    case "unifiedSearchOrg":
+      return ["GET", `${BASE}/api/v1/search?q=${term}`];
     case "folioList":
       return ["GET", `${base}/folios?view=in_house&limit=50`];
     case "folioRead":
@@ -291,6 +353,17 @@ function choose(n) {
   return classes[0][0];
 }
 
+/**
+ * Anonymous classes and the statuses that count as handled correctly: a failed
+ * sign-in answers 401, an invalid reset token 400 or 401. 429 means a limit
+ * refused the request and is counted as a failure.
+ */
+const ANONYMOUS = {
+  loginFail: [401],
+  loginOk: [200],
+  passwordReset: [400, 401],
+};
+
 /** One global-search keystroke (after the debounce): six requests in parallel. */
 const GLOBAL_SEARCH = [
   ["reservationSearch", "GET", (b, t) => `${b}/reservations?limit=5&q=${t}`],
@@ -307,7 +380,7 @@ export default function pmsIteration(data) {
   const user = data.users[n % data.users.length];
   if (name === "globalSearch") {
     const p = pick(data.properties, n);
-    const term = pick(SEARCH_TERMS, n);
+    const term = FIXED_TERM || pick(SEARCH_TERMS, n);
     const headers = { Cookie: `${COOKIE}=${user.cookie}`, "X-Forwarded-For": user.ip };
     const responses = http.batch(
       GLOBAL_SEARCH.map(([source, method, url]) => ({
@@ -325,13 +398,16 @@ export default function pmsIteration(data) {
   }
   const [method, path, body] = requestFor(name, data, n);
   const url = BASES.length > 1 ? BASES[n % BASES.length] + path.slice(BASE.length) : path;
-  const headers = { Cookie: `${COOKIE}=${user.cookie}`, "X-Forwarded-For": user.ip };
+  const anonymous = ANONYMOUS[name];
+  const headers = anonymous
+    ? { "X-Forwarded-For": ipFor(1000 + (n % 60000)) }
+    : { Cookie: `${COOKIE}=${user.cookie}`, "X-Forwarded-For": user.ip };
   if (method !== "GET") {
     headers["Content-Type"] = "application/json";
     headers.Origin = ORIGIN;
   }
   const res = http.request(method, url, body || null, { headers, tags: { name } });
-  const ok = res.status >= 200 && res.status < 300;
+  const ok = anonymous ? anonymous.includes(res.status) : res.status >= 200 && res.status < 300;
   check(res, { "2xx": () => ok }, { name });
   if (!ok) statusCount.add(1, { name, status: String(res.status) });
   bodyBytes.add(res.body ? res.body.length : 0, { name });
@@ -341,6 +417,15 @@ export default function pmsIteration(data) {
     const total = /total;dur=([\d.]+)/.exec(timing);
     if (auth) serverAuth.add(Number(auth[1]), { name });
     if (total) serverTotal.add(Number(total[1]), { name });
+    const acquire = /db-acquire;dur=([\d.]+);desc="(\d+)\/(\d+)"/.exec(timing);
+    if (acquire) {
+      serverDbWait.add(Number(acquire[1]), { name });
+      if (Number(acquire[3]) > 0) serverDbOpened.add(Number(acquire[3]), { name });
+    }
+    // Unified search: each type's time on the server.
+    for (const [, type, ms] of timing.matchAll(/search-(\w+);dur=([\d.]+)/g)) {
+      serverSearchType.add(Number(ms), { type });
+    }
   }
 }
 

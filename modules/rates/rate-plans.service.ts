@@ -20,6 +20,7 @@ import {
   findPlanLinks,
   findRatePlanDetail,
   findRatePlanList,
+  findRatePlansForSearch,
   findRatePlansForStay,
   findRateReferenceData,
   findSeasonAmounts,
@@ -85,6 +86,11 @@ function price(value: string | null | undefined, minorUnits: number, field: stri
 const dateOrNull = (value: string | null | undefined) => (value ? fromDateOnly(value) : null);
 
 // --- Queries ------------------------------------------------------------------------
+
+/** Rate plans in the list's order with their display fields only (global search). */
+export function listRatePlansForSearch(ctx: PropertyContext) {
+  return findRatePlansForSearch(prisma, ctx.propertyId);
+}
 
 export async function listRatePlans(ctx: PropertyContext): Promise<RatePlanListItem[]> {
   const rows = await findRatePlanList(prisma, ctx.propertyId);

@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 import { z } from "zod";
 import { ACCESS_COOKIE } from "@/lib/auth/cookies";
+import { type PoolUsage, withPoolUsage } from "@/lib/db/pool-metrics";
 import { verifyAccessToken } from "@/lib/auth/tokens";
 import { serverEnv } from "@/lib/env";
 import { type Permission, isHighRisk } from "@/lib/permissions/catalog";
@@ -192,12 +193,39 @@ const GLOBAL_WRITE_LIMIT: RateLimitRule = { name: "api.write.ip", limit: 300, wi
 
 /** Authentication time per request, for the opt-in Server-Timing header. */
 const authTimings = new WeakMap<NextRequest, number>();
+/** Further named timings a handler reports (e.g. per search type). */
+const extraTimings = new WeakMap<NextRequest, string[]>();
 
-function serverTiming(request: NextRequest, started: number): string | null {
-  if (serverEnv().SERVER_TIMING !== "1") return null;
+/** Whether handlers should measure parts of their work for Server-Timing. */
+export function serverTimingEnabled(): boolean {
+  return serverEnv().SERVER_TIMING === "1";
+}
+
+/** Adds `name;dur=…` to this request's opt-in Server-Timing header (no-op when off). */
+export function addServerTiming(request: NextRequest, name: string, ms: number): void {
+  if (!serverTimingEnabled() || !/^[A-Za-z][A-Za-z0-9_-]{0,39}$/.test(name)) return;
+  const list = extraTimings.get(request) ?? [];
+  list.push(`${name};dur=${ms.toFixed(1)}`);
+  extraTimings.set(request, list);
+}
+
+function serverTiming(
+  request: NextRequest,
+  started: number,
+  pool: PoolUsage | null,
+): string | null {
+  if (!serverTimingEnabled()) return null;
   const total = performance.now() - started;
   const auth = authTimings.get(request);
-  return `${auth === undefined ? "" : `auth;dur=${auth.toFixed(1)}, `}total;dur=${total.toFixed(1)}`;
+  return [
+    ...(auth === undefined ? [] : [`auth;dur=${auth.toFixed(1)}`]),
+    ...(extraTimings.get(request) ?? []),
+    // Waiting for pooled connections; desc: checkouts / newly opened connections.
+    ...(pool
+      ? [`db-acquire;dur=${pool.waitMs.toFixed(1)};desc="${pool.acquisitions}/${pool.opened}"`]
+      : []),
+    `total;dur=${total.toFixed(1)}`,
+  ].join(", ");
 }
 
 async function run(
@@ -207,13 +235,18 @@ async function run(
 ): Promise<Response> {
   const started = performance.now();
   const meta = requestMeta(request);
-  try {
+  const pool: PoolUsage | null = serverTimingEnabled()
+    ? { waitMs: 0, acquisitions: 0, opened: 0 }
+    : null;
+  const handle = async () => {
     if (MUTATING.has(request.method)) {
       assertSameOrigin(request);
       await enforceRateLimit(GLOBAL_WRITE_LIMIT, rateLimitKey(meta));
     }
-
-    const result = await execute(meta);
+    return execute(meta);
+  };
+  try {
+    const result = pool ? await withPoolUsage(pool, handle) : await handle();
     const response =
       result instanceof Response
         ? result
@@ -221,8 +254,10 @@ async function run(
           ? ok(result.data, result.meta, { status: options.status ?? 200 })
           : ok(result, undefined, { status: options.status ?? 200 });
     response.headers.set("x-request-id", meta.requestId);
-    response.headers.set("cache-control", "no-store");
-    const timing = serverTiming(request, started);
+    // Event streams keep no-transform: compression would buffer them.
+    const eventStream = response.headers.get("content-type")?.startsWith("text/event-stream");
+    response.headers.set("cache-control", eventStream ? "no-store, no-transform" : "no-store");
+    const timing = serverTiming(request, started, pool);
     if (timing) response.headers.set("server-timing", timing);
     return response;
   } catch (error) {

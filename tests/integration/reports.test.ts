@@ -24,6 +24,7 @@ import {
   createUser,
 } from "./support/fixtures";
 import { type CookieJar, call, loginAs } from "./support/http";
+import { drainJobs } from "./support/jobs";
 
 /**
  * Reports (Phase 8): figures against hand-computed ledger totals, closed
@@ -245,7 +246,13 @@ beforeAll(async () => {
   noShowRoom = (await book()).id;
 
   const audit = await post(startRoute as Handler, fom, "/night-audits", {}, { reason: "Close" });
-  if (audit.body.data?.status !== "COMPLETED") throw new Error(JSON.stringify(audit.body));
+  if (audit.status !== 202) throw new Error(JSON.stringify(audit.body));
+  await drainJobs(A);
+  const closed = await prisma.nightAuditRun.findUniqueOrThrow({
+    where: { id: audit.body.data.id },
+    select: { status: true, errorMessage: true },
+  });
+  if (closed.status !== "COMPLETED") throw new Error(JSON.stringify(closed));
 });
 
 describe("access", () => {

@@ -344,6 +344,32 @@ export function findRoomPicker(tx: Tx, propertyId: string) {
   });
 }
 
+export interface RoomSearchRow {
+  id: string;
+  number: string;
+  roomTypeCode: string;
+  floorName: string | null;
+  frontOfficeStatus: string;
+  housekeepingStatus: string;
+}
+
+/**
+ * The room picker's rooms, in its order, with floor and statuses, for global
+ * search: one statement (per search keystroke), where relation selects would
+ * send one per relation.
+ */
+export function findRoomsForSearch(tx: Tx, propertyId: string) {
+  return tx.$queryRaw<RoomSearchRow[]>`
+    SELECT r."id", r."number", rt."code" AS "roomTypeCode", f."name" AS "floorName",
+           r."front_office_status"::text AS "frontOfficeStatus",
+           r."housekeeping_status"::text AS "housekeepingStatus"
+    FROM "rooms" r
+    JOIN "room_types" rt ON rt."property_id" = r."property_id" AND rt."id" = r."room_type_id"
+    LEFT JOIN "floors" f ON f."property_id" = r."property_id" AND f."id" = r."floor_id"
+    WHERE r."property_id" = ${propertyId}::uuid AND r."status" = 'ACTIVE' AND NOT rt."is_pseudo"
+    ORDER BY r."sort_order", r."number"`;
+}
+
 export function findBoardReferenceData(tx: Tx, propertyId: string) {
   return Promise.all([
     tx.floor.findMany({

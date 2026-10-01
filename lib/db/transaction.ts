@@ -88,3 +88,35 @@ export function databaseErrorCode(error: unknown): string | undefined {
   }
   return undefined;
 }
+
+/** Prisma's codes for an unreachable or lost database, and a pool that had no connection to give. */
+const CONNECTION_PRISMA_CODES = new Set(["P1001", "P1002", "P1008", "P1017", "P2024"]);
+const CONNECTION_MESSAGES =
+  /connection terminated|connection (?:was )?closed|ECONNRESET|ECONNREFUSED|server closed the connection|Connection lost/i;
+
+/**
+ * Whether an error means the database was unreachable or the connection was
+ * lost (not that the work was wrong): SQLSTATE class 08, the server shutting
+ * down or terminating the session (57P01-57P03), too many connections
+ * (53300), or the driver's own connection errors. Background jobs retry such
+ * failures instead of recording them as the outcome of the work.
+ */
+export function isConnectionError(error: unknown): boolean {
+  const sqlState = databaseErrorCode(error);
+  if (
+    sqlState &&
+    (sqlState.startsWith("08") || ["57P01", "57P02", "57P03", "53300"].includes(sqlState))
+  ) {
+    return true;
+  }
+  let current: unknown = error;
+  for (let depth = 0; depth < 5 && current && typeof current === "object"; depth++) {
+    const candidate = current as { code?: unknown; message?: unknown; cause?: unknown };
+    if (typeof candidate.code === "string" && CONNECTION_PRISMA_CODES.has(candidate.code))
+      return true;
+    if (typeof candidate.message === "string" && CONNECTION_MESSAGES.test(candidate.message))
+      return true;
+    current = candidate.cause;
+  }
+  return false;
+}

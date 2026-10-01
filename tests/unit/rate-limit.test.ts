@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { AppError } from "@/lib/http/errors";
 import {
   MemoryRateLimitStore,
   type RateLimitStore,
@@ -11,6 +12,12 @@ import {
 const rule = { name: "test.write", limit: 2, windowMs: 60_000 };
 
 describe("rate limiting (G11)", () => {
+  beforeEach(() => {
+    // The unit tests exercise the rules on the in-memory store; the shared
+    // PostgreSQL store is covered by tests/integration/rate-limit-store.test.ts.
+    setRateLimitStore(new MemoryRateLimitStore());
+  });
+
   afterEach(async () => {
     setRateLimitStore(new MemoryRateLimitStore());
     await resetRateLimits();
@@ -58,5 +65,36 @@ describe("rate limiting (G11)", () => {
     setRateLimitStore(store);
     await consumeRateLimit(rule, "user:x");
     expect(seen).toEqual(["test.write:user:x"]);
+  });
+
+  describe("when the store cannot be reached (scalability phase 2)", () => {
+    const broken: RateLimitStore = {
+      async hit() {
+        throw new Error("connect ECONNREFUSED");
+      },
+      async clear() {},
+    };
+
+    it("refuses requests under a fail-closed (security) rule", async () => {
+      setRateLimitStore(broken);
+      const login = { ...rule, name: "test.login", onStoreFailure: "deny" as const };
+      const error = await consumeRateLimit(login, "email:a@b.test").catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(AppError);
+      expect((error as AppError).code).toBe("INTERNAL_ERROR");
+      // Nothing about the store reaches the client.
+      expect((error as AppError).message).not.toMatch(/ECONNREFUSED|rate|store/i);
+    });
+
+    it("serves requests under a fail-open rule (the default)", async () => {
+      setRateLimitStore(broken);
+      expect(await consumeRateLimit(rule, "user:x")).toEqual({
+        allowed: true,
+        retryAfterSeconds: 0,
+      });
+      expect(await consumeRateLimit({ ...rule, onStoreFailure: "allow" }, "user:x")).toEqual({
+        allowed: true,
+        retryAfterSeconds: 0,
+      });
+    });
   });
 });

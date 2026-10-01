@@ -25,7 +25,12 @@ import {
   ledgerBalancesForDate,
   sumMoneyForDate,
 } from "@/modules/night-audit/night-audit.repository";
-import { recoverRun, startNightAudit } from "@/modules/night-audit/night-audit.service";
+import {
+  type NightAuditHooks,
+  getRun,
+  recoverRun,
+  startNightAudit,
+} from "@/modules/night-audit/night-audit.service";
 import { stayNights } from "@/modules/reservations/reservations.policy";
 import {
   type FixtureOrg,
@@ -37,11 +42,14 @@ import {
   createUser,
 } from "./support/fixtures";
 import { type CookieJar, call, loginAs } from "./support/http";
+import { drainJobs } from "./support/jobs";
 
 /**
  * Night audit (Phase 8): checks, the single commit transaction, failure at
  * every step, retries, concurrency with postings, recovery, statistics and
- * the business-date roll.
+ * the business-date roll. Since scalability phase 6 the request starts the
+ * run (202 RUNNING) and a background job executes it: `drainJobs` plays the
+ * worker. Queue mechanics are covered by background-jobs.test.ts.
  */
 
 type Inventory = Awaited<ReturnType<typeof buildFixtureInventory>>;
@@ -99,6 +107,48 @@ const start = (
   k: string | null = key(),
   reason = "End of day",
 ) => post(startRoute as Handler, jar, propertyId, "/night-audits", {}, { reason }, k);
+
+/** Starts through the API, lets the worker run the job, and reads the finished run. */
+async function audit(
+  jar: CookieJar,
+  propertyId: string,
+  k: string | null = key(),
+  reason = "End of day",
+) {
+  const started = await start(jar, propertyId, k, reason);
+  if (started.status !== 202) return { started, run: null };
+  expect(started.body.data.status).toBe("RUNNING");
+  await drainJobs(propertyId);
+  const run = await get(
+    runRoute as Handler,
+    jar,
+    propertyId,
+    `/night-audits/${started.body.data.id}`,
+    {
+      runId: started.body.data.id,
+    },
+  );
+  expect(run.status).toBe(200);
+  return { started, run: run.body.data };
+}
+
+/** The same through the service, with an optional failure injected into the worker's commit. */
+async function serviceAudit(
+  ctx: PropertyContext,
+  reason: string,
+  hash: string,
+  options: { now?: Date; hooks?: NightAuditHooks } = {},
+) {
+  const started = await startNightAudit(
+    ctx,
+    { reason },
+    { key: key(), route: "POST /test", requestHash: hash.repeat(64) },
+    { now: options.now },
+  );
+  expect(started.status).toBe("RUNNING");
+  await drainJobs(ctx.propertyId, options.hooks);
+  return getRun(ctx, started.id);
+}
 
 function propertyCtx(propertyId: string, timezone: string, businessDate: string): PropertyContext {
   return {
@@ -319,19 +369,19 @@ describe("blocking checks", () => {
     expect(ready.body.data.canStart).toBe(false);
 
     const before = await ledgerCount(A);
-    const r = await start(fom, A);
-    expect(r.status).toBe(201);
-    expect(r.body.data.status).toBe("FAILED");
-    expect(r.body.data.errorCode).toBe("PRE_CHECK_FAILED");
+    const { started, run } = await audit(fom, A);
+    expect(started.status).toBe(202);
+    expect(started.body.data.job.status).toBe("QUEUED");
+    expect(run.status).toBe("FAILED");
+    expect(run.errorCode).toBe("PRE_CHECK_FAILED");
+    expect(run.job.status).toBe("SUCCEEDED");
     expect(await ledgerCount(A)).toBe(before);
     expect(await currentDate(A)).toEqual({ date: DA, status: "OPEN" });
-    const failedStep = r.body.data.steps.find(
-      (s: { code: string }) => s.code === "VALIDATE_DEPARTURES",
-    );
+    const failedStep = run.steps.find((s: { code: string }) => s.code === "VALIDATE_DEPARTURES");
     expect(failedStep.status).toBe("FAILED");
     // Commit steps never ran.
     expect(
-      r.body.data.steps
+      run.steps
         .filter((s: { code: string; status: string }) =>
           (COMMIT_STEPS as readonly string[]).includes(s.code),
         )
@@ -406,18 +456,13 @@ describe("failure at every commit step (property B)", () => {
     let attempt = 0;
     for (const code of COMMIT_STEPS) {
       attempt += 1;
-      const run = await startNightAudit(
-        ctx,
-        { reason: `Inject at ${code}` },
-        { key: key(), route: "POST /test", requestHash: "b".repeat(64) },
-        {
-          hooks: {
-            beforeStep: (step) => {
-              if (step === code) throw new Error(`injected at ${code}`);
-            },
+      const run = await serviceAudit(ctx, `Inject at ${code}`, "b", {
+        hooks: {
+          beforeStep: (step) => {
+            if (step === code) throw new Error(`injected at ${code}`);
           },
         },
-      );
+      });
       expect(run.status).toBe("FAILED");
       expect(run.attempt).toBe(attempt);
       expect(run.steps.find((s) => s.code === code)!.status).toBe("FAILED");
@@ -435,15 +480,7 @@ describe("failure at every commit step (property B)", () => {
       expect(posted).toBe(0);
     }
     // A clean retry succeeds and posts exactly once.
-    const run = await startNightAudit(
-      ctx,
-      { reason: "Retry" },
-      {
-        key: key(),
-        route: "POST /test",
-        requestHash: "c".repeat(64),
-      },
-    );
+    const run = await serviceAudit(ctx, "Retry", "c");
     expect(run.status).toBe("COMPLETED");
     expect(run.attempt).toBe(COMMIT_STEPS.length + 1);
     expect(await currentDate(B)).toEqual({ date: addDays(DB, 1), status: "OPEN" });
@@ -482,17 +519,27 @@ describe("concurrency", () => {
   it("lets exactly one of two simultaneous starts run (property C)", async () => {
     const date = (await currentDate(C)).date;
     const [first, second] = await Promise.all([start(fom, C), start(fom, C)]);
-    const statuses = [first.status, second.status].sort();
-    expect(statuses).toEqual([201, 409]);
-    const loser = first.status === 409 ? first : second;
-    // Running (it overlapped the first run's check phase) or already closed
-    // (it waited for the first run's commit): never a second run.
-    expect(["NIGHT_AUDIT_RUNNING", "BUSINESS_DATE_CHANGED"]).toContain(
-      loser.body.error.details.reason,
-    );
-    const winner = first.status === 201 ? first : second;
-    expect(winner.body.data.status).toBe("COMPLETED");
+    const loser = first.status === 202 ? second : first;
+    expect([first.status, second.status].filter((s) => s === 202)).toHaveLength(1);
+    // Running (the first start holds the date IN_AUDIT until its job ends),
+    // already closed, or the next date, which the calendar has not reached:
+    // never a second run.
+    expect(
+      (loser.status === 409 &&
+        ["NIGHT_AUDIT_RUNNING", "BUSINESS_DATE_CHANGED"].includes(
+          loser.body.error.details.reason,
+        )) ||
+        (loser.status === 422 && loser.body.error.details.reason === "DATE_AHEAD"),
+    ).toBe(true);
+    const winner = first.status === 202 ? first : second;
+    expect(winner.body.data.status).toBe("RUNNING");
     expect(winner.body.data.businessDate).toBe(date);
+    // (The start route allows 10 starts a minute per user; this file stays below.)
+    expect(await drainJobs(C)).toBe(1);
+    const done = await get(runRoute as Handler, fom, C, `/night-audits/${winner.body.data.id}`, {
+      runId: winner.body.data.id,
+    });
+    expect(done.body.data.status).toBe("COMPLETED");
     expect(await currentDate(C)).toEqual({ date: addDays(date, 1), status: "OPEN" });
     expect(await prisma.nightAuditRun.count({ where: { propertyId: C } })).toBe(1);
     // The next date cannot be closed before the hotel's calendar reaches it.
@@ -505,22 +552,17 @@ describe("concurrency", () => {
     const date = (await currentDate(B)).date;
     const ctx = propertyCtx(B, "Asia/Dubai", date);
     let waiting: ReturnType<typeof start> | undefined;
-    const run = await startNightAudit(
-      ctx,
-      { reason: "First" },
-      { key: key(), route: "POST /test", requestHash: "f".repeat(64) },
-      {
-        now: later(),
-        hooks: {
-          beforeStep: async (step) => {
-            if (step !== "POST_ROOM_AND_TAX") return;
-            // The second start queues behind the commit's lock on the business date.
-            waiting = start(fom, B);
-            await new Promise((resolve) => setTimeout(resolve, 300));
-          },
+    const run = await serviceAudit(ctx, "First", "f", {
+      now: later(),
+      hooks: {
+        beforeStep: async (step) => {
+          if (step !== "POST_ROOM_AND_TAX") return;
+          // The second start queues behind the commit's lock on the business date.
+          waiting = start(fom, B);
+          await new Promise((resolve) => setTimeout(resolve, 300));
         },
       },
-    );
+    });
     expect(run.status).toBe("COMPLETED");
     const second = await waiting!;
     expect(second.status).toBe(409);
@@ -545,30 +587,25 @@ describe("concurrency", () => {
     const folioId = account.body.data.windows[0].id as string;
     const ctx = propertyCtx(B, "Asia/Dubai", date);
     let waiting: ReturnType<typeof post> | undefined;
-    const run = await startNightAudit(
-      ctx,
-      { reason: "Roll race" },
-      { key: key(), route: "POST /test", requestHash: "d".repeat(64) },
-      {
-        now: later(),
-        hooks: {
-          beforeStep: async (step) => {
-            if (step !== "CLOSE_DATE") return;
-            // The charge queues behind the audit's lock on the business date.
-            waiting = post(
-              chargesRoute,
-              fom,
-              B,
-              `/folios/${folioId}/charges`,
-              { folioId },
-              { transactionCodeId: invB.chargeCodes["2000"]!, unitAmount: "10.00" },
-              key(),
-            );
-            await new Promise((resolve) => setTimeout(resolve, 300));
-          },
+    const run = await serviceAudit(ctx, "Roll race", "d", {
+      now: later(),
+      hooks: {
+        beforeStep: async (step) => {
+          if (step !== "CLOSE_DATE") return;
+          // The charge queues behind the audit's lock on the business date.
+          waiting = post(
+            chargesRoute,
+            fom,
+            B,
+            `/folios/${folioId}/charges`,
+            { folioId },
+            { transactionCodeId: invB.chargeCodes["2000"]!, unitAmount: "10.00" },
+            key(),
+          );
+          await new Promise((resolve) => setTimeout(resolve, 300));
         },
       },
-    );
+    });
     expect(run.status).toBe("COMPLETED");
     const r = await waiting!;
     expect(r.status).toBe(423);
@@ -660,12 +697,12 @@ describe("closing the day (property A)", () => {
     const guaranteed = await book(A, DA, addDays(DA, 2), "GTD");
     const tentative = await book(A, DA, addDays(DA, 2), "TENT");
     const runKey = key();
-    const r = await start(fom, A, runKey, "End of day");
-    if (r.status !== 201 || r.body.data.status !== "COMPLETED") {
-      throw new Error(`Audit failed: ${JSON.stringify(r.body)}`);
+    const { started, run } = await audit(fom, A, runKey, "End of day");
+    if (started.status !== 202 || run?.status !== "COMPLETED") {
+      throw new Error(`Audit failed: ${JSON.stringify(run ?? started.body)}`);
     }
     result = {
-      runId: r.body.data.id,
+      runId: run.id,
       inHouse: inHouseGuest,
       earlier,
       guaranteed,
@@ -885,8 +922,11 @@ describe("closing the day (property A)", () => {
 
   it("replays the same request instead of running twice", async () => {
     const r = await start(fom, A, result.runKey, "End of day");
-    expect(r.status).toBe(201);
+    expect(r.status).toBe(202);
     expect(r.body.data.id).toBe(result.runId);
+    expect(r.body.data.status).toBe("COMPLETED");
+    // Nothing new was queued.
+    expect(await drainJobs(A)).toBe(0);
     expect(await currentDate(A)).toEqual({ date: addDays(DA, 1), status: "OPEN" });
   });
 

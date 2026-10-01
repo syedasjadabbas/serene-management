@@ -541,56 +541,83 @@ export function findFolioListPage(
                      AND (SELECT sum(y."balance") FROM "folios" y
                           WHERE y."reservation_room_id" = rr."id") <> 0`
         : Prisma.sql`AND EXISTS (SELECT 1 FROM "folios" x WHERE x."reservation_room_id" = rr."id")`;
-  // Search: guest name words, confirmation number or room number. Each is a
-  // separate candidate set of the property's reservation rooms, united: an OR
-  // across the three tables could use no index, so PostgreSQL sorted every
-  // guest and walked the property's whole history per keystroke of global
-  // search (4-8 s on 400k reservation rooms, docs/SCALABILITY.md §11).
-  const search = options.search
-    ? Prisma.sql`AND rr."id" IN (${Prisma.join(
-        [
-          ...(options.search.tokens.length > 0
-            ? [
-                Prisma.sql`SELECT x."id" FROM "reservation_rooms" x
-                  JOIN "guests" gx ON gx."id" = x."primary_guest_id"
-                  WHERE x."property_id" = ${propertyId}::uuid AND ${Prisma.join(
-                    options.search.tokens.map((t) => Prisma.sql`gx."search_name" LIKE ${`%${t}%`}`),
-                    " AND ",
-                  )}`,
-              ]
-            : []),
-          Prisma.sql`SELECT x."id" FROM "reservation_rooms" x
-            JOIN "reservations" rx ON rx."id" = x."reservation_id"
-            WHERE x."property_id" = ${propertyId}::uuid
-              AND ${confirmationMatchSql(Prisma.sql`rx."confirmation_number"`, options.search.raw)}`,
-          Prisma.sql`SELECT x."id" FROM "reservation_rooms" x
-            JOIN "rooms" mx ON mx."id" = x."room_id"
-            WHERE x."property_id" = ${propertyId}::uuid
-              AND upper(mx."number") = ${options.search.raw.trim().toUpperCase()}`,
-        ],
-        " UNION ",
-      )})`
-    : Prisma.empty;
   const cursor = options.cursor
     ? Prisma.sql`AND (g."search_name", rr."id") > (${options.cursor.v}, ${options.cursor.i}::uuid)`
     : Prisma.empty;
+  const pageSize = options.limit + 1;
+  // Search: guest name words, confirmation number or room number. Each is its
+  // own branch that takes its first page in the list order (guest name, id);
+  // the page is then cut from the union of those. The same rows as filtering
+  // on "name OR confirmation OR room" and cutting once — the first rows of a
+  // union are always among the first rows of its parts — but each branch can
+  // use its index: the name branch walks the matching guests (trigram index)
+  // and their reservation rooms (primary guest index) instead of the whole
+  // property history. An OR across the three tables could use no index
+  // (4-8 s on 400k reservation rooms), and one candidate set joined back still
+  // scanned the property's reservation rooms twice (0.3-1.1 s, SCALABILITY §28).
+  const searchPage = (search: { tokens: string[]; raw: string }) =>
+    Prisma.sql`
+      SELECT DISTINCT u."id", u."search_name" FROM (
+        ${Prisma.join(
+          [
+            ...(search.tokens.length > 0
+              ? [
+                  Prisma.sql`(SELECT rr."id", g."search_name"
+                    FROM "guests" g
+                    JOIN LATERAL (
+                      SELECT rr."id" FROM "reservation_rooms" rr
+                      WHERE rr."primary_guest_id" = g."id" AND rr."property_id" = ${propertyId}::uuid
+                        ${scope}
+                    ) rr ON TRUE
+                    WHERE ${Prisma.join(
+                      search.tokens.map((t) => Prisma.sql`g."search_name" LIKE ${`%${t}%`}`),
+                      " AND ",
+                    )}
+                      ${cursor}
+                    ORDER BY g."search_name", rr."id"
+                    LIMIT ${pageSize})`,
+                ]
+              : []),
+            Prisma.sql`(SELECT rr."id", g."search_name"
+              FROM "reservations" res
+              JOIN "reservation_rooms" rr ON rr."reservation_id" = res."id"
+              JOIN "guests" g ON g."id" = rr."primary_guest_id"
+              WHERE res."property_id" = ${propertyId}::uuid AND rr."property_id" = ${propertyId}::uuid
+                AND ${confirmationMatchSql(Prisma.sql`res."confirmation_number"`, search.raw)}
+                ${scope}
+                ${cursor}
+              ORDER BY g."search_name", rr."id"
+              LIMIT ${pageSize})`,
+            Prisma.sql`(SELECT rr."id", g."search_name"
+              FROM "rooms" rm
+              JOIN "reservation_rooms" rr ON rr."room_id" = rm."id"
+              JOIN "guests" g ON g."id" = rr."primary_guest_id"
+              WHERE rm."property_id" = ${propertyId}::uuid AND rr."property_id" = ${propertyId}::uuid
+                AND upper(rm."number") = ${search.raw.trim().toUpperCase()}
+                ${scope}
+                ${cursor}
+              ORDER BY g."search_name", rr."id"
+              LIMIT ${pageSize})`,
+          ],
+          " UNION ALL ",
+        )}
+      ) u
+      ORDER BY u."search_name", u."id"
+      LIMIT ${pageSize}`;
+  const listPage = Prisma.sql`
+      SELECT rr."id", g."search_name"
+      FROM "reservation_rooms" rr
+      JOIN "guests" g ON g."id" = rr."primary_guest_id"
+      WHERE rr."property_id" = ${propertyId}::uuid
+        ${scope}
+        ${cursor}
+      ORDER BY g."search_name", rr."id"
+      LIMIT ${pageSize}`;
   // Two phases (B5): cut the page of reservation rooms first (keyset order,
   // no aggregation), then total the folios of that page only — instead of
   // grouping every historical reservation room of the property per request.
   return tx.$queryRaw<FolioListSqlRow[]>`
-    WITH page AS (
-      SELECT rr."id", g."search_name"
-      FROM "reservation_rooms" rr
-      JOIN "reservations" res ON res."id" = rr."reservation_id"
-      JOIN "guests" g ON g."id" = rr."primary_guest_id"
-      LEFT JOIN "rooms" rm ON rm."id" = rr."room_id"
-      WHERE rr."property_id" = ${propertyId}::uuid
-        ${scope}
-        ${search}
-        ${cursor}
-      ORDER BY g."search_name", rr."id"
-      LIMIT ${options.limit + 1}
-    )
+    WITH page AS (${options.search ? searchPage(options.search) : listPage})
     SELECT rr."id" AS "reservation_room_id", res."confirmation_number", g."first_name",
            g."last_name", g."search_name", rm."number" AS "room_number", rr."arrival_date",
            rr."departure_date", s."status"::text AS "stay_status",

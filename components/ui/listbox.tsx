@@ -38,14 +38,7 @@ export function highlight(text: string, query: string): ReactNode {
 }
 
 /** True when every word of `query` appears in one of the texts. */
-export function matches(query: string, ...texts: (string | null | undefined)[]): boolean {
-  const haystack = texts.filter(Boolean).join(" ").toLowerCase();
-  return query
-    .toLowerCase()
-    .split(/\s+/)
-    .filter(Boolean)
-    .every((word) => haystack.includes(word));
-}
+export { matches } from "@/lib/utils/text-match";
 
 /**
  * Active-option state and keys for a list of `count` options: ArrowDown /

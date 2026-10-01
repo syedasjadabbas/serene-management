@@ -91,7 +91,10 @@ export async function call<T = any>(
   };
 }
 
-let ipCounter = 0;
+// Rate limits are shared by all test files through PostgreSQL (like instances in
+// production), so each worker starts at a random point of the range: two files
+// running in parallel must not share IP buckets.
+let ipCounter = Math.floor(Math.random() * 60_000);
 /** A fresh documentation-range IP per call site (rate limits are per IP). */
 export function testIp() {
   ipCounter += 1;

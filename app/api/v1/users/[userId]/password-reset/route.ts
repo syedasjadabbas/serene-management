@@ -11,6 +11,11 @@ export const POST = defineSessionRoute({
   params: userParamsSchema,
   body: reasonOnlySchema,
   status: 201,
-  rateLimit: { name: "auth.password.reset.issue", limit: 10, windowMs: 60 * 60_000 },
+  rateLimit: {
+    name: "auth.password.reset.issue",
+    limit: 10,
+    windowMs: 60 * 60_000,
+    onStoreFailure: "deny",
+  },
   handler: ({ ctx, params, body }) => issuePasswordReset(ctx, params.userId, body),
 });

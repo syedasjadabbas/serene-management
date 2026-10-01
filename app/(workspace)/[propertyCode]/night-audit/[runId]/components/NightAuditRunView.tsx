@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import type { Route } from "next";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Alert } from "@/components/ui/Alert";
 import { Badge, type BadgeTone } from "@/components/ui/Badge";
 import { MoonStar } from "lucide-react";
@@ -14,14 +14,23 @@ import { PageSkeleton } from "@/components/ui/PageSkeleton";
 import { TextArea } from "@/components/ui/TextArea";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useProperty } from "@/hooks/useProperty";
+import { useDispatch } from "react-redux";
+import type { AppDispatch } from "@/lib/api/store";
 import {
+  NIGHT_AUDIT_ROLLED_TAGS,
+  nightAuditApi,
   useNightAuditRunQuery,
   useRecoverNightAuditMutation,
 } from "@/lib/api/endpoints/night-audit.api";
 import { toClientApiError } from "@/lib/api/errors";
 import { formatCurrency, formatDateTime } from "@/lib/utils/format";
 import type { StepStatus } from "@/modules/night-audit/night-audit.policy";
-import type { CheckItem, RunStepView, RunView } from "@/modules/night-audit/night-audit.types";
+import type {
+  CheckItem,
+  RunJobView,
+  RunStepView,
+  RunView,
+} from "@/modules/night-audit/night-audit.types";
 import { RUN_TONE, itemHref } from "../../components/NightAuditWorkspace";
 
 const STEP_TONE: Record<StepStatus, BadgeTone> = {
@@ -42,16 +51,37 @@ const REPORT_PACK = [
   ["no-shows", "No-shows"],
 ] as const;
 
+/** How often a run in progress is re-read (the audit runs in a background job). */
+const RUNNING_POLL_MS = 2_000;
+
 /** One night-audit run: outcome, summary, every step and the date's report pack. */
 export function NightAuditRunView({ runId }: { runId: string }) {
   const property = useProperty();
   const { can, isLoading: permissionsLoading } = usePermissions(property.id);
   const allowed = can("nightaudit:read");
-  const query = useNightAuditRunQuery(
-    { propertyId: property.id, runId },
-    { skip: !allowed, pollingInterval: 0 },
-  );
+  // Followed while RUNNING (the page may be opened, refreshed or reopened after
+  // signing in again at any point: the state is the server's, not this tab's).
+  const args = { propertyId: property.id, runId };
+  const cached = nightAuditApi.endpoints.nightAuditRun.useQueryState(args, { skip: !allowed });
+  const inProgress = cached.data ? cached.data.status === "RUNNING" : true;
+  const query = useNightAuditRunQuery(args, {
+    skip: !allowed,
+    pollingInterval: inProgress ? RUNNING_POLL_MS : 0,
+    skipPollingIfUnfocused: true,
+  });
   const [recovering, setRecovering] = useState(false);
+  const dispatch = useDispatch<AppDispatch>();
+  const status = query.data?.status;
+  const previous = useRef(status);
+  useEffect(() => {
+    if (!status) return;
+    // Finished while this page watched: the date rolled (or reopened), so
+    // every operational list and the business date are stale.
+    if (previous.current === "RUNNING" && status !== "RUNNING") {
+      dispatch(nightAuditApi.util.invalidateTags([...NIGHT_AUDIT_ROLLED_TAGS]));
+    }
+    previous.current = status;
+  }, [status, dispatch]);
 
   if (permissionsLoading) return <PageSkeleton title="Loading the run" layout="detail" />;
   if (!allowed) {
@@ -103,7 +133,7 @@ export function NightAuditRunView({ runId }: { runId: string }) {
         actions={
           run.actions.recover ? (
             <Button variant="danger" onClick={() => setRecovering(true)}>
-              Recover stale run
+              {run.job?.status === "QUEUED" ? "Cancel audit" : "Recover stale run"}
             </Button>
           ) : undefined
         }
@@ -115,11 +145,7 @@ export function NightAuditRunView({ runId }: { runId: string }) {
           open; fix the cause and run the audit again.
         </Alert>
       ) : null}
-      {run.status === "RUNNING" ? (
-        <Alert tone="info">
-          The run is in progress or was interrupted. Postings are locked until it finishes.
-        </Alert>
-      ) : null}
+      {run.status === "RUNNING" ? <ProgressAlert job={run.job} /> : null}
 
       {summary && run.status === "COMPLETED" ? (
         <section aria-labelledby="summary-heading" className="flex flex-col gap-2">
@@ -155,16 +181,18 @@ export function NightAuditRunView({ runId }: { runId: string }) {
         </section>
       ) : null}
 
-      <section aria-labelledby="steps-heading" className="flex flex-col gap-2">
-        <h2 id="steps-heading" className="text-sm font-semibold">
-          Steps
-        </h2>
-        <ol className="flex flex-col gap-1.5">
-          {run.steps.map((step) => (
-            <StepRow key={step.sequence} step={step} propertyCode={property.code} />
-          ))}
-        </ol>
-      </section>
+      {run.steps.length > 0 ? (
+        <section aria-labelledby="steps-heading" className="flex flex-col gap-2">
+          <h2 id="steps-heading" className="text-sm font-semibold">
+            Steps
+          </h2>
+          <ol className="flex flex-col gap-1.5">
+            {run.steps.map((step) => (
+              <StepRow key={step.sequence} step={step} propertyCode={property.code} />
+            ))}
+          </ol>
+        </section>
+      ) : null}
 
       {run.status === "COMPLETED" && can("reports:read") ? (
         <section aria-labelledby="pack-heading" className="flex flex-col gap-2">
@@ -188,7 +216,13 @@ export function NightAuditRunView({ runId }: { runId: string }) {
         </section>
       ) : null}
 
-      {recovering ? <RecoverDialog run={run} onClose={() => setRecovering(false)} /> : null}
+      {recovering ? (
+        <RecoverDialog
+          run={run}
+          cancel={run.job?.status === "QUEUED"}
+          onClose={() => setRecovering(false)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -235,7 +269,48 @@ function StepRow({ step, propertyCode }: { step: RunStepView; propertyCode: stri
   );
 }
 
-function RecoverDialog({ run, onClose }: { run: RunView; onClose: () => void }) {
+const STAGE_LABEL: Record<string, string> = {
+  CHECKS: "Running the checks",
+  COMMIT: "Posting and closing the day",
+};
+
+/** Where a run in progress stands: waiting for a worker, working, retrying, or stuck. */
+function ProgressAlert({ job }: { job: RunJobView | null }) {
+  const property = useProperty();
+  let text: string;
+  if (!job || job.status === "FAILED" || job.status === "CANCELLED") {
+    text = "The run was interrupted. Postings stay locked until it is recovered.";
+  } else if (job.status === "QUEUED" && job.attempts > 0) {
+    text = `${job.error?.message ?? "The last attempt was interrupted"}. Next attempt${
+      job.runAfter ? ` at ${formatDateTime(job.runAfter, property.timezone)}` : ""
+    } (${job.attempts} of ${job.maxAttempts} used).`;
+  } else if (job.status === "QUEUED") {
+    text = "Queued: waiting for a worker to start the audit.";
+  } else {
+    text = `${STAGE_LABEL[job.stage ?? ""] ?? "In progress"}${
+      job.attempts > 1 ? ` (attempt ${job.attempts} of ${job.maxAttempts})` : ""
+    }…`;
+  }
+  return (
+    <Alert tone="info">
+      <span role="status" aria-live="polite">
+        {text}
+      </span>{" "}
+      Postings are locked until the audit finishes. You can leave this page; the audit continues on
+      the server.
+    </Alert>
+  );
+}
+
+function RecoverDialog({
+  run,
+  cancel,
+  onClose,
+}: {
+  run: RunView;
+  cancel: boolean;
+  onClose: () => void;
+}) {
   const property = useProperty();
   const [reason, setReason] = useState("");
   const [recover, { isLoading, error }] = useRecoverNightAuditMutation();
@@ -245,11 +320,15 @@ function RecoverDialog({ run, onClose }: { run: RunView; onClose: () => void }) 
   }
   return (
     <FormDialog
-      title="Recover stale run"
-      description="Marks this interrupted run as failed and reopens the business date. Nothing it started was posted. A run that is still committing cannot be recovered."
+      title={cancel ? "Cancel night audit" : "Recover stale run"}
+      description={
+        cancel
+          ? "The audit is waiting for a worker (to start, or to retry after an interruption). Cancelling marks the run as failed and reopens the business date; nothing is posted."
+          : "Marks this interrupted run as failed and reopens the business date. Nothing it started was posted. A run that is still committing cannot be recovered."
+      }
       onClose={onClose}
       onSubmit={() => void submit()}
-      submitLabel="Recover"
+      submitLabel={cancel ? "Cancel audit" : "Recover"}
       disabled={reason.trim().length < 3}
       pending={isLoading}
       error={toClientApiError(error)}

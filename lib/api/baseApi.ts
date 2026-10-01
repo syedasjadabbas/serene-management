@@ -50,7 +50,8 @@ const rawBaseQuery = fetchBaseQuery({ baseUrl: "/api/v1", credentials: "include"
 /** One refresh at a time: concurrent 401s wait for the same attempt. */
 let refreshInFlight: Promise<boolean> | null = null;
 
-function refreshSession(): Promise<boolean> {
+/** Refreshes the session cookies (also used by the live-update stream on 401). */
+export function refreshSession(): Promise<boolean> {
   refreshInFlight ??= fetch("/api/v1/auth/refresh", { method: "POST", credentials: "include" })
     .then((response) => response.ok)
     .catch(() => false)

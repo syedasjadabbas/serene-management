@@ -115,3 +115,79 @@ model Attachment {
   @@index([resourceType, resourceId])
   @@map("attachments")
 }
+
+/// Shared rate-limit windows (scalability phase 2, lib/db/rate-limit-store.ts): one
+/// fixed window per rule and key, counted atomically by every application instance.
+/// The table is UNLOGGED (hand-written migration 20261201090100): counters are
+/// short-lived and start afresh after a crash or failover.
+model RateLimitWindow {
+  key     String   @id @db.VarChar(400)
+  count   Int
+  resetAt DateTime @map("reset_at") @db.Timestamptz(3)
+
+  @@index([resetAt])
+  @@map("rate_limit_windows")
+}
+
+enum BackgroundJobStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+
+  @@map("background_job_status")
+}
+
+/// Durable background jobs (scalability phase 6, docs/SCALABILITY.md §33,
+/// ARCHITECTURE D65): work too long for an HTTP request (night audit). A job is
+/// written in the transaction of the request that asks for it; any worker of
+/// any instance claims it with FOR UPDATE SKIP LOCKED under a lease
+/// (`locked_by`, `locked_until`, renewed by heartbeat), and every later write
+/// is fenced on (`locked_by`, `attempts`), so a worker that lost its lease can
+/// change nothing. Expired leases are reclaimed and retried with exponential
+/// backoff up to `max_attempts`, then FAILED. Inserts NOTIFY `serene_jobs`
+/// (hand-written migration 20261220090000) so idle workers wake at once.
+/// `payload` and `last_error` are internal and never leave the server.
+model BackgroundJob {
+  id             String              @id @default(uuid(7)) @db.Uuid
+  organizationId String              @map("organization_id") @db.Uuid
+  propertyId     String?             @map("property_id") @db.Uuid
+  /// Handler key, e.g. "night_audit.run".
+  kind           String              @db.VarChar(60)
+  /// At most one QUEUED or RUNNING job per key (partial unique index).
+  dedupeKey      String?             @map("dedupe_key") @db.VarChar(200)
+  status         BackgroundJobStatus @default(QUEUED)
+  payload        Json
+  /// Public outcome for the requester (ids of what the job produced).
+  result         Json?
+  /// Public progress: { stage, done, total }.
+  progress       Json?
+  attempts       Int                 @default(0)
+  maxAttempts    Int                 @default(5) @map("max_attempts")
+  runAfter       DateTime            @default(now()) @map("run_after") @db.Timestamptz(3)
+  lockedBy       String?             @map("locked_by") @db.VarChar(120)
+  lockedUntil    DateTime?           @map("locked_until") @db.Timestamptz(3)
+  heartbeatAt    DateTime?           @map("heartbeat_at") @db.Timestamptz(3)
+  cancelledAt    DateTime?           @map("cancelled_at") @db.Timestamptz(3)
+  /// Safe for the requester.
+  errorCode      String?             @map("error_code") @db.VarChar(60)
+  errorMessage   String?             @map("error_message") @db.VarChar(500)
+  /// Internal diagnostics of the last failed attempt; never exposed.
+  lastError      String?             @map("last_error") @db.VarChar(2000)
+  createdById    String              @map("created_by_id") @db.Uuid
+  createdAt      DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  startedAt      DateTime?           @map("started_at") @db.Timestamptz(3)
+  finishedAt     DateTime?           @map("finished_at") @db.Timestamptz(3)
+  updatedAt      DateTime            @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  property     Property?    @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+
+  @@unique([dedupeKey], map: "background_jobs_active_dedupe_key", where: raw("status IN ('QUEUED', 'RUNNING') AND dedupe_key IS NOT NULL"))
+  @@index([runAfter, id], map: "background_jobs_queued_idx", where: raw("status = 'QUEUED'"))
+  @@index([lockedUntil], map: "background_jobs_running_idx", where: raw("status = 'RUNNING'"))
+  @@index([propertyId, createdAt(sort: Desc)])
+  @@index([finishedAt], map: "background_jobs_finished_idx", where: raw("finished_at IS NOT NULL"))
+  @@map("background_jobs")
+}

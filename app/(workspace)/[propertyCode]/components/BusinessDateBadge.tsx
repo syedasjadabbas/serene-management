@@ -3,7 +3,7 @@
 import { CalendarDays } from "lucide-react";
 import Link from "next/link";
 import type { Route } from "next";
-import { useBusinessDate } from "@/hooks/useBusinessDate";
+import { useBusinessDate, usePropertyClock } from "@/hooks/useBusinessDate";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useProperty } from "@/hooks/useProperty";
 import { cn } from "@/components/ui/cn";
@@ -21,7 +21,9 @@ const FIELD =
 export function BusinessDateBadge() {
   const property = useProperty();
   const { can } = usePermissions(property.id);
-  const { data, isLoading, isError } = useBusinessDate();
+  // The header is on every page: it also refetches the date after local midnight.
+  const { data, isLoading, isError, fulfilledTimeStamp } = useBusinessDate({ rollover: true });
+  const clock = usePropertyClock(data, fulfilledTimeStamp);
 
   if (isLoading) return <span className="text-xs text-fg-muted">Business date…</span>;
   if (isError || !data)
@@ -64,7 +66,7 @@ export function BusinessDateBadge() {
     </>
   );
   const className = cn(FIELD, overdue ? "border-danger/35" : "border-border");
-  const title = `Property time ${data.propertyLocalDate} ${data.propertyLocalTime} (${data.timezone})`;
+  const title = `Property time ${clock?.date ?? data.propertyLocalDate} ${clock?.time ?? data.propertyLocalTime} (${data.timezone})`;
   return can("nightaudit:read") ? (
     <Link
       href={`/${property.code}/night-audit` as Route}

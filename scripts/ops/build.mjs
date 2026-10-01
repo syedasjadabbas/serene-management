@@ -15,6 +15,7 @@ await build({
     "scripts/ops/maintenance.ts",
     "scripts/ops/backup.ts",
     "scripts/ops/db-check.ts",
+    "scripts/ops/worker.ts",
   ],
   outdir: "dist/ops",
   outExtension: { ".js": ".mjs" },
@@ -31,4 +32,4 @@ await build({
     js: 'import { createRequire as __createRequire } from "node:module"; const require = __createRequire(import.meta.url);',
   },
 });
-console.log("Built dist/ops: seed, bootstrap, maintenance, backup, db-check");
+console.log("Built dist/ops: seed, bootstrap, maintenance, backup, db-check, worker");

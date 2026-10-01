@@ -101,7 +101,8 @@ export function findStayDetail(tx: Tx, propertyId: string, stayId: string) {
           reservation: {
             select: {
               confirmationNumber: true,
-              // Counted in the service; see reservations.repository listSelect.
+              // Room ids, counted in the service: a relation `_count` compiles to an
+              // aggregate over the whole reservation_rooms table (docs/SCALABILITY.md).
               rooms: { select: { id: true } },
               notes: {
                 where: { deletedAt: null },

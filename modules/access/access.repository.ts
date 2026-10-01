@@ -2,11 +2,42 @@ import "server-only";
 import { Prisma } from "@/generated/prisma/client";
 import type { Tx } from "@/lib/db/prisma";
 
+export interface GrantRow {
+  scope: "ORGANIZATION" | "PROPERTY";
+  property_id: string | null;
+  permission_key: string;
+}
+
+export interface ActivePropertyRow {
+  id: string;
+  code: string;
+  name: string;
+  timezone: string;
+  currency_code: string;
+  business_date: string | null;
+}
+
 /**
- * The session with its user and organization in one statement (M10: this
- * runs on every authenticated request; relation loading took three).
+ * Everything an authenticated request needs, in ONE statement (scalability
+ * phase 2, docs/SCALABILITY.md): the session with its user and organization,
+ * the user's role grants, and the active properties those grants can reach
+ * with their current business dates. It replaces three sequential round trips.
+ *
+ *  - grants: exactly the former grants query (roles of the user's own
+ *    organization or system roles; property grants only on ACTIVE properties
+ *    of that organization);
+ *  - properties: ACTIVE properties of the organization that the user could
+ *    reach at all (super admin, any organization-scope assignment, or an
+ *    assignment at that property). This is a superset: `resolveSession` then
+ *    applies the exact rule (catalog permissions only), so the result is the
+ *    same as before, and the payload stays bounded by the user's reach.
+ *
+ * Plain scalar subqueries, no CTE: a CTE made PostgreSQL plan this statement
+ * 1.5-2.5 ms per call, against ~1 ms for the three separate statements.
+ * Nothing is cached: revocation, disabling, password changes and role changes
+ * are read fresh on every request. No row when the session does not exist.
  */
-export async function findSessionWithUser(tx: Tx, sessionId: string) {
+export async function findSessionAccess(tx: Tx, sessionId: string) {
   const rows = await tx.$queryRaw<
     {
       id: string;
@@ -27,6 +58,8 @@ export async function findSessionWithUser(tx: Tx, sessionId: string) {
       organization_name: string;
       base_currency: string;
       organization_status: "ACTIVE" | "INACTIVE";
+      grants: GrantRow[];
+      properties: ActivePropertyRow[];
     }[]
   >`
     SELECT s."id", s."revoked_at", s."expires_at", s."created_at",
@@ -34,7 +67,31 @@ export async function findSessionWithUser(tx: Tx, sessionId: string) {
            u."display_name", u."locale", u."status"::text AS "user_status", u."is_super_admin",
            u."default_property_id", ua."updated_at" AS "avatar_updated_at",
            o."code" AS "organization_code", o."name" AS "organization_name",
-           o."base_currency", o."status"::text AS "organization_status"
+           o."base_currency", o."status"::text AS "organization_status",
+           (SELECT COALESCE(json_agg(g), '[]'::json) FROM (
+              SELECT DISTINCT a."scope"::text AS "scope", a."property_id", rp."permission_key"
+              FROM "user_role_assignments" a
+              JOIN "roles" r ON r."id" = a."role_id"
+              JOIN "role_permissions" rp ON rp."role_id" = r."id"
+              LEFT JOIN "properties" p ON p."id" = a."property_id"
+              WHERE a."user_id" = u."id"
+                AND (r."organization_id" = u."organization_id" OR r."organization_id" IS NULL)
+                AND (a."property_id" IS NULL
+                     OR (p."organization_id" = u."organization_id" AND p."status" = 'ACTIVE'))
+            ) g) AS "grants",
+           (SELECT COALESCE(json_agg(json_build_object(
+                     'id', p."id", 'code', p."code", 'name', p."name", 'timezone', p."timezone",
+                     'currency_code', p."currency_code", 'business_date', bd."date"::text)
+                   ORDER BY p."code"), '[]'::json)
+            FROM "properties" p
+            LEFT JOIN "business_dates" bd ON bd."property_id" = p."id" AND bd."is_current"
+            WHERE p."organization_id" = u."organization_id" AND p."status" = 'ACTIVE'
+              AND (u."is_super_admin" OR EXISTS (
+                SELECT 1 FROM "user_role_assignments" a JOIN "roles" r ON r."id" = a."role_id"
+                WHERE a."user_id" = u."id"
+                  AND (r."organization_id" = u."organization_id" OR r."organization_id" IS NULL)
+                  AND (a."property_id" IS NULL OR a."property_id" = p."id")))
+           ) AS "properties"
     FROM "auth_sessions" s
     JOIN "users" u ON u."id" = s."user_id"
     JOIN "organizations" o ON o."id" = u."organization_id"
@@ -66,7 +123,64 @@ export async function findSessionWithUser(tx: Tx, sessionId: string) {
         status: row.organization_status,
       },
     },
+    grants: row.grants,
+    properties: row.properties.map((p) => ({
+      id: p.id,
+      code: p.code,
+      name: p.name,
+      timezone: p.timezone,
+      currencyCode: p.currency_code,
+      businessDate: p.business_date,
+    })),
   };
+}
+
+/**
+ * A user's access without a session (background jobs act for the user who
+ * started them, re-checked when they run): the same grants and reachable
+ * properties as `findSessionAccess`, with the user's and organization's status.
+ */
+export async function findUserAccess(tx: Tx, userId: string) {
+  const rows = await tx.$queryRaw<
+    {
+      organization_id: string;
+      user_status: "ACTIVE" | "DISABLED" | "INVITED";
+      is_super_admin: boolean;
+      organization_status: "ACTIVE" | "INACTIVE";
+      grants: GrantRow[];
+      properties: ActivePropertyRow[];
+    }[]
+  >`
+    SELECT u."organization_id", u."status"::text AS "user_status", u."is_super_admin",
+           o."status"::text AS "organization_status",
+           (SELECT COALESCE(json_agg(g), '[]'::json) FROM (
+              SELECT DISTINCT a."scope"::text AS "scope", a."property_id", rp."permission_key"
+              FROM "user_role_assignments" a
+              JOIN "roles" r ON r."id" = a."role_id"
+              JOIN "role_permissions" rp ON rp."role_id" = r."id"
+              LEFT JOIN "properties" p ON p."id" = a."property_id"
+              WHERE a."user_id" = u."id"
+                AND (r."organization_id" = u."organization_id" OR r."organization_id" IS NULL)
+                AND (a."property_id" IS NULL
+                     OR (p."organization_id" = u."organization_id" AND p."status" = 'ACTIVE'))
+            ) g) AS "grants",
+           (SELECT COALESCE(json_agg(json_build_object(
+                     'id', p."id", 'code', p."code", 'name', p."name", 'timezone', p."timezone",
+                     'currency_code', p."currency_code", 'business_date', bd."date"::text)
+                   ORDER BY p."code"), '[]'::json)
+            FROM "properties" p
+            LEFT JOIN "business_dates" bd ON bd."property_id" = p."id" AND bd."is_current"
+            WHERE p."organization_id" = u."organization_id" AND p."status" = 'ACTIVE'
+              AND (u."is_super_admin" OR EXISTS (
+                SELECT 1 FROM "user_role_assignments" a JOIN "roles" r ON r."id" = a."role_id"
+                WHERE a."user_id" = u."id"
+                  AND (r."organization_id" = u."organization_id" OR r."organization_id" IS NULL)
+                  AND (a."property_id" IS NULL OR a."property_id" = p."id")))
+           ) AS "properties"
+    FROM "users" u
+    JOIN "organizations" o ON o."id" = u."organization_id"
+    WHERE u."id" = ${userId}::uuid`;
+  return rows[0] ?? null;
 }
 
 /**
@@ -75,9 +189,7 @@ export async function findSessionWithUser(tx: Tx, sessionId: string) {
  * ignored.
  */
 export function findGrantedPermissions(tx: Tx, userId: string, organizationId: string) {
-  return tx.$queryRaw<
-    { scope: "ORGANIZATION" | "PROPERTY"; property_id: string | null; permission_key: string }[]
-  >`
+  return tx.$queryRaw<GrantRow[]>`
     SELECT DISTINCT a."scope"::text AS "scope", a."property_id", rp."permission_key"
     FROM "user_role_assignments" a
     JOIN "roles" r ON r."id" = a."role_id"
@@ -113,40 +225,6 @@ export function findUsersWithPermission(
       ${userId ? Prisma.sql`AND u."id" = ${userId}::uuid` : Prisma.empty}
     ORDER BY u."display_name"
     LIMIT 500`;
-}
-
-/**
- * Active properties the user may access, each with its current business date
- * (null before go-live) in the same statement: property requests take their
- * business date from here instead of reading it again (M10).
- */
-export async function findActiveProperties(tx: Tx, organizationId: string, ids: string[] | "ALL") {
-  if (ids !== "ALL" && ids.length === 0) return [];
-  const rows = await tx.$queryRaw<
-    {
-      id: string;
-      code: string;
-      name: string;
-      timezone: string;
-      currency_code: string;
-      business_date: string | null;
-    }[]
-  >`
-    SELECT p."id", p."code", p."name", p."timezone", p."currency_code",
-           bd."date"::text AS "business_date"
-    FROM "properties" p
-    LEFT JOIN "business_dates" bd ON bd."property_id" = p."id" AND bd."is_current"
-    WHERE p."organization_id" = ${organizationId}::uuid AND p."status" = 'ACTIVE'
-      ${ids === "ALL" ? Prisma.empty : Prisma.sql`AND p."id" = ANY(${ids}::uuid[])`}
-    ORDER BY p."code"`;
-  return rows.map((row) => ({
-    id: row.id,
-    code: row.code,
-    name: row.name,
-    timezone: row.timezone,
-    currencyCode: row.currency_code,
-    businessDate: row.business_date,
-  }));
 }
 
 export function insertOrganization(

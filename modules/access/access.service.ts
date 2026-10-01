@@ -5,10 +5,11 @@ import { type Permission, isPermission } from "@/lib/permissions/catalog";
 import type { AccessProfile } from "@/lib/permissions/evaluate";
 import type { AccessTokenClaims } from "@/lib/auth/tokens";
 import {
-  findActiveProperties,
+  type GrantRow,
   findGrantedPermissions,
-  findSessionWithUser,
+  findSessionAccess,
   findSystemRoleTemplates,
+  findUserAccess,
   findUsersWithPermission,
   insertOrganization,
   insertOrganizationRole,
@@ -39,14 +40,15 @@ export interface ResolvedSession {
  * permissions. Returns null when the session was revoked or expired, the user
  * is no longer active, or the token does not match the stored session — so
  * logout, disabling a user and role changes apply on the very next request.
- * Three indexed queries (session with user and organization, grants,
- * properties with their business dates), no per-property loops (M10).
+ * One statement (session with user and organization, grants, properties
+ * with their business dates: access.repository `findSessionAccess`), no
+ * per-property loops, nothing cached across requests (M10, scalability phase 2).
  */
 export async function resolveSession(
   claims: AccessTokenClaims,
   now: Date = new Date(),
 ): Promise<ResolvedSession | null> {
-  const session = await findSessionWithUser(prisma, claims.sessionId);
+  const session = await findSessionAccess(prisma, claims.sessionId);
   if (!session || session.revokedAt || session.expiresAt <= now) return null;
   const { user } = session;
   if (user.id !== claims.userId || user.organizationId !== claims.organizationId) return null;
@@ -54,27 +56,7 @@ export async function resolveSession(
   // A session opened before the current password was set is dead (H4).
   if (user.passwordChangedAt && session.createdAt < user.passwordChangedAt) return null;
 
-  const { organizationPermissions, propertyGrants } = await loadGrantedPermissions(
-    prisma,
-    user.id,
-    user.organizationId,
-  );
-
-  // Organization-wide grants (or super admin) cover every active property of the organization.
-  const coversAllProperties = user.isSuperAdmin || organizationPermissions.size > 0;
-  const properties = await findActiveProperties(
-    prisma,
-    user.organizationId,
-    coversAllProperties ? "ALL" : [...propertyGrants.keys()],
-  );
-
-  const byProperty: Record<string, Permission[]> = {};
-  for (const property of properties) {
-    const merged = new Set(organizationPermissions);
-    for (const permission of propertyGrants.get(property.id) ?? []) merged.add(permission);
-    byProperty[property.id] = [...merged].sort();
-  }
-
+  const { access, properties } = buildAccess(user, session.grants, session.properties);
   return {
     sessionId: session.id,
     user: {
@@ -93,6 +75,37 @@ export async function resolveSession(
       name: user.organization.name,
       baseCurrency: user.organization.baseCurrency,
     },
+    access,
+    properties: properties.map(({ businessDate: _businessDate, ...property }) => property),
+    businessDates: Object.fromEntries(properties.map((p) => [p.id, p.businessDate])),
+  };
+}
+
+type ReachableProperty = PropertySummary & { businessDate: string | null };
+
+/**
+ * Effective access from grants (the exact rule; the statement returned a
+ * superset of properties): organization-wide grants (or super admin) cover
+ * every active property of the organization; otherwise only the properties
+ * of property grants.
+ */
+function buildAccess(
+  user: { id: string; organizationId: string; isSuperAdmin: boolean },
+  grants: GrantRow[],
+  reachable: ReachableProperty[],
+): { access: AccessProfile; properties: ReachableProperty[] } {
+  const { organizationPermissions, propertyGrants } = groupGrants(grants);
+  const coversAllProperties = user.isSuperAdmin || organizationPermissions.size > 0;
+  const properties = reachable.filter(
+    (property) => coversAllProperties || propertyGrants.has(property.id),
+  );
+  const byProperty: Record<string, Permission[]> = {};
+  for (const property of properties) {
+    const merged = new Set(organizationPermissions);
+    for (const permission of propertyGrants.get(property.id) ?? []) merged.add(permission);
+    byProperty[property.id] = [...merged].sort();
+  }
+  return {
     access: {
       userId: user.id,
       organizationId: user.organizationId,
@@ -100,9 +113,38 @@ export async function resolveSession(
       organizationPermissions: [...organizationPermissions].sort(),
       byProperty,
     },
-    properties: properties.map(({ businessDate: _businessDate, ...property }) => property),
-    businessDates: Object.fromEntries(properties.map((p) => [p.id, p.businessDate])),
+    properties,
   };
+}
+
+/**
+ * The access a background job acts with: that of the user who started it,
+ * read now (never the access they had when they asked). Null when the user
+ * or the organization is no longer active, or the user cannot reach the
+ * property any more.
+ */
+export async function resolveJobActor(
+  userId: string,
+  organizationId: string,
+  propertyId: string,
+): Promise<{ access: AccessProfile; property: ReachableProperty } | null> {
+  const row = await findUserAccess(prisma, userId);
+  if (!row || row.organization_id !== organizationId) return null;
+  if (row.user_status !== "ACTIVE" || row.organization_status !== "ACTIVE") return null;
+  const { access, properties } = buildAccess(
+    { id: userId, organizationId, isSuperAdmin: row.is_super_admin },
+    row.grants,
+    row.properties.map((p) => ({
+      id: p.id,
+      code: p.code,
+      name: p.name,
+      timezone: p.timezone,
+      currencyCode: p.currency_code,
+      businessDate: p.business_date,
+    })),
+  );
+  const property = properties.find((p) => p.id === propertyId);
+  return property ? { access, property } : null;
 }
 
 export interface GrantedPermissions {
@@ -121,7 +163,11 @@ export async function loadGrantedPermissions(
   userId: string,
   organizationId: string,
 ): Promise<GrantedPermissions> {
-  const grants = await findGrantedPermissions(tx, userId, organizationId);
+  return groupGrants(await findGrantedPermissions(tx, userId, organizationId));
+}
+
+/** Grant rows by scope; keys that are not catalog permissions are ignored. */
+function groupGrants(grants: GrantRow[]): GrantedPermissions {
   const organizationPermissions = new Set<Permission>();
   const propertyGrants = new Map<string, Set<Permission>>();
   for (const grant of grants) {

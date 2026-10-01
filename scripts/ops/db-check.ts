@@ -94,6 +94,35 @@ async function main(): Promise<number> {
     if (settings!.timezone !== "UTC")
       failures.push(`session TimeZone is ${settings!.timezone}, not UTC`);
     if (settings!.statement_timeout === "0") failures.push("statement_timeout is disabled");
+    // Behind a transaction-mode PgBouncer these come from the runtime role, not the app.
+    if (settings!.idle_tx === "0") failures.push("idle_in_transaction_session_timeout is disabled");
+
+    // Connection budget (docs/OPERATIONS.md §6): each instance holds up to
+    // DATABASE_POOL_MAX pooled connections plus one LISTEN connection for live
+    // updates and one for its job worker (JOB_WORKER=inline). The inline worker
+    // shares the pool. Separate `npm run worker` processes count as instances.
+    const [limits] = await prisma.$queryRaw<{ max: number; reserved: number }[]>`
+      SELECT current_setting('max_connections')::int AS max,
+             current_setting('superuser_reserved_connections')::int AS reserved`;
+    const env = serverEnv();
+    const listens = (env.REALTIME_ENABLED === "1" ? 1 : 0) + (env.JOB_WORKER === "inline" ? 1 : 0);
+    const perInstance = env.DATABASE_POOL_MAX + listens;
+    // Keep 10 connections for migrations, backups, monitoring and administrators.
+    const fits = Math.floor((limits!.max - limits!.reserved - 10) / perInstance);
+    if (env.DATABASE_POOLER === "pgbouncer-transaction") {
+      // PgBouncer, not the instances, decides the server connections.
+      ok.push(
+        `connection budget: max_connections=${limits!.max}; behind PgBouncer keep ` +
+          `default_pool_size + LISTEN connections (up to 2 per instance) + 10 below it`,
+      );
+    } else {
+      const budget =
+        `connection budget: max_connections=${limits!.max}, ${perInstance} per instance ` +
+        `(DATABASE_POOL_MAX=${env.DATABASE_POOL_MAX}` +
+        `${listens > 0 ? ` + ${listens} LISTEN` : ""}) → at most ${fits} instances`;
+      if (fits < 2) warnings.push(`${budget}: fewer than 2 instances fit`);
+      else ok.push(budget);
+    }
     if (settings!.timezone === "UTC" && settings!.statement_timeout !== "0") {
       ok.push(
         `session: TimeZone=UTC, statement_timeout=${settings!.statement_timeout}, ` +

@@ -214,7 +214,7 @@ Also forward `Host` and `X-Forwarded-Proto`. Serve only HTTPS, because cookies a
 Use this for every release; the first installation follows the same steps plus step 8. Commands run in the application directory, with the production environment loaded.
 
 1. **Preconditions**
-   - The release passed CI (OPERATIONS.md §8) and was tested on staging against a restored copy of production (OPERATIONS.md §3.2).
+   - The release passed CI (OPERATIONS.md §9) and was tested on staging against a restored copy of production (OPERATIONS.md §3.2).
    - Read the release's migrations (`prisma/migrations/*/migration.sql`): note long-running or locking steps, and schedule them off-peak and away from the night audit.
    - Confirm last night's backup exists and verifies (`npm run ops:backup -- list --dir …`).
 2. **Environment validation**
@@ -238,7 +238,7 @@ Use this for every release; the first installation follows the same steps plus s
    - `db:deploy` must end with `All migrations have been successfully applied` (or report nothing to apply).
    - If it fails, stop and follow OPERATIONS.md §3.4. Do not start the new release against a half-migrated database.
 7. **Start.** Restart the service, for example `systemctl restart serene` running `npm start`. The process exits immediately, with the list of problems, if the environment is invalid.
-8. **First installation only.** Create the runtime role (OPERATIONS.md §4), run `npm run ops:bootstrap -- --confirm …` (§5.2), then sign in and create the first property. Schedule backups and maintenance (OPERATIONS.md §7).
+8. **First installation only.** Create the runtime role (OPERATIONS.md §4), run `npm run ops:bootstrap -- --confirm …` (§5.2), then sign in and create the first property. Schedule backups and maintenance (OPERATIONS.md §8). Background jobs run inside the application by default; to run separate workers see OPERATIONS.md §7.
 9. **Health and smoke checks**
    - Wait for `/api/health/ready` to return 200 before routing traffic (§6). `/api/health/live` must return 200 throughout.
    - `npm run ops:db-check -- --strict`: no `FAIL` or `WARN` lines (guards enabled, UTC session, no failed migrations, runtime role is not the owner).

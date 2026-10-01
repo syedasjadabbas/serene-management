@@ -51,6 +51,18 @@ export function deleteBatch(
           SELECT "id" FROM "outbox_events"
           WHERE "status" = 'FAILED' AND "occurred_at" < ${cutoff}
           LIMIT ${limit} FOR UPDATE SKIP LOCKED)`;
+    case "rateLimitWindows":
+      return db.$executeRaw`
+        DELETE FROM "rate_limit_windows" WHERE "key" IN (
+          SELECT "key" FROM "rate_limit_windows"
+          WHERE "reset_at" < ${cutoff}
+          LIMIT ${limit} FOR UPDATE SKIP LOCKED)`;
+    case "backgroundJobs":
+      return db.$executeRaw`
+        DELETE FROM "background_jobs" WHERE "id" IN (
+          SELECT "id" FROM "background_jobs"
+          WHERE "finished_at" < ${cutoff}
+          LIMIT ${limit} FOR UPDATE SKIP LOCKED)`;
   }
 }
 
@@ -80,6 +92,12 @@ export async function countEligible(
         return db.$queryRaw<{ n: bigint }[]>`
           SELECT count(*) AS n FROM "outbox_events"
           WHERE "status" = 'FAILED' AND "occurred_at" < ${cutoff}`;
+      case "rateLimitWindows":
+        return db.$queryRaw<{ n: bigint }[]>`
+          SELECT count(*) AS n FROM "rate_limit_windows" WHERE "reset_at" < ${cutoff}`;
+      case "backgroundJobs":
+        return db.$queryRaw<{ n: bigint }[]>`
+          SELECT count(*) AS n FROM "background_jobs" WHERE "finished_at" < ${cutoff}`;
     }
   })();
   return Number(rows[0]?.n ?? 0);

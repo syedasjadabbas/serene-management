@@ -6,7 +6,12 @@ import { definePublicRoute } from "@/lib/http/route";
 import { refresh } from "@/modules/identity/identity.service";
 
 export const POST = definePublicRoute({
-  rateLimit: { name: "auth.refresh.ip", limit: 60, windowMs: 60_000 },
+  rateLimit: {
+    name: "auth.refresh.ip",
+    limit: 60,
+    windowMs: 60_000,
+    onStoreFailure: "deny",
+  },
   handler: async ({ request, meta }) => {
     try {
       const tokens = await refresh(meta, request.cookies.get(REFRESH_COOKIE)?.value);

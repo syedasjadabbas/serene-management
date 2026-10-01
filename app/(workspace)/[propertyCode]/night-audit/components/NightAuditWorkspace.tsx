@@ -270,7 +270,7 @@ function RunDialog({ businessDate, onClose }: { businessDate: string; onClose: (
       description="Posts tonight's room, package and tax charges, turns missed arrivals into no-shows, releases blocks, rolls room status, freezes the day's statistics and opens the next business date. Postings are locked until it finishes; if anything fails, nothing is posted."
       onClose={onClose}
       onSubmit={() => void submit()}
-      submitLabel={isLoading ? "Running…" : "Run night audit"}
+      submitLabel={isLoading ? "Starting…" : "Run night audit"}
       disabled={reason.trim().length < 3 || Boolean(data)}
       pending={isLoading}
       error={apiError}

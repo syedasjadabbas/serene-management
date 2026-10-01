@@ -61,6 +61,22 @@ const baseSchema = z.object({
    * against the PostgreSQL max_connections budget, never blindly upwards.
    */
   DATABASE_POOL_MAX: z.coerce.number().int().min(1).max(50).default(10),
+  /** Idle connections kept open at least (0: all may close when idle). */
+  DATABASE_POOL_MIN: z.coerce.number().int().min(0).max(50).default(0),
+  /**
+   * An idle pooled connection above the minimum is closed after this long.
+   * 120 s (measured, docs/SCALABILITY.md §32): with 30 s, the live-update
+   * refetch waves (≈60 s apart) found the pool closed and reopened connections.
+   */
+  DATABASE_POOL_IDLE_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(3_600_000).default(120_000),
+  /** A pooled connection is replaced after this many seconds (0: never). */
+  DATABASE_POOL_MAX_LIFETIME_S: z.coerce.number().int().min(0).max(86_400).default(0),
+  /**
+   * What DATABASE_URL points at (docs/OPERATIONS.md §6): "none" (PostgreSQL
+   * itself) or "pgbouncer-transaction" (a transaction-mode PgBouncer: session
+   * settings are not sent as startup options, set them on the runtime role).
+   */
+  DATABASE_POOLER: z.enum(["none", "pgbouncer-transaction"]).default("none"),
   DATABASE_CONNECT_TIMEOUT_MS: z.coerce.number().int().min(500).max(60_000).default(5_000),
   DATABASE_STATEMENT_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(600_000).default(30_000),
   DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_MS: z.coerce
@@ -75,6 +91,60 @@ const baseSchema = z.object({
    * timings are not shown to clients in normal operation.
    */
   SERVER_TIMING: z.enum(["0", "1"]).default("0"),
+  /**
+   * Where rate-limit windows are counted (lib/http/rate-limit.ts): "postgres"
+   * (default; shared by every instance) or "memory" (one process only: never
+   * with more than one application instance).
+   */
+  RATE_LIMIT_STORE: z.enum(["postgres", "memory"]).default("postgres"),
+  /**
+   * Global search: how many of its per-type queries one request runs at the
+   * same time (modules/search, docs/SCALABILITY.md §28). Each holds a pool
+   * connection while it runs; keep it well below DATABASE_POOL_MAX.
+   */
+  SEARCH_CONCURRENCY: z.coerce.number().int().min(1).max(8).default(3),
+  /**
+   * Live updates (lib/realtime, docs/SCALABILITY.md §31): "1" (default)
+   * serves the event streams that replace polling on the front desk, room
+   * board, housekeeping and business date; "0" answers 503 and every screen
+   * polls as before.
+   */
+  REALTIME_ENABLED: z.enum(["0", "1"]).default("1"),
+  /**
+   * Connection for the one LISTEN session each instance holds. LISTEN needs a
+   * session connection: set this to a direct URL when DATABASE_URL goes
+   * through a transaction-pooling PgBouncer. When unset, DATABASE_URL is used.
+   */
+  REALTIME_DATABASE_URL: z
+    .url()
+    .refine((value) => /^postgres(ql)?:\/\//.test(value), "Must be a postgresql:// URL")
+    .optional(),
+  /**
+   * Heavy reports (modules/reports HEAVY_REPORT_KEYS, docs/SCALABILITY.md §33):
+   * how many one application process computes at the same time. Further
+   * requests wait up to REPORT_HEAVY_WAIT_MS, then answer 429 REPORTS_BUSY.
+   * 1 (measured): four users exporting the guest ledger back to back cost
+   * everyone else 21 % of throughput instead of 41 %; 2 was no better than
+   * no limit.
+   */
+  REPORT_HEAVY_CONCURRENCY: z.coerce.number().int().min(1).max(16).default(1),
+  REPORT_HEAVY_WAIT_MS: z.coerce.number().int().min(0).max(120_000).default(30_000),
+  /**
+   * Background jobs (modules/jobs, docs/SCALABILITY.md §33): "inline" (default)
+   * runs a worker inside every application process; "off" leaves the jobs to
+   * separate worker processes (`npm run worker`). Any mix is safe: jobs are
+   * claimed atomically, never twice.
+   */
+  JOB_WORKER: z.enum(["inline", "off"]).default("inline"),
+  /** Jobs one worker process executes at the same time. */
+  JOB_WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(8).default(1),
+  /** Idle workers look for due jobs this often (inserts also wake them at once). */
+  JOB_POLL_INTERVAL_MS: z.coerce.number().int().min(500).max(60_000).default(5_000),
+  /**
+   * A claimed job is the worker's for this long, renewed by heartbeat every
+   * third of it; a worker that dies is replaced once its lease expires.
+   */
+  JOB_LEASE_MS: z.coerce.number().int().min(10_000).max(600_000).default(60_000),
 });
 
 export type ServerEnv = z.infer<typeof baseSchema>;
@@ -113,12 +183,30 @@ export function parseServerEnv(
     return { success: false, error: z.prettifyError(parsed.error) };
   }
   const env = parsed.data;
-  const productionRules = options.productionRules ?? env.NODE_ENV === "production";
-  if (!productionRules) return { success: true, data: env };
-
   const problems: string[] = [];
   const add = (variable: string, message: string) =>
     problems.push(`✖ ${message}\n  → at ${variable}`);
+
+  // Connection topology (docs/OPERATIONS.md §6), in every environment.
+  if (env.DATABASE_POOL_MIN > env.DATABASE_POOL_MAX) {
+    add("DATABASE_POOL_MIN", "Must not exceed DATABASE_POOL_MAX");
+  }
+  if (
+    env.DATABASE_POOLER === "pgbouncer-transaction" &&
+    env.REALTIME_ENABLED === "1" &&
+    !env.REALTIME_DATABASE_URL
+  ) {
+    // LISTEN holds a session: through a transaction-mode pooler it would
+    // silently receive nothing.
+    add(
+      "REALTIME_DATABASE_URL",
+      "Required with DATABASE_POOLER=pgbouncer-transaction: a direct (session) connection for LISTEN",
+    );
+  }
+  if (problems.length > 0) return { success: false, error: problems.join("\n") };
+
+  const productionRules = options.productionRules ?? env.NODE_ENV === "production";
+  if (!productionRules) return { success: true, data: env };
 
   // APP_URL: explicit, public and HTTPS (cookies are Secure, the Origin check compares it).
   if (!source.APP_URL) add("APP_URL", "Required in production (the public https:// URL)");

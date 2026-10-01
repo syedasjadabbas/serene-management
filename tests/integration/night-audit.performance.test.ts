@@ -6,7 +6,7 @@ import { prisma } from "@/lib/db/prisma";
 import type { PropertyContext } from "@/lib/http/context";
 import { ALL_PERMISSIONS } from "@/lib/permissions/catalog";
 import { addDays, fromDateOnly } from "@/modules/business-date/business-date.policy";
-import { startNightAudit } from "@/modules/night-audit/night-audit.service";
+import { getRun, startNightAudit } from "@/modules/night-audit/night-audit.service";
 import {
   type FixtureOrg,
   TEST_PASSWORD,
@@ -16,6 +16,7 @@ import {
   createUser,
 } from "./support/fixtures";
 import { call, loginAs } from "./support/http";
+import { drainJobs } from "./support/jobs";
 import { countStatements, projectedSeconds } from "./support/statements";
 
 /**
@@ -147,13 +148,16 @@ describe("night audit with 1 000 rooms in house", () => {
       businessDate: D,
     };
     const started = performance.now();
-    const { result: run, statements } = await countStatements(() =>
-      startNightAudit(
+    // The request's part (Phase A, queue the job) and the worker's (Phases B and C).
+    const { result: run, statements } = await countStatements(async () => {
+      const queued = await startNightAudit(
         ctx,
         { reason: "Scale test" },
         { key: `perf-${randomUUID()}`, route: "POST /perf", requestHash: "e".repeat(64) },
-      ),
-    );
+      );
+      await drainJobs(A);
+      return getRun(ctx, queued.id);
+    });
     const seconds = (performance.now() - started) / 1000;
     expect(run.status).toBe("COMPLETED");
     expect(run.summary!.roomsPosted).toBe(ROOMS);

@@ -83,7 +83,11 @@ import {
   findRatePlanDefaults,
   findReasonCode,
   findReservationDetail,
-  findReservationRoomsPage,
+  findReservationListRows,
+  findReservationRoomPageKeys,
+  findReservationRoomPageKeysMatching,
+  findRoomByNumber,
+  findGuestIdsByName,
   findReservationType,
   findRoom,
   findRoomType,
@@ -100,7 +104,6 @@ import {
   replacePrimaryGuest,
   setNightPosted,
   setNightsPosted,
-  sumNightAmounts,
   updateReservationRoomVersioned,
 } from "./reservations.repository";
 import type {
@@ -1699,27 +1702,24 @@ export async function listReservations(
       }),
     });
   }
+  // Text search: a row matches when any of these matches (confirmation, cancellation
+  // number, external reference, room number, or every guest-name word in any order:
+  // "sofia rossi" finds "rossi sofia").
+  let textBranches: Prisma.ReservationRoomWhereInput[] | null = null;
   if (query.q) {
     const raw = query.q.trim();
-    // Every name word must match, in any order ("sofia rossi" finds "rossi sofia").
     const nameTokens = normalizeName(raw).split(" ").filter(Boolean).slice(0, 5);
-    and.push({
-      OR: [
-        ...confirmationSearch(raw),
-        { cancellationNumber: raw.toUpperCase() },
-        { reservation: { externalReference: raw } },
-        { room: { number: raw } },
-        ...(nameTokens.length > 0
-          ? [
-              {
-                AND: nameTokens.map((token) => ({
-                  primaryGuest: { searchName: { contains: token } },
-                })),
-              },
-            ]
-          : []),
-      ],
-    });
+    // Room numbers are unique per property: the room is looked up first, and a
+    // number that is no room matches nothing (planned as a filter on the joined
+    // room, that branch walked the whole history when the room did not exist).
+    const room = await findRoomByNumber(prisma, ctx.propertyId, raw);
+    textBranches = [
+      ...confirmationSearch(raw),
+      { cancellationNumber: raw.toUpperCase() },
+      { reservation: { externalReference: raw } },
+      ...(room ? [{ roomId: room.id }] : []),
+      ...(nameTokens.length > 0 ? await guestNameBranch(nameTokens) : []),
+    ];
   }
   const dateRange = (from?: string, to?: string) =>
     from || to
@@ -1764,12 +1764,15 @@ export async function listReservations(
     });
   }
 
-  const rows = await findReservationRoomsPage(
-    prisma,
-    { AND: and },
-    [{ [sort.field]: sort.direction }, { id: sort.direction }],
-    query.limit + 1,
-  );
+  // The page's ids and sort keys first, then the page in one statement.
+  const rows = textBranches
+    ? await findReservationRoomPageKeysMatching(prisma, and, textBranches, sort, query.limit + 1)
+    : await findReservationRoomPageKeys(
+        prisma,
+        { AND: and },
+        [{ [sort.field]: sort.direction }, { id: sort.direction }],
+        query.limit + 1,
+      );
   const page = rows.slice(0, query.limit);
   const last = page.at(-1);
   const nextCursor =
@@ -1783,46 +1786,51 @@ export async function listReservations(
         })
       : null;
 
-  const totals = await sumNightAmounts(
-    prisma,
-    page.map((r) => r.id),
-  );
-  const minorUnits = await currencyMinorUnits(prisma, ctx.currencyCode);
+  const listed =
+    page.length > 0
+      ? await findReservationListRows(
+          prisma,
+          ctx.propertyId,
+          page.map((r) => r.id),
+          sort,
+          ctx.currencyCode,
+        )
+      : [];
 
   return {
-    items: page.map((row) => {
-      const arrival = toDateOnly(row.arrivalDate);
-      const departure = toDateOnly(row.departureDate);
+    items: listed.map((row) => {
+      const arrival = toDateOnly(row.arrival_date);
+      const departure = toDateOnly(row.departure_date);
       return {
-        reservationId: row.reservationId,
+        reservationId: row.reservation_id,
         reservationRoomId: row.id,
-        confirmationNumber: row.reservation.confirmationNumber,
+        confirmationNumber: row.confirmation_number,
         displayConfirmation: displayConfirmation(
-          row.reservation.confirmationNumber,
-          row.lineNumber,
-          row.reservation.rooms.length,
+          row.confirmation_number,
+          row.line_number,
+          row.reservation_rooms,
         ),
-        lineNumber: row.lineNumber,
+        lineNumber: row.line_number,
         status: row.status,
-        bookingState: bookingState(row.status, row.reservationType.deductsInventory),
+        bookingState: bookingState(row.status, row.deducts_inventory),
         guest: {
-          id: row.primaryGuest.id,
-          name: [row.primaryGuest.lastName, row.primaryGuest.firstName].join(", "),
-          isVip: row.primaryGuest.vipLevelId !== null,
+          id: row.guest_id,
+          name: [row.last_name, row.first_name].join(", "),
+          isVip: row.vip_level_id !== null,
         },
         arrival,
         departure,
         nights: nightCount(arrival, departure),
         adults: row.adults,
         children: row.children,
-        roomType: row.roomType,
-        room: row.room,
-        ratePlan: row.ratePlan,
-        source: row.sourceCode,
-        channel: row.reservation.channel,
-        currencyCode: row.currencyCode,
-        totalAmount: formatMoney(parseMoney(totals.get(row.id) ?? "0"), minorUnits),
-        bookedAt: row.reservation.bookedAt.toISOString(),
+        roomType: { code: row.room_type_code, name: row.room_type_name },
+        room: row.room_number === null ? null : { number: row.room_number },
+        ratePlan: { code: row.rate_plan_code },
+        source: { code: row.source_code },
+        channel: row.channel_code === null ? null : { code: row.channel_code },
+        currencyCode: row.currency_code,
+        totalAmount: formatMoney(parseMoney(row.total ?? "0"), row.minor_units),
+        bookedAt: row.booked_at.toISOString(),
       };
     }),
     meta: { nextCursor, limit: query.limit },
@@ -2068,6 +2076,32 @@ export async function getReservation(
       ...auditSnapshots(h, can("billing:read")),
     })),
   };
+}
+
+/** Up to this many matching guests are searched by id (see guestNameBranch). */
+const NAME_CANDIDATES_MAX = 500;
+
+/**
+ * Reservation rooms whose primary guest's name contains every word. The
+ * matching guests are looked up first (trigram index) with the same filter:
+ * none → no branch; a few → by guest id (primary guest index); many → the
+ * relation filter, whose walk in sort order meets matches early when they are
+ * that common. Planned as a filter on the joined guest alone, a rare pair of
+ * common words ("ahmed zhang") walked the property's whole history. The
+ * trigram index needs a word of 3+ characters: with shorter words only, the
+ * lookup would read the whole index, so the relation filter is used as before.
+ */
+async function guestNameBranch(tokens: string[]): Promise<Prisma.ReservationRoomWhereInput[]> {
+  const nameFilter = tokens.map((token) => ({ searchName: { contains: token } }));
+  if (!tokens.some((token) => token.length >= 3)) {
+    return [{ AND: nameFilter.map((filter) => ({ primaryGuest: filter })) }];
+  }
+  const guests = await findGuestIdsByName(prisma, nameFilter, NAME_CANDIDATES_MAX + 1);
+  if (guests.length === 0) return [];
+  if (guests.length <= NAME_CANDIDATES_MAX) {
+    return [{ primaryGuestId: { in: guests.map((guest) => guest.id) } }];
+  }
+  return [{ AND: nameFilter.map((filter) => ({ primaryGuest: filter })) }];
 }
 
 /**

@@ -19,18 +19,19 @@ import type { Route } from "next";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { cn } from "@/components/ui/cn";
-import { OptionRow, highlight, matches, useActiveOption } from "@/components/ui/listbox";
+import { OptionRow, highlight, useActiveOption } from "@/components/ui/listbox";
 import { Spinner } from "@/components/ui/Spinner";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
-import { useRatePlansQuery } from "@/lib/api/endpoints/rates.api";
-import { useRoomBoardViewQuery, useRoomPickerQuery } from "@/lib/api/endpoints/rooms.api";
+import { useLazyGlobalSearchQuery } from "@/lib/api/endpoints/search.api";
 import {
-  type RemoteSearchSource,
-  type SearchHit,
-  useGlobalSearchQuery,
-} from "@/lib/api/endpoints/search.api";
+  SEARCH_MIN_QUERY,
+  SEARCH_RESULT_TYPES,
+  isCurrentSearch,
+  searchResultRoute,
+} from "@/modules/search/search.policy";
+import type { SearchHitView, SearchResultType } from "@/modules/search/search.types";
 
-export type SearchSource = RemoteSearchSource | "rooms" | "ratePlans";
+export type SearchSource = SearchResultType;
 
 const SOURCE_META: Record<SearchSource, { label: string; icon: LucideIcon }> = {
   reservations: { label: "Reservations", icon: CalendarCheck },
@@ -42,18 +43,8 @@ const SOURCE_META: Record<SearchSource, { label: string; icon: LucideIcon }> = {
   maintenance: { label: "Maintenance", icon: Wrench },
   ratePlans: { label: "Rate plans", icon: Tags },
 };
-/** Result groups in this order: today's work first, reference data last. */
-const ORDER: SearchSource[] = [
-  "reservations",
-  "guests",
-  "rooms",
-  "folios",
-  "companies",
-  "groups",
-  "maintenance",
-  "ratePlans",
-];
-const MIN_QUERY = 2;
+const ORDER = SEARCH_RESULT_TYPES;
+const MIN_QUERY = SEARCH_MIN_QUERY;
 const RECENT_KEY = "sm:recent-searches";
 
 function readRecent(): string[] {
@@ -73,40 +64,30 @@ function saveRecent(query: string) {
   }
 }
 
-const titleCase = (value: string) =>
-  value.charAt(0) + value.slice(1).toLowerCase().replaceAll("_", " ");
-
 export interface GlobalSearchProps {
   /** The current property; null in the organization workspace. */
   property: { id: string; code: string } | null;
-  /** Property each organization-level record type (guests, companies) opens in; null = none permitted. */
-  profileCodes: { guests: string | null; companies: string | null };
   /** Codes of the properties the user can access: a result never opens anywhere else. */
   openableCodes: readonly string[];
-  /** Sources this user may search (already permission-filtered by the caller). */
+  /**
+   * Types this user may search (mirrors the server's checks, for the hint
+   * text only: the server decides what is searched and returned).
+   */
   sources: SearchSource[];
-  /** Where a room result opens (its board with the room selected), or null. */
-  roomHref: ((roomId: string) => string) | null;
 }
 
-interface FlatHit extends SearchHit {
-  source: SearchSource;
-}
+type FlatHit = SearchHitView;
 
 /**
  * Global search (Ctrl/Cmd+K): a command palette over every record type the
  * user may open, scoped to the current property (guests and companies are
- * organization profiles). Results are grouped by type with the match
- * highlighted; arrows move, Enter opens, Escape closes and focus returns to
- * the search button. Recent searches (this browser only) show before typing.
+ * organization profiles). One request per debounced query; an older
+ * request is cancelled and its response can never replace newer results.
+ * Results are grouped by type with the match highlighted; arrows move,
+ * Enter opens, Escape closes and focus returns to the search button.
+ * Recent searches (this browser only) show before typing.
  */
-export function GlobalSearch({
-  property,
-  profileCodes,
-  openableCodes,
-  sources,
-  roomHref,
-}: GlobalSearchProps) {
+export function GlobalSearch({ property, openableCodes, sources }: GlobalSearchProps) {
   const router = useRouter();
   const id = useId();
   const listId = `${id}-results`;
@@ -119,82 +100,52 @@ export function GlobalSearch({
   const debounced = useDebouncedValue(query.trim(), 200);
   const searching = debounced.length >= MIN_QUERY;
 
-  const remote = sources.filter((s): s is RemoteSearchSource => s !== "rooms" && s !== "ratePlans");
-  const search = useGlobalSearchQuery(
-    { q: debounced, sources: remote, property, profileCodes },
-    { skip: !open || !searching || remote.length === 0 },
+  const propertyId = property?.id ?? null;
+  const [runSearch, search] = useLazyGlobalSearchQuery();
+  // One request per debounced text. Moving on (new text, closed palette,
+  // another property, unmount) cancels the one still in flight; the same
+  // text never starts a second request (repeated effects included).
+  const inFlight = useRef<{ key: string; abort: () => void } | null>(null);
+  const start = useCallback(
+    (q: string, force: boolean) => {
+      inFlight.current?.abort();
+      const request = runSearch({ q, propertyId }, !force);
+      inFlight.current = { key: `${propertyId ?? ""}\n${q}`, abort: () => request.abort() };
+    },
+    [runSearch, propertyId],
   );
-  const wantRooms = open && property !== null && sources.includes("rooms");
-  const roomList = useRoomPickerQuery(property?.id ?? "", { skip: !wantRooms });
-  const board = useRoomBoardViewQuery({ propertyId: property?.id ?? "" }, { skip: !wantRooms });
-  const wantPlans = open && property !== null && sources.includes("ratePlans");
-  const plans = useRatePlansQuery(property?.id ?? "", { skip: !wantPlans });
+  useEffect(() => {
+    if (!open || !searching) {
+      inFlight.current?.abort();
+      inFlight.current = null;
+      return;
+    }
+    if (inFlight.current?.key === `${propertyId ?? ""}\n${debounced}`) return;
+    start(debounced, false);
+  }, [open, searching, debounced, propertyId, start]);
+  useEffect(() => () => inFlight.current?.abort(), []);
 
-  const groups = useMemo(() => {
-    if (!searching) return [] as { source: SearchSource; hits: FlatHit[] }[];
-    const bySource = new Map<SearchSource, FlatHit[]>();
-    for (const group of search.data ?? []) {
-      bySource.set(
-        group.source,
-        group.hits.map((hit) => ({ ...hit, source: group.source })),
-      );
-    }
-    if (wantRooms && roomHref && property) {
-      const status = new Map((board.data?.items ?? []).map((row) => [row.id, row]));
-      const rooms = (roomList.data ?? [])
-        .filter((room) => matches(debounced, room.number, room.roomTypeCode))
-        .slice(0, 5)
-        .map((room): FlatHit => {
-          const row = status.get(room.id);
-          return {
-            source: "rooms",
-            id: room.id,
-            title: `Room ${room.number}`,
-            subtitle: [room.roomTypeCode, row?.floor?.name].filter(Boolean).join(" · "),
-            meta: row
-              ? `${titleCase(row.frontOfficeStatus)} · ${titleCase(row.housekeepingStatus)}`
-              : undefined,
-            href: roomHref(room.id),
-          };
-        });
-      if (rooms.length) bySource.set("rooms", rooms);
-    }
-    if (wantPlans && property) {
-      const found = (plans.data ?? [])
-        .filter((plan) => matches(debounced, plan.code, plan.name))
-        .slice(0, 5)
-        .map((plan): FlatHit => ({
-          source: "ratePlans",
-          id: plan.id,
-          title: `${plan.code} · ${plan.name}`,
-          subtitle: `${titleCase(plan.kind)} · ${plan.currencyCode}`,
-          meta: plan.status === "ACTIVE" ? undefined : "Inactive",
-          href: `/${property.code}/rates/${plan.id}`,
-        }));
-      if (found.length) bySource.set("ratePlans", found);
-    }
-    return ORDER.filter((source) => bySource.has(source)).map((source) => ({
-      source,
-      hits: bySource.get(source)!,
-    }));
-  }, [
-    searching,
-    search.data,
-    wantRooms,
-    roomHref,
-    property,
-    board.data,
-    roomList.data,
-    debounced,
-    wantPlans,
-    plans.data,
-  ]);
+  const wanted = { q: debounced, propertyId };
+  // Only the response to the text on screen is shown (stale-response guard).
+  const result = isCurrentSearch(search.currentData, search.originalArgs, wanted)
+    ? search.currentData
+    : undefined;
+  const failed =
+    searching &&
+    search.isError &&
+    search.originalArgs?.q === debounced &&
+    search.originalArgs.propertyId === propertyId;
+
+  const groups = useMemo(() => (searching && result ? result.groups : []), [searching, result]);
 
   const flat = useMemo(() => groups.flatMap((group) => group.hits), [groups]);
-  // Last check before a link is used: its property must be one the user can
-  // access (the routes are built from permitted properties already).
-  const openable = (hit: FlatHit | undefined): hit is FlatHit & { href: string } =>
-    Boolean(hit?.href && openableCodes.includes(hit.href.split("/")[1] ?? ""));
+  // The route is built here from the result's type, never taken from the
+  // response, and only for a property the user can access.
+  const hrefOf = (hit: FlatHit | undefined): string | null => {
+    if (!hit?.propertyCode || !openableCodes.includes(hit.propertyCode)) return null;
+    return searchResultRoute(hit);
+  };
+  const openable = (hit: FlatHit | undefined): hit is FlatHit => hrefOf(hit) !== null;
   const optionId = useCallback((index: number) => `${id}-hit-${index}`, [id]);
   const nav = useActiveOption({
     count: flat.length,
@@ -212,10 +163,11 @@ export function GlobalSearch({
     setOpen(false);
   }
   function go(hit: FlatHit | undefined) {
-    if (!openable(hit)) return;
+    const href = hrefOf(hit);
+    if (!href) return;
     saveRecent(query.trim());
     close();
-    router.push(hit.href as Route);
+    router.push(href as Route);
   }
 
   // Ctrl/Cmd+K anywhere in the workspace.
@@ -280,7 +232,7 @@ export function GlobalSearch({
     return () => input.removeEventListener("keydown", onKey);
   }, [open]);
 
-  const loading = searching && (search.isFetching || debounced !== query.trim());
+  const loading = searching && !failed && (!result || debounced !== query.trim());
   const shortcut =
     typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform)
       ? "⌘K"
@@ -362,10 +314,10 @@ export function GlobalSearch({
             <div className="min-h-0 flex-1 overflow-y-auto p-2">
               <ul id={listId} role="listbox" aria-label="Search results" className="flex flex-col">
                 {groups.map((group, g) => {
-                  const meta = SOURCE_META[group.source];
-                  const headingId = `${id}-${group.source}`;
+                  const meta = SOURCE_META[group.type];
+                  const headingId = `${id}-${group.type}`;
                   return (
-                    <li key={group.source} role="presentation" className="mb-1">
+                    <li key={group.type} role="presentation" className="mb-1">
                       <div id={headingId} className="px-2.5 pt-2.5 pb-1 label-caps">
                         {meta.label}
                       </div>
@@ -374,13 +326,15 @@ export function GlobalSearch({
                           const current = offsets[g]! + h;
                           return (
                             <OptionRow
-                              key={`${group.source}-${hit.id}`}
+                              key={`${group.type}-${hit.id}`}
                               id={optionId(current)}
                               icon={hit.vip ? Star : meta.icon}
                               label={highlight(hit.title, debounced)}
                               description={highlight(hit.subtitle, debounced)}
                               trailing={
-                                openable(hit) ? hit.meta : "Not available in your properties"
+                                openable(hit)
+                                  ? (hit.meta ?? undefined)
+                                  : "Not available in your properties"
                               }
                               disabled={!openable(hit)}
                               active={current === nav.active}
@@ -427,6 +381,21 @@ export function GlobalSearch({
                     {property ? " in this property" : ""}.
                   </p>
                 </div>
+              ) : failed ? (
+                <div role="alert" className="px-3 py-10 text-center">
+                  <p className="text-sm font-semibold text-fg">Search is unavailable</p>
+                  <p className="mt-1 text-sm text-fg-secondary">
+                    Check your connection, then{" "}
+                    <button
+                      type="button"
+                      onClick={() => start(debounced, true)}
+                      className="font-medium text-fg underline underline-offset-2"
+                    >
+                      try again
+                    </button>
+                    .
+                  </p>
+                </div>
               ) : !loading && flat.length === 0 ? (
                 <div role="status" className="px-3 py-10 text-center">
                   <p className="text-sm font-semibold text-fg">No results for “{debounced}”</p>
@@ -448,7 +417,7 @@ export function GlobalSearch({
                 <kbd className="font-mono">Esc</kbd> close
               </span>
               <span aria-live="polite" className="ms-auto">
-                {searching && !loading
+                {searching && !loading && !failed
                   ? `${flat.length} result${flat.length === 1 ? "" : "s"}`
                   : ""}
               </span>

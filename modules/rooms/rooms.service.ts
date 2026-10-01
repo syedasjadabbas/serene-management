@@ -4,6 +4,7 @@ import type { PropertyContext } from "@/lib/http/context";
 import { AppError, notFound, staleVersion } from "@/lib/http/errors";
 import type { Permission } from "@/lib/permissions/catalog";
 import { hasPermission } from "@/lib/permissions/evaluate";
+import { matches } from "@/lib/utils/text-match";
 import {
   lockInventoryForRelease,
   reserveInventory,
@@ -27,6 +28,7 @@ import {
   findOverlappingBlocks,
   findRoomBoard,
   findRoomPicker,
+  findRoomsForSearch,
   findRoomDetail,
   findRoomRef,
   findServiceReasonCode,
@@ -566,6 +568,16 @@ export async function listRoomBoard(
 export async function listRoomPicker(ctx: PropertyContext): Promise<RoomPickerItem[]> {
   const rooms = await findRoomPicker(prisma, ctx.propertyId);
   return rooms.map((r) => ({ id: r.id, number: r.number, roomTypeCode: r.roomType.code }));
+}
+
+/**
+ * Rooms matching a global-search text: every word appears in the number or
+ * the room type code (the rule the palette applied locally before), in the
+ * picker's order, at most `limit`.
+ */
+export async function searchRooms(ctx: PropertyContext, q: string, limit: number) {
+  const rooms = await findRoomsForSearch(prisma, ctx.propertyId);
+  return rooms.filter((room) => matches(q, room.number, room.roomTypeCode)).slice(0, limit);
 }
 
 export async function boardReferenceData(ctx: PropertyContext) {

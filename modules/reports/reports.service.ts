@@ -4,6 +4,8 @@ import type { PropertyContext } from "@/lib/http/context";
 import { AppError, forbidden } from "@/lib/http/errors";
 import type { Permission } from "@/lib/permissions/catalog";
 import { hasPermission } from "@/lib/permissions/evaluate";
+import { serverEnv } from "@/lib/env";
+import { Semaphore } from "@/lib/utils/concurrency";
 import { csvLine } from "@/lib/utils/csv";
 import { type MoneyUnits, formatMoney, parseMoney } from "@/lib/utils/money";
 import { addDays } from "@/modules/business-date/business-date.policy";
@@ -14,6 +16,7 @@ import {
 } from "@/modules/night-audit/night-audit.repository";
 import { currencyMinorUnits } from "@/modules/rates/rates.service";
 import {
+  HEAVY_REPORT_KEYS,
   REPORT_PAGE_SIZE,
   REPORT_ROW_LIMIT,
   type RoomNightFacts,
@@ -1328,6 +1331,28 @@ export async function runReport(
   };
 }
 
+const heavyGate = globalThis as unknown as { __sereneHeavyReports?: Semaphore };
+
+/**
+ * Runs a heavy report inside this process's slot limit (REPORT_HEAVY_CONCURRENCY).
+ * Measured (docs/SCALABILITY.md §33): four users exporting the guest ledger
+ * back to back cut everyone else's throughput by 41 % without a limit and by
+ * 21 % with one slot, at the price of slower heavy exports.
+ */
+async function runHeavy<T>(work: () => Promise<T>): Promise<T> {
+  const env = serverEnv();
+  heavyGate.__sereneHeavyReports ??= new Semaphore(env.REPORT_HEAVY_CONCURRENCY);
+  const result = await heavyGate.__sereneHeavyReports.run(env.REPORT_HEAVY_WAIT_MS, work);
+  if (!result.ran) {
+    throw new AppError(
+      "RATE_LIMITED",
+      "Several large reports are being prepared right now. Try again in a few seconds.",
+      { reason: "REPORTS_BUSY", retryAfterSeconds: 5 },
+    );
+  }
+  return result.value;
+}
+
 async function computeReport(
   ctx: PropertyContext,
   key: ReportKey,
@@ -1355,7 +1380,9 @@ async function computeReport(
     noShowCodeId: config.noShowTransactionCodeId,
     rowLimit: REPORT_ROW_LIMIT + 1,
   };
-  const output = await report.run(env);
+  const output = HEAVY_REPORT_KEYS.has(key)
+    ? await runHeavy(() => report.run(env))
+    : await report.run(env);
   if (output.rows.length > REPORT_ROW_LIMIT) {
     throw new AppError(
       "BUSINESS_RULE_VIOLATION",

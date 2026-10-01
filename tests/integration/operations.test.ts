@@ -35,6 +35,7 @@ const urlFor = (name: string) => {
 // Pinned clock: every retention expectation is relative to it, not to today.
 const NOW = new Date("2031-03-15T12:00:00.000Z");
 const DAY = 24 * 60 * 60 * 1000;
+const HOUR = 60 * 60 * 1000;
 const ago = (days: number) => new Date(NOW.getTime() - days * DAY);
 
 const settings = {
@@ -189,6 +190,14 @@ describe("H6 retention maintenance", () => {
     await outbox("publishedRecent", "PUBLISHED", ago(10), ago(5));
     await outbox("failedOld", "FAILED", ago(91));
     await outbox("failedRecent", "FAILED", ago(10));
+    // Shared rate-limit windows (D59): only windows that ended over a day ago go.
+    await db.rateLimitWindow.createMany({
+      data: [
+        { key: "test.retention:ended-long-ago", count: 3, resetAt: ago(2) },
+        { key: "test.retention:ended-recently", count: 3, resetAt: new Date(NOW.getTime() - HOUR) },
+        { key: "test.retention:live", count: 1, resetAt: new Date(NOW.getTime() + HOUR) },
+      ],
+    });
   });
 
   const counts = (
@@ -204,6 +213,8 @@ describe("H6 retention maintenance", () => {
       idempotencyKeys: 1,
       outboxPublished: 1,
       outboxFailed: 1,
+      rateLimitWindows: 1,
+      backgroundJobs: 0,
     });
     expect(report.pendingOutboxRetained).toBe(1);
     expect(await db.authSession.count()).toBe(5);
@@ -218,6 +229,8 @@ describe("H6 retention maintenance", () => {
       idempotencyKeys: 1,
       outboxPublished: 1,
       outboxFailed: 1,
+      rateLimitWindows: 1,
+      backgroundJobs: 0,
     });
     const left = async <T extends { id: string }>(rows: Promise<T[]>) =>
       (await rows).map((row) => Object.entries(ids).find(([, id]) => id === row.id)?.[0]).sort();
@@ -238,11 +251,14 @@ describe("H6 retention maintenance", () => {
       "pendingAncient",
       "publishedRecent",
     ]);
+    expect(
+      (await db.rateLimitWindow.findMany({ select: { key: true } })).map((w) => w.key).sort(),
+    ).toEqual(["test.retention:ended-recently", "test.retention:live"]);
   });
 
   it("is safe to repeat: a second run finds nothing", async () => {
     const report = await runRetention(db, { now: NOW });
-    expect(Object.values(counts(report, "deleted"))).toEqual([0, 0, 0, 0, 0]);
+    expect(Object.values(counts(report, "deleted"))).toEqual([0, 0, 0, 0, 0, 0, 0]);
     expect(await db.outboxEvent.count({ where: { status: "PENDING" } })).toBe(1);
   });
 

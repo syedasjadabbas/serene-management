@@ -322,7 +322,10 @@ describe("H3 administration authority", () => {
       userAction(disableRoute, "disable", solo.adminId, y),
     ]);
     expect([a.status, b.status].filter((s) => s === 200)).toHaveLength(1);
-    expect([a.status, b.status].some((s) => s === 403 || s === 422)).toBe(true);
+    // The other request is refused: 403/422 when it reaches the authority check, or
+    // 401 when the winner committed first and its actor is already disabled at
+    // authentication (a legitimate interleaving; either way it changes nothing).
+    expect([a.status, b.status].some((s) => s === 401 || s === 403 || s === 422)).toBe(true);
     const active = await prisma.user.count({
       where: { organizationId: solo.organizationId, status: "ACTIVE" },
     });

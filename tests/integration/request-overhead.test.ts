@@ -54,13 +54,14 @@ const businessDate = (jar: CookieJar, propertyId: string) =>
   });
 
 describe("request overhead (M10)", () => {
-  it("authenticates and scopes a property request in three statements", async () => {
+  it("authenticates and scopes a property request in one statement", async () => {
     await businessDate(agentA, A); // warm-up (connection, prepared plans)
     const { result, statements, texts } = await countStatements(() => businessDate(agentA, A));
     expect(result.status).toBe(200);
-    // Session+user+organization, grants, properties with business dates — then the
-    // handler's own read of the business-date view. Was 7 (6 before the handler).
-    expect(statements).toBe(4);
+    // One statement for session + user + organization + grants + properties with
+    // business dates (scalability phase 2), then the handler's own read of the
+    // business-date view. Was 7 before M10, then 4 (three authentication statements).
+    expect(statements).toBe(2);
     expect(texts.filter((t) => /"business_dates"/.test(t))).toHaveLength(2);
   });
 

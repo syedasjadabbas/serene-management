@@ -63,6 +63,55 @@ describe("database pool configuration (M19)", () => {
     }
   });
 
+  it("passes the pool size, idle timeout and connection lifetime settings (D64)", () => {
+    const config = pgPoolConfig(
+      env({
+        DATABASE_POOL_MAX: "8",
+        DATABASE_POOL_MIN: "2",
+        DATABASE_POOL_IDLE_TIMEOUT_MS: "120000",
+        DATABASE_POOL_MAX_LIFETIME_S: "1800",
+      }),
+    );
+    expect(config).toMatchObject({
+      max: 8,
+      min: 2,
+      idleTimeoutMillis: 120_000,
+      maxLifetimeSeconds: 1800,
+    });
+  });
+
+  it("sends no startup options through a transaction-mode PgBouncer (set them on the role)", () => {
+    const config = pgPoolConfig(
+      env({
+        DATABASE_POOLER: "pgbouncer-transaction",
+        REALTIME_DATABASE_URL: "postgresql://serene:pw@db-direct:5432/serene_management",
+      }),
+    );
+    expect(config.options).toBeUndefined();
+    expect(config.application_name).toBe("serene-management");
+  });
+
+  it("requires a direct LISTEN connection behind a transaction pooler, and min ≤ max", () => {
+    const pooled = parseServerEnv({ ...base, DATABASE_POOLER: "pgbouncer-transaction" });
+    expect(pooled.success).toBe(false);
+    if (!pooled.success) expect(pooled.error).toContain("REALTIME_DATABASE_URL");
+    // Without live updates there is no LISTEN connection to protect.
+    expect(
+      parseServerEnv({ ...base, DATABASE_POOLER: "pgbouncer-transaction", REALTIME_ENABLED: "0" })
+        .success,
+    ).toBe(true);
+    const inverted = parseServerEnv({ ...base, DATABASE_POOL_MAX: "4", DATABASE_POOL_MIN: "5" });
+    expect(inverted.success).toBe(false);
+    if (!inverted.success) expect(inverted.error).toContain("DATABASE_POOL_MIN");
+    for (const [name, value] of [
+      ["DATABASE_POOL_IDLE_TIMEOUT_MS", "10"],
+      ["DATABASE_POOL_MAX_LIFETIME_S", "-1"],
+      ["DATABASE_POOLER", "pgpool"],
+    ] as const) {
+      expect(parseServerEnv({ ...base, [name]: value }).success, `${name}=${value}`).toBe(false);
+    }
+  });
+
   it("never leaks the connection password into the session options", () => {
     const config = pgPoolConfig(env({ DATABASE_URL: "postgresql://serene:S3cret-Pw@db:5432/x" }));
     expect(config.options).not.toContain("S3cret-Pw");

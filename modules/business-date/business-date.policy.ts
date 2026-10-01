@@ -65,6 +65,38 @@ export function addDays(date: string, days: number): string {
   return toDateOnly(new Date(fromDateOnly(date).getTime() + days * MS_PER_DAY));
 }
 
+/**
+ * The property's local date and time `elapsedMs` after the server reported
+ * them (`time` "HH:MM"). Anchored to the server's value, not the browser
+ * clock; the client re-reads the server value regularly (DST, drift).
+ */
+export function advancePropertyTime(
+  date: string,
+  time: string,
+  elapsedMs: number,
+): { date: string; time: string } {
+  const [hours = 0, minutes = 0] = time.split(":").map(Number);
+  const total = hours * 60 + minutes + Math.max(0, Math.floor(elapsedMs / 60_000));
+  const days = Math.floor(total / 1440);
+  const within = total % 1440;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return {
+    date: days ? addDays(date, days) : date,
+    time: `${pad(Math.floor(within / 60))}:${pad(within % 60)}`,
+  };
+}
+
+/**
+ * Milliseconds until safely past the property's next local midnight, from a
+ * server time "HH:MM" read `elapsedMs` ago (the minute's seconds are unknown,
+ * so the result errs late, never early).
+ */
+export function msUntilAfterLocalMidnight(time: string, elapsedMs: number): number {
+  const [hours = 0, minutes = 0] = time.split(":").map(Number);
+  const remaining = (1440 - (hours * 60 + minutes)) * 60_000 - elapsedMs;
+  return Math.max(0, remaining) + 5_000;
+}
+
 /** Whole days from `from` to `to` (positive when `to` is later). */
 export function daysBetween(from: string, to: string): number {
   return Math.round((fromDateOnly(to).getTime() - fromDateOnly(from).getTime()) / MS_PER_DAY);

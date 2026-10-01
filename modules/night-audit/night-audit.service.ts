@@ -1,13 +1,15 @@
 import "server-only";
+import { randomUUID } from "node:crypto";
 import type { Prisma } from "@/generated/prisma/client";
 import { prisma, type Tx } from "@/lib/db/prisma";
-import { databaseErrorCode, runInTransaction } from "@/lib/db/transaction";
+import { databaseErrorCode, isConnectionError, runInTransaction } from "@/lib/db/transaction";
 import { auditActor, type IdempotencyRequest, type PropertyContext } from "@/lib/http/context";
 import { AppError, notFound } from "@/lib/http/errors";
 import { logServerError } from "@/lib/http/log";
 import { hasPermission } from "@/lib/permissions/evaluate";
 import { decodeCursor, encodeCursor } from "@/lib/utils/cursor";
 import { formatMoney, parseMoney } from "@/lib/utils/money";
+import { resolveJobActor } from "@/modules/access/access.service";
 import { recordAudit, userDisplayNames } from "@/modules/audit/audit.service";
 import { recordEvent } from "@/modules/integrations/outbox.service";
 import type { AuditActor } from "@/modules/audit/audit.types";
@@ -22,6 +24,9 @@ import { addDays, localDateInZone, toDateOnly } from "@/modules/business-date/bu
 import { applyCutoffsInTx } from "@/modules/groups/groups.service";
 import { rollTasksInTx } from "@/modules/housekeeping/housekeeping.service";
 import { runIdempotent } from "@/modules/idempotency/idempotency.service";
+import { JobFailure, LeaseLostError } from "@/modules/jobs/jobs.policy";
+import { enqueueJob, findSubjectJob, stopSubjectJob } from "@/modules/jobs/jobs.service";
+import type { JobHandler, JobRun } from "@/modules/jobs/jobs.types";
 import {
   lockReservationRoomById,
   lockReservationRoomsByIds,
@@ -84,6 +89,7 @@ import type {
   CheckResult,
   NightAuditSummary,
   ReadinessView,
+  RunJobView,
   RunListItem,
   RunStepView,
   RunView,
@@ -92,9 +98,10 @@ import type {
 /**
  * Night audit (docs/PMS_WORKFLOWS.md §26, ARCHITECTURE D7, D30–D34).
  *
- * Phase A (short transaction): the business date row FOR UPDATE, the
- *   Idempotency-Key, a RUNNING run, the date IN_AUDIT. From then on every
- *   posting command answers 423 BUSINESS_DATE_LOCKED.
+ * Phase A (short transaction, in the request): the business date row FOR
+ *   UPDATE, the Idempotency-Key, a RUNNING run, the date IN_AUDIT and the
+ *   background job that executes Phases B and C (docs/SCALABILITY.md §33).
+ *   From then on every posting command answers 423 BUSINESS_DATE_LOCKED.
  * Phase B (read-only): the checks. A blocking one fails the run; the date
  *   returns to OPEN and nothing was posted.
  * Phase C (one transaction): room/package/tax posting, no-shows, releases,
@@ -377,25 +384,41 @@ function stepRows(runId: string, steps: StepRecord[]): Prisma.NightAuditStepCrea
   });
 }
 
+/** The job kind that executes a started run (Phases B and C). */
+export const NIGHT_AUDIT_JOB = "night_audit.run" as const;
+/** A run is retried this many times after a crash or a lost connection, then failed. */
+const NIGHT_AUDIT_JOB_ATTEMPTS = 3;
+
+/** Internal job input (never shown to clients). */
+interface NightAuditJobPayload {
+  subjectId: string;
+  reason: string;
+  requestId: string;
+  ipAddress: string | null;
+  userAgent: string | null;
+}
+
 /**
- * Starts and runs night audit for the property's current business date.
- * Returns the run: COMPLETED, or FAILED with the step and reason (nothing
- * posted, date OPEN). A retried request with the same Idempotency-Key
- * returns the same run.
+ * Starts night audit for the property's current business date (Phase A) and
+ * queues its execution (Phases B and C) as a background job in the same
+ * transaction (docs/SCALABILITY.md §33). Returns the RUNNING run with its
+ * job; clients follow it with `GET …/night-audits/{runId}`. Every refusal of
+ * the former synchronous start is unchanged: 409 BUSINESS_DATE_CHANGED and
+ * NIGHT_AUDIT_RUNNING, 422 DATE_AHEAD. A retried request with the same
+ * Idempotency-Key returns the same run, never a second one.
  */
 export async function startNightAudit(
   ctx: PropertyContext,
   input: StartNightAuditInput,
   idempotency: IdempotencyRequest | null,
-  options: { now?: Date; hooks?: NightAuditHooks } = {},
+  options: { now?: Date } = {},
 ): Promise<RunView> {
   const now = options.now ?? new Date();
   const requested = requireLive(ctx);
 
-  // Phase A — lock the date and create the run.
   const started = await runInTransaction(async (tx) => {
     const current = await lockCurrentBusinessDateForUpdate(tx, ctx.propertyId);
-    const { result, replayed } = await runIdempotent(tx, ctx.userId, idempotency, async () => {
+    const { result } = await runIdempotent(tx, ctx.userId, idempotency, async () => {
       // No current row after the lock wait, or another date than the one the
       // request was made for: a concurrent audit has just closed it (D33).
       // Never close a date the user did not choose.
@@ -423,6 +446,23 @@ export async function startNightAudit(
         startedById: ctx.userId,
       });
       await setBusinessDateStatus(tx, current.id, "IN_AUDIT");
+      const payload: NightAuditJobPayload = {
+        subjectId: run.id,
+        reason: input.reason,
+        requestId: ctx.requestId,
+        ipAddress: ctx.ipAddress,
+        userAgent: ctx.userAgent,
+      };
+      const job = await enqueueJob(
+        tx,
+        { organizationId: ctx.organizationId, propertyId: ctx.propertyId, createdById: ctx.userId },
+        {
+          kind: NIGHT_AUDIT_JOB,
+          payload: { ...payload },
+          dedupeKey: `${NIGHT_AUDIT_JOB}:${run.id}`,
+          maxAttempts: NIGHT_AUDIT_JOB_ATTEMPTS,
+        },
+      );
       await recordAudit(
         tx,
         { ...auditActor(ctx), businessDate: current.date },
@@ -432,7 +472,12 @@ export async function startNightAudit(
           resourceId: run.id,
           risk: "HIGH",
           before: { businessDateStatus: "OPEN" },
-          after: { businessDate: current.date, attempt, businessDateStatus: "IN_AUDIT" },
+          after: {
+            businessDate: current.date,
+            attempt,
+            businessDateStatus: "IN_AUDIT",
+            jobId: job.id,
+          },
           reason: input.reason,
           reasonCodeId: input.reasonCodeId ?? null,
           permission: "nightaudit:run",
@@ -440,26 +485,117 @@ export async function startNightAudit(
       );
       return { runId: run.id, businessDate: current.date };
     });
-    return { ...result, replayed };
+    return result;
   });
-  if (started.replayed) return getRun(ctx, started.runId);
+  return getRun(ctx, started.runId);
+}
 
-  const { runId, businessDate } = started;
+function parsePayload(payload: unknown): NightAuditJobPayload {
+  const p = (payload ?? {}) as Partial<NightAuditJobPayload>;
+  if (typeof p.subjectId !== "string" || typeof p.reason !== "string") {
+    throw new JobFailure("INVALID_JOB", "The audit job is incomplete and cannot run");
+  }
+  return {
+    subjectId: p.subjectId,
+    reason: p.reason,
+    requestId: typeof p.requestId === "string" ? p.requestId : `job-${randomUUID()}`,
+    ipAddress: typeof p.ipAddress === "string" ? p.ipAddress : null,
+    userAgent: typeof p.userAgent === "string" ? p.userAgent : null,
+  };
+}
+
+/**
+ * The context a job acts with: the starting user's access, read now. A user
+ * who lost the permission, was disabled or can no longer reach the property
+ * gets a context without any access (`allowed` false).
+ */
+async function jobContext(
+  job: { id: string; organizationId: string; propertyId: string | null; createdById: string },
+  payload: NightAuditJobPayload,
+): Promise<{ ctx: PropertyContext; allowed: boolean }> {
+  if (!job.propertyId) throw new JobFailure("INVALID_JOB", "The audit job has no property");
+  const actor = await resolveJobActor(job.createdById, job.organizationId, job.propertyId);
+  const property = actor?.property;
+  const ctx: PropertyContext = {
+    userId: job.createdById,
+    organizationId: job.organizationId,
+    sessionId: job.id,
+    access: actor?.access ?? {
+      userId: job.createdById,
+      organizationId: job.organizationId,
+      isSuperAdmin: false,
+      organizationPermissions: [],
+      byProperty: {},
+    },
+    requestId: payload.requestId,
+    ipAddress: payload.ipAddress,
+    userAgent: payload.userAgent,
+    propertyId: job.propertyId,
+    propertyCode: property?.code ?? "",
+    timezone: property?.timezone ?? "UTC",
+    currencyCode: property?.currencyCode ?? "",
+    businessDate: property?.businessDate ?? null,
+  };
+  return {
+    ctx,
+    allowed: !!actor && hasPermission(actor.access, job.propertyId, "nightaudit:run"),
+  };
+}
+
+/**
+ * Executes a started run: Phase B (read-only checks) and Phase C (one
+ * transaction). Idempotent: a run that is no longer RUNNING (finished by an
+ * earlier attempt, recovered, cancelled) is left as it is. Only the holder
+ * of the job's lease can change the run: the commit and the failure record
+ * both lock the job row and give up when the lease was lost, and the commit
+ * marks the job SUCCEEDED in its own transaction.
+ */
+export async function executeNightAudit(
+  job: JobRun,
+  options: { hooks?: NightAuditHooks } = {},
+): Promise<{ runId: string; status: string }> {
+  const payload = parsePayload(job.payload);
+  const runId = payload.subjectId;
+  const { ctx, allowed } = await jobContext(job, payload);
+  const row = await findRun(prisma, ctx.propertyId, runId);
+  if (!row) throw new JobFailure("NOT_FOUND", "The night audit run no longer exists");
+  if (row.status !== "RUNNING") return { runId, status: row.status };
+  const businessDate = toDateOnly(row.businessDate);
+  ctx.businessDate = businessDate;
   const steps: StepRecord[] = [];
+  const fail = async (error: unknown) => {
+    // Lost the database (not a problem of the audit): the job is retried with
+    // backoff and the run stays RUNNING; Phase C rolled back as a whole.
+    if (error instanceof LeaseLostError || isConnectionError(error)) throw error;
+    await failRun(ctx, runId, businessDate, steps, error, payload.reason, job);
+    return { runId, status: "FAILED" };
+  };
+
+  // The user's authority is checked again now, not only when they asked.
+  if (!allowed) {
+    return fail(
+      new AppError(
+        "FORBIDDEN",
+        "The user who started the audit may no longer run it; nothing was posted",
+        { reason: "PERMISSION_REVOKED" },
+      ),
+    );
+  }
 
   // Phase B — read-only checks.
+  await job.progress({ stage: "CHECKS" });
+  const checksStarted = new Date();
   let checks: CheckResult[];
   try {
     checks = await runChecks(ctx.propertyId, businessDate);
   } catch (error) {
-    await failRun(ctx, runId, businessDate, steps, error, input.reason);
-    return getRun(ctx, runId);
+    return fail(error);
   }
   for (const result of checks) {
     steps.push({
       code: result.code,
       status: stepStatusOf(result.outcome),
-      startedAt: now,
+      startedAt: checksStarted,
       finishedAt: new Date(),
       result: {
         outcome: result.outcome,
@@ -472,31 +608,61 @@ export async function startNightAudit(
   }
   if (isBlocking(checks)) {
     const blocking = checks.filter((c) => c.outcome === "BLOCKING");
-    await failRun(
-      ctx,
-      runId,
-      businessDate,
-      steps,
+    return fail(
       new AppError(
         "BUSINESS_RULE_VIOLATION",
         `Blocking checks: ${blocking.map((c) => c.label).join(", ")}`,
         { reason: "PRE_CHECK_FAILED" },
       ),
-      input.reason,
     );
-    return getRun(ctx, runId);
   }
 
-  // Phase C — one transaction.
+  // Phase C — one transaction, which also completes the job.
+  await job.progress({ stage: "COMMIT" });
   try {
     await runInTransaction(
-      (tx) => commitNightAudit(tx, ctx, runId, businessDate, steps, input.reason, options.hooks),
+      (tx) =>
+        commitNightAudit(tx, ctx, runId, businessDate, steps, payload.reason, options.hooks, job),
       { timeoutMs: COMMIT_TIMEOUT_MS, statementTimeoutMs: COMMIT_TIMEOUT_MS, retry: false },
     );
   } catch (error) {
-    await failRun(ctx, runId, businessDate, steps, error, input.reason);
+    return fail(error);
   }
-  return getRun(ctx, runId);
+  return { runId, status: "COMPLETED" };
+}
+
+/**
+ * The night audit job (lib/jobs/registry.ts). `hooks` is the failure
+ * injection seam of the tests.
+ */
+export function nightAuditJob(options: { hooks?: NightAuditHooks } = {}): JobHandler {
+  return {
+    kind: NIGHT_AUDIT_JOB,
+    maxAttempts: NIGHT_AUDIT_JOB_ATTEMPTS,
+    run: (job) => executeNightAudit(job, options),
+    // Every attempt crashed or lost the database: the run must not hold the
+    // business date IN_AUDIT for ever. Nothing was posted (Phase C commits
+    // atomically, and a committed run is no longer RUNNING).
+    onGiveUp: async (job) => {
+      const payload = parsePayload(job.payload);
+      const { ctx } = await jobContext(job, payload);
+      const row = await findRun(prisma, ctx.propertyId, payload.subjectId);
+      if (!row || row.status !== "RUNNING") return;
+      ctx.businessDate = toDateOnly(row.businessDate);
+      await failRun(
+        ctx,
+        payload.subjectId,
+        ctx.businessDate,
+        [],
+        new AppError(
+          "INTERNAL_ERROR",
+          "The audit could not be completed after several attempts; nothing was posted",
+          { reason: "JOB_FAILED" },
+        ),
+        payload.reason,
+      );
+    },
+  };
 }
 
 /** Phase C: everything that closes the day, in one transaction. */
@@ -508,6 +674,7 @@ async function commitNightAudit(
   steps: StepRecord[],
   reason: string,
   hooks: NightAuditHooks | undefined,
+  job: JobRun,
 ): Promise<void> {
   const current = await lockCurrentBusinessDateForUpdate(tx, ctx.propertyId);
   if (!current || current.status !== "IN_AUDIT" || current.date !== businessDate) {
@@ -521,6 +688,8 @@ async function commitNightAudit(
       reason: "RUN_NOT_RUNNING",
     });
   }
+  // Lock order everywhere: business date, then run, then job.
+  await job.assertLease(tx);
   const nextDate = addDays(businessDate, 1);
   const actor = systemActor(ctx);
   const config = await findAuditConfiguration(tx, ctx.propertyId);
@@ -823,6 +992,7 @@ async function commitNightAudit(
       openedDate: nextDate,
     },
   );
+  await job.completeIn(tx, { runId, status: "COMPLETED" });
 }
 
 /**
@@ -837,6 +1007,7 @@ async function failRun(
   steps: StepRecord[],
   error: unknown,
   reason: string,
+  job?: JobRun,
 ): Promise<void> {
   const code =
     error instanceof AppError
@@ -858,6 +1029,8 @@ async function failRun(
     const current = await lockCurrentBusinessDateForUpdate(tx, ctx.propertyId);
     const run = await lockRun(tx, ctx.propertyId, runId);
     if (!run || run.status !== "RUNNING") return;
+    // A worker that lost its lease leaves the run to the one that took over.
+    if (job) await job.assertLease(tx);
     await insertSteps(tx, stepRows(runId, steps));
     await finishRun(tx, runId, {
       status: "FAILED",
@@ -887,7 +1060,10 @@ async function failRun(
  * Recovers a run left RUNNING by a crash between the phases: the run is
  * marked FAILED and the date reopened. The business date is taken with
  * NOWAIT, so a commit in progress (which holds it) is never interrupted,
- * and the run must be older than the stale threshold.
+ * and the run must be older than the stale threshold. A run whose job a
+ * worker holds right now is refused (409 NIGHT_AUDIT_IN_PROGRESS); a run
+ * whose job has not started yet is cancelled at once (errorCode CANCELLED),
+ * and its job can then never run.
  */
 export async function recoverRun(
   ctx: PropertyContext,
@@ -919,7 +1095,23 @@ export async function recoverRun(
           reason: "RUN_NOT_RUNNING",
         });
       }
-      if (!isStaleRun(run.started_at, now)) {
+      const job = await stopSubjectJob(
+        tx,
+        ctx.propertyId,
+        NIGHT_AUDIT_JOB,
+        runId,
+        { code: "CANCELLED", message: "The audit was stopped by a user" },
+        now,
+      );
+      if (job === "live") {
+        throw new AppError(
+          "CONFLICT",
+          "The audit is running on a worker right now; wait for it to finish",
+          { reason: "NIGHT_AUDIT_IN_PROGRESS" },
+        );
+      }
+      const cancelled = job === "cancelled-queued";
+      if (!cancelled && !isStaleRun(run.started_at, now)) {
         throw new AppError(
           "CONFLICT",
           "This run started moments ago and may still be working; try again in a few minutes",
@@ -927,11 +1119,21 @@ export async function recoverRun(
         );
       }
       await insertSteps(tx, stepRows(runId, []));
-      await finishRun(tx, runId, {
-        status: "FAILED",
-        errorCode: "RECOVERED",
-        errorMessage: "Recovered after an interruption; nothing was posted",
-      });
+      await finishRun(
+        tx,
+        runId,
+        cancelled
+          ? {
+              status: "FAILED",
+              errorCode: "CANCELLED",
+              errorMessage: "Cancelled while waiting for a worker; nothing was posted",
+            }
+          : {
+              status: "FAILED",
+              errorCode: "RECOVERED",
+              errorMessage: "Recovered after an interruption; nothing was posted",
+            },
+      );
       if (current && current.status === "IN_AUDIT" && current.date === run.business_date) {
         await setBusinessDateStatus(tx, current.id, "OPEN");
       }
@@ -943,8 +1145,12 @@ export async function recoverRun(
           resourceType: "NightAuditRun",
           resourceId: runId,
           risk: "HIGH",
-          before: { status: "RUNNING", businessDateStatus: current?.status ?? null },
-          after: { status: "FAILED", businessDateStatus: "OPEN" },
+          before: { status: "RUNNING", businessDateStatus: current?.status ?? null, job },
+          after: {
+            status: "FAILED",
+            errorCode: cancelled ? "CANCELLED" : "RECOVERED",
+            businessDateStatus: "OPEN",
+          },
           reason: input.reason,
           reasonCodeId: input.reasonCodeId ?? null,
           permission: "nightaudit:run",
@@ -973,6 +1179,18 @@ function runListItem(row: RunRow, names: Map<string, string>): RunListItem {
   };
 }
 
+function runJobView(job: NonNullable<Awaited<ReturnType<typeof findSubjectJob>>>): RunJobView {
+  return {
+    id: job.id,
+    status: job.status,
+    attempts: job.attempts,
+    maxAttempts: job.maxAttempts,
+    stage: job.progress?.stage ?? null,
+    runAfter: job.runAfter,
+    error: job.error,
+  };
+}
+
 export async function getRun(
   ctx: PropertyContext,
   runId: string,
@@ -980,7 +1198,10 @@ export async function getRun(
 ): Promise<RunView> {
   const row = await findRun(prisma, ctx.propertyId, runId);
   if (!row) throw notFound("Night audit run");
-  const names = await userDisplayNames(prisma, ctx.organizationId, [row.startedById]);
+  const [names, job] = await Promise.all([
+    userDisplayNames(prisma, ctx.organizationId, [row.startedById]),
+    findSubjectJob(ctx.propertyId, NIGHT_AUDIT_JOB, runId),
+  ]);
   const steps: RunStepView[] = row.steps.map((s) => ({
     sequence: s.sequence,
     code: s.code as StepCode,
@@ -996,11 +1217,13 @@ export async function getRun(
     errorMessage: row.errorMessage,
     summary: (row.summary as NightAuditSummary | null) ?? null,
     steps,
+    job: job ? runJobView(job) : null,
     actions: {
+      // Queued: cancel at once. Otherwise only a stale run no worker holds.
       recover:
         row.status === "RUNNING" &&
-        isStaleRun(row.startedAt, now) &&
-        hasPermission(ctx.access, ctx.propertyId, "nightaudit:run"),
+        hasPermission(ctx.access, ctx.propertyId, "nightaudit:run") &&
+        (job?.status === "QUEUED" || (!job?.leaseLive && isStaleRun(row.startedAt, now))),
     },
   };
 }

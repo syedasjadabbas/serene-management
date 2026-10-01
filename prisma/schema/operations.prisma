@@ -155,7 +155,8 @@ model HousekeepingTask {
   @@index([propertyId, businessDate, status])
   @@index([propertyId, attendantId, businessDate])
   /// Scalability phase: open and completed-not-inspected tasks per room (room board).
-  @@index([propertyId, roomId], map: "housekeeping_tasks_live_idx", where: raw("status IN ('PENDING', 'IN_PROGRESS', 'PAUSED', 'FAILED_INSPECTION', 'COMPLETED')"))
+  /// The predicate is written in PostgreSQL's canonical form so the drift check matches.
+  @@index([propertyId, roomId], map: "housekeeping_tasks_live_idx", where: raw("status = ANY (ARRAY['PENDING'::housekeeping_task_status, 'IN_PROGRESS'::housekeeping_task_status, 'PAUSED'::housekeeping_task_status, 'FAILED_INSPECTION'::housekeeping_task_status, 'COMPLETED'::housekeeping_task_status])"))
   @@map("housekeeping_tasks")
 }
 

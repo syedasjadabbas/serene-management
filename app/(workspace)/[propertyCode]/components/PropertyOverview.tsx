@@ -11,7 +11,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { StatusPanel } from "@/components/ui/StatusPanel";
 import { PageSkeleton } from "@/components/ui/PageSkeleton";
-import { useBusinessDate } from "@/hooks/useBusinessDate";
+import { useBusinessDate, usePropertyClock } from "@/hooks/useBusinessDate";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useProperty } from "@/hooks/useProperty";
 import { toClientApiError } from "@/lib/api/errors";
@@ -54,6 +54,7 @@ export function PropertyOverview() {
   const property = useProperty();
   const { data: me } = useMeQuery();
   const businessDate = useBusinessDate();
+  const clock = usePropertyClock(businessDate.data, businessDate.fulfilledTimeStamp);
   const { can } = usePermissions(property.id);
   const live = Boolean(businessDate.data?.businessDate);
 
@@ -180,7 +181,7 @@ export function PropertyOverview() {
     { label: "Business date status", value: bd?.status ?? "—" },
     {
       label: "Property local date and time",
-      value: bd ? `${bd.propertyLocalDate} ${bd.propertyLocalTime}` : "—",
+      value: clock ? `${clock.date} ${clock.time}` : "—",
       mono: true,
     },
     { label: "Time zone", value: property.timezone, mono: true },
@@ -235,8 +236,8 @@ export function PropertyOverview() {
         meta={status ? <Badge tone={status.tone}>{status.label}</Badge> : null}
         description={
           bd?.businessDate
-            ? `Business date ${formatDate(bd.businessDate)} · property time ${bd.propertyLocalTime} (${property.timezone})`
-            : `Property time ${bd?.propertyLocalTime ?? "—"} (${property.timezone})`
+            ? `Business date ${formatDate(bd.businessDate)} · property time ${clock?.time ?? "—"} (${property.timezone})`
+            : `Property time ${clock?.time ?? "—"} (${property.timezone})`
         }
         actions={
           <>

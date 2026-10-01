@@ -134,6 +134,9 @@ model UserRoleAssignment {
   @@unique([userId, roleId, propertyId], where: raw("property_id IS NOT NULL"))
   @@unique([userId, roleId], map: "user_role_assignments_org_scope_key", where: raw("property_id IS NULL"))
   @@index([propertyId])
+  /// Scalability phase 2: grants by user on every authenticated request (the unique
+  /// indexes above are partial and cannot serve a lookup by user alone).
+  @@index([userId])
   @@map("user_role_assignments")
 }
 

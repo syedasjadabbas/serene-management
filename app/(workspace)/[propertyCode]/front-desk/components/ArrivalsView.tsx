@@ -15,6 +15,7 @@ import { toClientApiError } from "@/lib/api/errors";
 import { formatShortDate } from "@/lib/utils/format";
 import type { ArrivalRow, StayDetail } from "@/modules/front-desk/front-desk.types";
 import { POLL_MS } from "./constants";
+import { useLivePolling } from "@/hooks/useLivePolling";
 import { useCursorPages } from "./useCursorPages";
 
 const PAGE_SIZE = 50;
@@ -155,6 +156,7 @@ function ArrivalsPage({
   const property = useProperty();
   const { can } = usePermissions(property.id);
   // currentData belongs to these exact arguments, never to a previous filter.
+  const poll = useLivePolling("frontdesk", POLL_MS);
   const {
     currentData: data,
     isFetching,
@@ -162,7 +164,7 @@ function ArrivalsPage({
     refetch,
   } = useArrivalsQuery(
     { propertyId: property.id, filter, q: q || undefined, cursor, limit: String(PAGE_SIZE) },
-    { pollingInterval: cursor ? 0 : POLL_MS, skipPollingIfUnfocused: true },
+    { pollingInterval: cursor ? 0 : poll, skipPollingIfUnfocused: true },
   );
   const apiError = toClientApiError(error);
 

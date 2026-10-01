@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/Button";
 import { Select } from "@/components/ui/Select";
 import { StatusPanel } from "@/components/ui/StatusPanel";
 import { usePermissions } from "@/hooks/usePermissions";
+import { useLivePolling } from "@/hooks/useLivePolling";
 import { useProperty } from "@/hooks/useProperty";
 import { useRoomBoardOptionsQuery, useRoomBoardViewQuery } from "@/lib/api/endpoints/rooms.api";
 import { toClientApiError } from "@/lib/api/errors";
@@ -60,6 +61,7 @@ export function RoomBoardPanel({
   const [paging, setPaging] = useState({ key: pageKey, offset: 0 });
   const offset = paging.key === pageKey ? paging.offset : 0;
   const allowed = can("rooms:read");
+  const poll = useLivePolling("rooms", POLL_MS);
   const options = useRoomBoardOptionsQuery(property.id, { skip: !allowed });
   const board = useRoomBoardViewQuery(
     {
@@ -69,7 +71,7 @@ export function RoomBoardPanel({
       roomTypeId: roomTypeId || undefined,
       offset: offset > 0 ? String(offset) : undefined,
     },
-    { skip: !allowed, pollingInterval: POLL_MS, skipPollingIfUnfocused: true },
+    { skip: !allowed, pollingInterval: poll, skipPollingIfUnfocused: true },
   );
   // Only rows for the current filters: while a new filter loads, the old
   // result is not shown as if it were current.

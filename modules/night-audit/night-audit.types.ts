@@ -67,7 +67,25 @@ export interface RunView {
   errorMessage: string | null;
   summary: NightAuditSummary | null;
   steps: RunStepView[];
+  /**
+   * The background job executing the run (docs/SCALABILITY.md §33): queued,
+   * running (with its current stage), retrying, or finished. Null for runs
+   * from before background execution.
+   */
+  job: RunJobView | null;
   actions: { recover: boolean };
+}
+
+export interface RunJobView {
+  id: string;
+  status: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED";
+  attempts: number;
+  maxAttempts: number;
+  /** Current stage while RUNNING: CHECKS or COMMIT. */
+  stage: string | null;
+  /** When a queued attempt (first or retry) becomes due. */
+  runAfter: string | null;
+  error: { code: string; message: string } | null;
 }
 
 export interface RunListItem {

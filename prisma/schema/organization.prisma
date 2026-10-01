@@ -57,6 +57,7 @@ model Organization {
   guests             Guest[]
   preferenceCodes    PreferenceCode[]
   accountProfiles    AccountProfile[]
+  backgroundJobs     BackgroundJob[]
 
   @@map("organizations")
 }
@@ -104,6 +105,7 @@ model Property {
   groups                     Group[]
   userRoleAssignments        UserRoleAssignment[]
   nightAuditRuns             NightAuditRun[]
+  backgroundJobs             BackgroundJob[]
   dailyStatistics            DailyStatistic[]
   housekeepingAttendants     HousekeepingAttendant[]
   housekeepingTaskTypes      HousekeepingTaskType[]

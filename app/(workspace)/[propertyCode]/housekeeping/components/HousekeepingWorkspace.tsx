@@ -10,6 +10,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { StatusPanel } from "@/components/ui/StatusPanel";
 import { PageSkeleton } from "@/components/ui/PageSkeleton";
 import { usePermissions } from "@/hooks/usePermissions";
+import { useLivePolling } from "@/hooks/useLivePolling";
 import { useProperty } from "@/hooks/useProperty";
 import { useHousekeepingSummaryQuery } from "@/lib/api/endpoints/housekeeping.api";
 import { toClientApiError } from "@/lib/api/errors";
@@ -50,7 +51,7 @@ export function HousekeepingWorkspace() {
   const allowed = can("housekeeping:read");
   const summary = useHousekeepingSummaryQuery(property.id, {
     skip: !allowed,
-    pollingInterval: 60_000,
+    pollingInterval: useLivePolling("housekeeping", 60_000),
     skipPollingIfUnfocused: true,
   });
   const summaryError = toClientApiError(summary.error);

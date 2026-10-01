@@ -1,16 +1,23 @@
 import "server-only";
 import { PrismaPg } from "@prisma/adapter-pg";
+import pg from "pg";
 import { PrismaClient, type Prisma } from "@/generated/prisma/client";
 import { serverEnv } from "@/lib/env";
 import { pgPoolConfig } from "./pool-config";
+import { instrumentPool } from "./pool-metrics";
 
 /**
  * Single PrismaClient per server process. In development the instance is
  * cached on globalThis so hot reload does not exhaust database connections.
  */
 function createPrismaClient() {
-  // Pool size, timeouts and the UTC session zone (D29, D52): lib/db/pool-config.ts.
-  const adapter = new PrismaPg(pgPoolConfig(serverEnv()));
+  const env = serverEnv();
+  // Pool size, timeouts, lifetime and the UTC session zone (D29, D52, D64):
+  // lib/db/pool-config.ts. The pool is created here (not by the adapter) so
+  // its checkouts can be measured for the opt-in Server-Timing header.
+  const pool = new pg.Pool(pgPoolConfig(env));
+  if (env.SERVER_TIMING === "1") instrumentPool(pool);
+  const adapter = new PrismaPg(pool, { disposeExternalPool: true });
   return new PrismaClient({ adapter });
 }
 

@@ -15,6 +15,7 @@ import { formatDateTime, formatShortDate } from "@/lib/utils/format";
 import type { StayDetail, StayRow } from "@/modules/front-desk/front-desk.types";
 import { CheckOutDialog } from "./CheckOutDialog";
 import { POLL_MS } from "./constants";
+import { useLivePolling } from "@/hooks/useLivePolling";
 import { useCursorPages } from "./useCursorPages";
 
 const PAGE_SIZE = 50;
@@ -157,7 +158,8 @@ function StaysPage({
     cursor,
     limit: String(PAGE_SIZE),
   };
-  const polling = { pollingInterval: cursor ? 0 : POLL_MS, skipPollingIfUnfocused: true };
+  const poll = useLivePolling("frontdesk", POLL_MS);
+  const polling = { pollingInterval: cursor ? 0 : poll, skipPollingIfUnfocused: true };
   const inHouse = useInHouseQuery(args, { ...polling, skip: kind !== "in-house" });
   const departures = useDeparturesQuery(args, { ...polling, skip: kind !== "departures" });
   // currentData belongs to these exact arguments, never to a previous filter.

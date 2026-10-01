@@ -7,6 +7,7 @@ import { Badge, type BadgeTone } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Spinner } from "@/components/ui/Spinner";
 import { StatusPanel } from "@/components/ui/StatusPanel";
+import { useLivePolling } from "@/hooks/useLivePolling";
 import { useProperty } from "@/hooks/useProperty";
 import {
   useHousekeepingTasksQuery,
@@ -96,9 +97,10 @@ function TaskPage({
   onDialog: (state: DialogState) => void;
 }) {
   const property = useProperty();
+  const poll = useLivePolling("housekeeping", 60_000);
   const { data, isLoading, isFetching, error, refetch } = useHousekeepingTasksQuery(
     { propertyId: property.id, view, cursor, limit: String(PAGE_SIZE) },
-    { pollingInterval: first ? 60_000 : 0, skipPollingIfUnfocused: true },
+    { pollingInterval: first ? poll : 0, skipPollingIfUnfocused: true },
   );
   const apiError = toClientApiError(error);
 

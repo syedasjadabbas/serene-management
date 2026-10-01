@@ -16,6 +16,7 @@ import { toClientApiError } from "@/lib/api/errors";
 import { formatDate } from "@/lib/utils/format";
 import { ArrivalsView } from "./ArrivalsView";
 import { POLL_MS } from "./constants";
+import { useLivePolling } from "@/hooks/useLivePolling";
 import { ListToolbar } from "./ListToolbar";
 import { RoomBoardView } from "./RoomBoardView";
 import { StaysView } from "./StaysView";
@@ -70,7 +71,7 @@ export function FrontDeskWorkspace() {
   const allowed = can("frontdesk:read");
   const summary = useFrontDeskSummaryQuery(property.id, {
     skip: !allowed,
-    pollingInterval: POLL_MS,
+    pollingInterval: useLivePolling("frontdesk", POLL_MS),
     skipPollingIfUnfocused: true,
   });
   const summaryError = toClientApiError(summary.error);

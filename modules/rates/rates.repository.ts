@@ -151,6 +151,15 @@ export function findRatePlanList(tx: Tx, propertyId: string) {
   });
 }
 
+/** The rate plan list's rows and order, display fields only (global search: one statement). */
+export function findRatePlansForSearch(tx: Tx, propertyId: string) {
+  return tx.ratePlan.findMany({
+    where: { propertyId },
+    orderBy: [{ status: "asc" }, { displayOrder: "asc" }, { code: "asc" }],
+    select: { id: true, code: true, name: true, kind: true, status: true, currencyCode: true },
+  });
+}
+
 export function findRatePlanDetail(tx: Tx, propertyId: string, id: string) {
   return tx.ratePlan.findFirst({
     where: { id, propertyId },

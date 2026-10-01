@@ -65,6 +65,22 @@ export const MAX_REPORT_DAYS = 366;
  */
 export const REPORT_ROW_LIMIT = 20_000;
 
+/**
+ * Reports that read the most rows over their widest range (measured on the
+ * benchmark data, 366 days: 0.5-3.1 million rows each, docs/SCALABILITY.md
+ * §33). Each process computes at most REPORT_HEAVY_CONCURRENCY of them at a
+ * time, so a few users exporting them cannot take the database from
+ * everyone else. Every other report runs freely.
+ */
+export const HEAVY_REPORT_KEYS: ReadonlySet<string> = new Set([
+  "guest-ledger",
+  "ledger-roll-forward",
+  "cancellations",
+  "arrivals",
+  "departures",
+  "revenue-by-code",
+]);
+
 /** Rows per JSON page (the CSV export always carries every row). */
 export const REPORT_PAGE_SIZE = 500;
 export const REPORT_PAGE_MAX = 1_000;
