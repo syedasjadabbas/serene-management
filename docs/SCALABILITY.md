@@ -1,7 +1,8 @@
 # Scalability program — toward 100 000 requests per second
 
 Status: **phases 1–6 done**: audit, baseline and fixes; authentication and shared rate limiting
-(§25–26); search (§28–30); live updates (§31); connection pooling (§32); background jobs (§33).
+(§25–26); search (§28–30); live updates (§31); connection pooling (§32); background jobs (§33);
+the night-audit balance check (§34).
 SERENE MANAGEMENT has
 **not** been shown to handle 100 000 requests per second, and nothing in this document claims
 it. What it does contain:
@@ -1910,11 +1911,11 @@ The test: 4 users exporting the 366-day guest ledger back to back, during the 16
 | Authorization and isolation       | The job resource answers only its starter (another user at the same property, another organization, an unknown id: 404); no payload, reason, user agent, worker or lease in the body. The starter's permission is re-checked at execution (`PERMISSION_REVOKED`). A starter who lost the property no longer sees the job |
 | Repeated polling                  | 20 concurrent polls: all 200, unchanged state                                                                                                                                                                                                                                                                            |
 
-### 33.8 Readiness and the folio balance check (MEASURED; not changed in this phase)
+### 33.8 Readiness and the folio balance check (MEASURED; fixed in phase 6B, §34)
 
 The readiness view and Phase B both run the night-audit checks. On the benchmark data, `findUnbalancedFolios` takes 12.0–22.7 s warm and over 30 s cold. That cold case is the statement timeout `57014`: readiness answers 500, and an audit started then fails at its checks. The rule re-sums the ledger of every folio that is not CLOSED, and 200,000 SETTLED folios qualify (one index probe each, ≈ 240 k buffer reads).
 
-- **PROPOSED:** compute the ledger sums in one aggregate pass. Measured on the clone: 5.4–7.0 s → 1.7–2.1 s warm, same rows.
+- **Done in phase 6B (§34):** the ledger sums are one aggregate pass, proven equivalent.
 - Alternatively, restrict the candidates to folios changed since the last closed date. This changes the rule (B4), so it needs a decision.
 - Browser QA ran with the statement timeout raised to 120 s for this reason.
 
@@ -1939,10 +1940,91 @@ Setup: the clone's SDX departures were settled and checked out through the API s
 
 ### 33.10 Remaining
 
-- **The night-audit checks** (§33.8) are now the longest part of an audit and make readiness a slow synchronous GET.
+- **The night-audit checks** (§33.8) were the longest part of an audit and made readiness a slow synchronous GET; see §34 for the fix and what remains.
 - **Night-audit Phase C** runs as one transaction of up to 300 s (≈ 15 s for 1,000 rooms). It still blocks postings at its property while it runs, by design.
 - **Heavy reports** remain synchronous and per-process limited. With many instances, or exports beyond 20,000 rows, move them to jobs with stored files. **PROPOSED**; not needed at the measured sizes.
 - **Arrivals and departures** read ≈ 850 k rows before refusing an over-limit range: a count-first guard would refuse in milliseconds. **PROPOSED.**
 - **The queue** polls each worker every 5 s when idle (one indexed query). With hundreds of worker processes, raise `JOB_POLL_INTERVAL_MS`: LISTEN wakes them anyway.
 - **A killed worker's query** keeps running on the database until it ends or times out. `client_connection_check_interval` (PostgreSQL 14+) on the runtime role would cancel it soon after the client is gone. **PROPOSED**, not measured.
 - **Not claimed:** 100,000 requests per second.
+
+## 34. Night-audit balance check
+
+### 34.1 Root cause (MEASURED; clone `serene_bench_na2` of the benchmark database, PostgreSQL 18, `shared_buffers` 128 MB)
+
+`findUnbalancedFolios` (the `VALIDATE_BALANCES` check of readiness and of the audit's Phase B) re-sums the ledger of every candidate folio. A folio is a candidate when it is not CLOSED, or when it has a line dated D (rule B4).
+
+- The rule is not the problem. Each benchmark property has 200,181 candidates (181 OPEN, 200,000 SETTLED, none CLOSED) and 800,165 ledger lines.
+- The statement shape is. The candidates CTE was inlined and the ledger was a correlated `(SELECT sum(amount) … WHERE folio_id = c.id)`, executed **once per folio**: 200,181 index scans on `folio_items(folio_id, posted_at)` and their heap pages, at random.
+- `EXPLAIN (ANALYZE, BUFFERS)`: **5.2–7.4 s** (6 runs, warm), 1.31 M buffers per run (1.06 M hit, 245 k read: ≈ 10 GB of page accesses), 0 rows.
+- The run takes all of `shared_buffers` and more, so it is never fully cached. Together with the other checks, readiness took 7.4 s for one user. In phase 6 it took 12–23 s and passed 30 s cold (§33.8).
+
+### 34.2 Change
+
+The same candidates (CTE `MATERIALIZED`); then **one aggregate** of their ledger lines (`sum(amount) GROUP BY folio_id` over `folio_items` of the property whose `folio_id` is a candidate), `LEFT JOIN`ed to the candidates. A folio with no lines gets `COALESCE(…, 0)`, exactly as the scalar subquery did. The selected columns, the two mismatch predicates and `ORDER BY id` are unchanged.
+
+`i.property_id = $property` is added to the aggregate. It cannot change the result: a line references its folio through the composite key `(property_id, folio_id) → folios(property_id, id)`, so every line of a candidate folio has the candidate's property (proven by a test that the database refuses the opposite: `23503`). It lets the scan read only the property's lines.
+
+No rule, schema, index, migration, error or API changed.
+
+### 34.3 Candidates compared (MEASURED; SMR, warm, 2–3 runs each)
+
+| Statement                                                   | All 200 k folios candidates | Buffers  | Temp written | 199 k of them CLOSED (≈ 1,200 candidates, rolled back) | Buffers |
+| ----------------------------------------------------------- | --------------------------- | -------- | ------------ | ------------------------------------------------------ | ------- |
+| current (correlated sum)                                    | 5.2–8.6 s                   | 1.31 M   | 0            | 0.39–0.82 s                                            | 0.43 M  |
+| **B: aggregate of the candidates' lines + property filter** | **2.1–3.0 s**               | **26 k** | 106 MB       | 0.75–0.98 s                                            | 31 k    |
+| C: B without the property filter                            | 2.2–3.5 s                   | 46 k     | 122 MB       | 1.05–1.15 s                                            | 51 k    |
+| B with `work_mem` 32 MB                                     | 2.0–2.2 s                   | 26 k     | 11 MB        | —                                                      | —       |
+| B without `MATERIALIZED`                                    | same plan as B              |          |              | same as B                                              |         |
+
+- **B was chosen.** It is 2.5–3× faster when every folio is a candidate (the benchmark shape). That is the shape of any hotel that does not invoice every stay: SETTLED folios are never CLOSED, so the candidates grow with history.
+- With few candidates it is at parity (0.75–0.98 s against 0.39–0.82 s): both statements then spend their time elsewhere (the date test on 199,000 CLOSED folios). Neither shape is slow there.
+- **`work_mem` stays at the default.** 32 MB removes the hash-aggregate spill (106 → 11 MB of temp writes, ≈ 25 % faster). But it applies per hash node and per concurrent check, and 32 checks at once could take gigabytes. **PROPOSED** only, behind a measured need.
+
+### 34.4 Equivalence (MEASURED)
+
+| Test                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Result                                           |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| `tests/db/night-audit-balances.test.ts` (PGlite, all migrations): the production statement, captured from the repository function, against the previous statement verbatim.                                                                                                                                                                                                                                                                                                         | identical                                        |
+| — 16 named folios: OPEN / SETTLED / CLOSED drift; CLOSED with a line on D, before D, or with no lines; no lines with a non-zero balance (ledger `0`); all zero; partially paid with and without a 0.0001 drift; a balanced SETTLED folio; a USD folio at a PKR property; 99,999,999.9999 amounts; negative balances; totals that disagree with the balance; an account folio (`reservation_room_id` NULL, window 2); drifted folios at another property and in another organization | exactly the 9 expected folios, same decimal text |
+| — 1,200 seeded random folios (3 properties, 2 organizations, 3 statuses, 3 currencies, 0–6 lines over 4 dates, 25 % drifted) × 3 properties × 5 dates                                                                                                                                                                                                                                                                                                                               | identical (> 500 rows reported)                  |
+| — every reported folio belongs to the queried property; a line of one property on another property's folio is refused (`23503`)                                                                                                                                                                                                                                                                                                                                                     | yes                                              |
+| — mutation check: the same test fails when the join is made inner or the ledger is rounded                                                                                                                                                                                                                                                                                                                                                                                          | fails as it should                               |
+| Clone, real data: both properties × the current date, earlier dates and a date without lines                                                                                                                                                                                                                                                                                                                                                                                        | identical (0 rows: the real ledger is balanced)  |
+| Clone, adversarial, in a rolled-back transaction: 300 folios off by 0.0001, 500 closed (half drifted), 300 with an extra line on D, 100 switched to USD and drifted, per property                                                                                                                                                                                                                                                                                                   | identical, 6,968 rows reported, none foreign     |
+
+### 34.5 Load: `GET night-audits/readiness` (MEASURED; one `next start`, pool max 10, default 30 s statement timeout, 60 s per level, users alternate SMR/SDX)
+
+| Users | Before: ok/min, p50 / p95 ms, errors  | After: ok/min, p50 / p95 ms, errors   | Buffers per readiness | PG CPU before → after |
+| ----- | ------------------------------------- | ------------------------------------- | --------------------- | --------------------- |
+| 1     | 8.2, 7,357 / 7,641, 0                 | 22.5, 2,695 / 2,801, 0                | 1.32 M → 33 k         | 67 % → 60 %           |
+| 8     | 18.8, 22,865 / 29,115, 0              | 104.2, 4,729 / 5,024, 0               | 1.32 M → 33 k         | 74 % → 554 %          |
+| 16    | 24.2, 23,901 / 30,462, **54 of 83**   | 102.7, 9,054 / 11,711, **0**          | 1.36 M → 33 k         | 106 % → 542 %         |
+| 32    | 13.7, 24,350 / 25,847, **242 of 258** | 100.0, 17,578 / 24,541, **11 of 137** | 2.48 M → 33 k         | 102 % → 557 %         |
+
+- **Before, the errors were not query timeouts but the pool.** Ten slow checks held all ten connections, and every other request waited past the 5 s acquisition timeout ("timeout exceeded when trying to connect"), including authentication. Readiness from a few users made the whole instance fail.
+- **After:**
+  - 5–7× the throughput, with no errors up to 16 users.
+  - At 32 users, 11 requests still waited past 5 s for a connection: 32 concurrent checks on a pool of 10.
+  - PostgreSQL now works at ≈ 5.5 cores instead of waiting on reads: about 1.6 core-seconds per readiness at 1 user, ≈ 3.2 under load, against 2.4–4.9 before.
+  - Each readiness writes ≈ 78 MB of temporary files (the hash-aggregate spill).
+
+### 34.6 Browser QA (production build, local TLS proxy, headless Chrome, clone; default 30 s statement timeout; separate worker with a 15 s lease)
+
+| Scenario               | Result                                                                                                                                                                                                                                                                                             |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Readiness              | SDX and SMR rendered every check, "Folio balances: Every folio balance equals its ledger" (PASSED). The readiness API took 2.6 s and 1.8 s; the pages were complete in 6.2 s and 4.3 s from navigation. Phase 6 QA needed the statement timeout raised to 120 s; this ran at the default 30 s.     |
+| Successful audit       | SDX, started from the dialog: COMPLETED 7.2 s after the start (the job ran 2.6 s of checks plus the commit). The phase 6 QA audit of the same property took ≈ 15.5 s.                                                                                                                              |
+| Failed audit           | SMR (guests due out still in house): FAILED `PRE_CHECK_FAILED` 1.1 s after the start, with the failing step and its guests; date OPEN.                                                                                                                                                             |
+| Concurrent start       | Two starts at once from the page: one 202, one 409 `NIGHT_AUDIT_RUNNING`; the winner then failed its checks as expected.                                                                                                                                                                           |
+| Recovery: queued audit | With no worker running, the run page showed "Queued: waiting for a worker…" and Cancel audit. Cancelling with a reason gave FAILED `CANCELLED` ("Cancelled while waiting for a worker; nothing was posted"), the job CANCELLED, the date OPEN.                                                     |
+| Recovery: stale run    | A worker's claim with an expired lease and no worker alive (written into the job row: the state a crashed worker leaves). "Recover stale run" appeared once the run was 2 minutes old (118 s after it opened). Recovering with a reason gave FAILED `RECOVERED`, the job CANCELLED, the date OPEN. |
+| Console                | No page exceptions in either run.                                                                                                                                                                                                                                                                  |
+
+### 34.7 Remaining
+
+- **Readiness still costs ≈ 2–3 s and ≈ 78 MB of temp IO per view**, and grows with the property's ledger. More speed needs one of two things:
+  - `work_mem` for this statement (§34.3, PROPOSED);
+  - a narrower rule: candidates changed since the last closed date, or SETTLED folios closed after a retention period. That is a business decision (B4), not made here.
+- **32 concurrent readiness views** still exceed a 10-connection pool. Readiness is opened by a few night auditors, not by every user, but heavy GETs share one pool with everything else.
+- **The other checks** (unposted nights, due arrivals) are 0.1–0.3 s each and were not changed.

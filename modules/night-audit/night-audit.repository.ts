@@ -297,6 +297,15 @@ export function findDueArrivals(db: Tx, propertyId: string, businessDate: string
  * readiness view (B4). A CLOSED folio is final: the database refuses
  * postings into it (SM002) and the ledger is append-only (SM001), so its
  * totals cannot drift through any application path.
+ *
+ * The ledger sums are one aggregate over the candidates' lines (scalability
+ * phase 6B, docs/SCALABILITY.md §34) instead of one correlated sum per
+ * folio: with 200,000 SETTLED folios that was 200,000 index probes and
+ * ≈ 1.3 M buffer reads (5–9 s, over the 30 s statement timeout cold). The
+ * result is the same, row for row (tests/db/night-audit-balances.test.ts):
+ * a folio without lines has ledger 0, as before. `i.property_id` is
+ * redundant — lines reference their folio through (property_id, folio_id) —
+ * and lets the scan use the property's index.
  */
 export function findUnbalancedFolios(db: Tx, propertyId: string, businessDate: string) {
   return db.$queryRaw<
@@ -308,7 +317,7 @@ export function findUnbalancedFolios(db: Tx, propertyId: string, businessDate: s
       ledger: string;
     }[]
   >`
-    WITH candidates AS (
+    WITH candidates AS MATERIALIZED (
       SELECT f."id", f."reservation_room_id", f."window", f."balance", f."charges_total",
              f."credits_total"
       FROM "folios" f
@@ -317,17 +326,20 @@ export function findUnbalancedFolios(db: Tx, propertyId: string, businessDate: s
              OR EXISTS (SELECT 1 FROM "folio_items" d
                         WHERE d."folio_id" = f."id" AND d."property_id" = ${propertyId}::uuid
                           AND d."business_date" = ${businessDate}::date))
-    ), checked AS (
-      SELECT c.*,
-             COALESCE((SELECT sum(i."amount") FROM "folio_items" i WHERE i."folio_id" = c."id"), 0)
-               AS "ledger"
-      FROM candidates c
+    ), ledger AS (
+      SELECT i."folio_id", sum(i."amount") AS "ledger"
+      FROM "folio_items" i
+      WHERE i."property_id" = ${propertyId}::uuid
+        AND i."folio_id" IN (SELECT "id" FROM candidates)
+      GROUP BY i."folio_id"
     )
-    SELECT "id", "reservation_room_id", "window", "balance"::text AS "balance",
-           "ledger"::text AS "ledger"
-    FROM checked
-    WHERE "balance" <> "ledger" OR "balance" <> "charges_total" + "credits_total"
-    ORDER BY "id"`;
+    SELECT c."id", c."reservation_room_id", c."window", c."balance"::text AS "balance",
+           COALESCE(l."ledger", 0)::text AS "ledger"
+    FROM candidates c
+    LEFT JOIN ledger l ON l."folio_id" = c."id"
+    WHERE c."balance" <> COALESCE(l."ledger", 0)
+       OR c."balance" <> c."charges_total" + c."credits_total"
+    ORDER BY c."id"`;
 }
 
 /** Payments and refunds of D whose ledger line is missing or does not match. */
