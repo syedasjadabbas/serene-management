@@ -6,11 +6,13 @@
  * workers like this one. Any number may run, on any host that reaches the
  * database: jobs are claimed atomically and never run twice at once.
  *
- *   npm run worker -- [--once] [--stats]
+ *   npm run worker -- [--once] [--stats] [--metrics-port <port>]
  *
  * --once   runs the jobs due now, then exits (cron-style, or to drain a queue).
  * --stats  prints the queue's health (counts, oldest due job, expired leases)
  *          and exits.
+ * --metrics-port  serves GET /metrics (Prometheus text, METRICS_TOKEN as a
+ *          bearer token; docs/OPERATIONS.md §11) on that port while running.
  *
  * SIGTERM / SIGINT: stops claiming and waits up to 60 s for running jobs. A
  * job still running then (or one whose process was killed) is re-claimed by
@@ -22,16 +24,17 @@
 import { parseArgs } from "node:util";
 import { loadEnvFileIfPresent } from "./env-file";
 
-const USAGE = "Usage: npm run worker -- [--once] [--stats]";
+const USAGE = "Usage: npm run worker -- [--once] [--stats] [--metrics-port <port>]";
 
 async function main(): Promise<number> {
-  let values: { once: boolean; stats: boolean; help: boolean };
+  let values: { once: boolean; stats: boolean; help: boolean; "metrics-port"?: string };
   try {
     ({ values } = parseArgs({
       options: {
         once: { type: "boolean", default: false },
         stats: { type: "boolean", default: false },
         help: { type: "boolean", default: false },
+        "metrics-port": { type: "string" },
       },
       strict: true,
     }));
@@ -75,6 +78,11 @@ async function main(): Promise<number> {
   }
 
   worker.start();
+  const { registerProcessMetrics } = await import("../../lib/observability/register");
+  registerProcessMetrics("worker");
+  const metricsServer = values["metrics-port"]
+    ? await serveMetrics(Number(values["metrics-port"]), serverEnv().METRICS_TOKEN)
+    : null;
   console.log(
     JSON.stringify({ at: new Date(), type: "started", worker: worker.id, kinds: worker.kinds }),
   );
@@ -85,8 +93,38 @@ async function main(): Promise<number> {
   });
   console.log(JSON.stringify({ at: new Date(), type: "stopping", running: worker.running }));
   await worker.stop(60_000);
+  metricsServer?.close();
   await prisma.$disconnect();
   return 0;
+}
+
+/** GET /metrics with the bearer token; anything else 404. Refuses to start without a token. */
+async function serveMetrics(port: number, token: string | undefined) {
+  if (!Number.isInteger(port) || port < 1 || port > 65_535 || !token) {
+    throw new Error("--metrics-port needs a valid port and METRICS_TOKEN");
+  }
+  const { createServer } = await import("node:http");
+  const { timingSafeEqual } = await import("node:crypto");
+  const { renderMetrics } = await import("../../lib/observability/metrics");
+  const expected = Buffer.from(`Bearer ${token}`);
+  const server = createServer((req, res) => {
+    const given = Buffer.from(req.headers.authorization ?? "");
+    const allowed =
+      req.method === "GET" &&
+      req.url === "/metrics" &&
+      given.length === expected.length &&
+      timingSafeEqual(given, expected);
+    if (!allowed) {
+      res.writeHead(404).end();
+      return;
+    }
+    renderMetrics().then(
+      (text) => res.writeHead(200, { "content-type": "text/plain; version=0.0.4" }).end(text),
+      () => res.writeHead(500).end(),
+    );
+  });
+  await new Promise<void>((resolve) => server.listen(port, resolve));
+  return server;
 }
 
 main().then(

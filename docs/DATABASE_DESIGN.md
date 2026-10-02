@@ -405,3 +405,13 @@ Partitioning is introduced by a dedicated migration when monitoring shows the ne
 4. `npm run test:db` must pass; `prisma migrate diff --from-config-datasource --to-schema prisma/schema` must be empty on a migrated database.
 5. Never edit an applied migration; never change schema without a migration (Guide §54). The Phase 0 baseline may be squashed once before the first production deployment.
 6. Production safety (verified behaviour: Prisma applies a file statement by statement, not in one transaction): wrap multi-statement migrations in `BEGIN;` … `COMMIT;`, put each `CREATE INDEX CONCURRENTLY` in its own file, keep backfills out of migrations, and follow the checklist and forward-fix policy in OPERATIONS.md §3.
+
+## 11. Diagnostics and slow queries
+
+The final scalability phase (SCALABILITY §38) changed no table, index or migration. The production settings recommended for slow-query visibility are in [OPERATIONS.md §11.4](OPERATIONS.md#114-slow-queries-in-postgresql-recommended-production-settings-not-enabled-locally): `pg_stat_statements` (needs `shared_preload_libraries` and a restart), `log_min_duration_statement = 1000`, `log_lock_waits`, `track_io_timing`, `client_connection_check_interval`, and `auto_explain` only briefly. None of them was enabled on the development server.
+
+Connection facts the schema's operations rely on (measured):
+
+- A transaction cut off by a dying application process is rolled back by PostgreSQL. No partial rows remain (`rooms`, `room_status_history` and `audit_logs` were checked mid-write).
+- An orphaned backend waiting for a lock holds its row locks until it next talks to the client, or until `statement_timeout`. `client_connection_check_interval` shortens this.
+- Every server bundle of an application process shares one pool (`lib/db/prisma.ts`). The budget per instance is `DATABASE_POOL_MAX` plus LISTEN connections (OPERATIONS §6).

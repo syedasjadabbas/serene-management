@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import net from "node:net";
 import { NextRequest } from "next/server";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { GET as businessDateRoute } from "@/app/api/v1/properties/[propertyId]/business-date/route";
@@ -16,6 +17,7 @@ import { POST as createReservationRoute } from "@/app/api/v1/properties/[propert
 import { GET as boardRoute } from "@/app/api/v1/properties/[propertyId]/rooms/board/route";
 import { GET as orgPerformanceRoute } from "@/app/api/v1/organization/reports/performance/route";
 import { prisma } from "@/lib/db/prisma";
+import { serverEnv } from "@/lib/env";
 import { type HealthProbe, configureReadReplica, readFromReplica } from "@/lib/db/read-replica";
 import { addDays } from "@/modules/business-date/business-date.policy";
 import {
@@ -119,6 +121,29 @@ describe("routing primitives", () => {
       }),
     ).rejects.toThrow("not a connection problem");
   });
+
+  it("abandons a replica read that never answers (silent network drop) and uses the primary", async () => {
+    // Deadline = statement timeout + 5 s; shortened here so the test takes ~5 s.
+    const env = serverEnv() as { DATABASE_STATEMENT_TIMEOUT_MS: number };
+    const saved = env.DATABASE_STATEMENT_TIMEOUT_MS;
+    env.DATABASE_STATEMENT_TIMEOUT_MS = 100;
+    try {
+      await configureReadReplica({ url: TEST_DB, probe: healthy });
+      const started = Date.now();
+      const r = await readFromReplica(true, async (db) =>
+        db === prisma ? appName(db) : new Promise<string>(() => {}),
+      );
+      expect(r).toEqual({ value: "serene-management", route: "fallback" });
+      expect(Date.now() - started).toBeLessThan(8_000);
+      // The replica is now considered unhealthy: the next read goes straight to the primary.
+      const next = await readFromReplica(true, async (db) =>
+        db === prisma ? "primary" : "replica",
+      );
+      expect(next).toEqual({ value: "primary", route: "fallback" });
+    } finally {
+      env.DATABASE_STATEMENT_TIMEOUT_MS = saved;
+    }
+  }, 15_000);
 });
 
 describe("application paths", () => {
@@ -405,4 +430,49 @@ describe("application paths", () => {
     expect(duringOutage.status).toBe(200);
     expect(withoutGenerated(duringOutage.body)).toEqual(withoutGenerated(viaPrimary.body));
   });
+
+  it("does not let a silently dropped replica hold the heavy-report slot (final phase)", async () => {
+    // A TCP relay to the test database that, once stalled, accepts bytes and never answers:
+    // a network partition without a reset.
+    let stalled = false;
+    const sockets: net.Socket[] = [];
+    const relay = net.createServer((client) => {
+      const upstream = net.connect(
+        Number(new URL(TEST_DB).port || 5432),
+        new URL(TEST_DB).hostname,
+      );
+      client.on("data", (d) => !stalled && upstream.write(d));
+      upstream.on("data", (d) => !stalled && client.write(d));
+      for (const s of [client, upstream]) {
+        s.on("error", () => undefined);
+        sockets.push(s);
+      }
+    });
+    await new Promise<void>((resolve) => relay.listen(0, "127.0.0.1", resolve));
+    const relayUrl = new URL(TEST_DB);
+    relayUrl.hostname = "127.0.0.1";
+    relayUrl.port = String((relay.address() as net.AddressInfo).port);
+    const env = serverEnv() as { DATABASE_STATEMENT_TIMEOUT_MS: number };
+    const saved = env.DATABASE_STATEMENT_TIMEOUT_MS;
+    try {
+      await configureReadReplica({ url: relayUrl.toString(), probe: healthy });
+      expect((await report(fom, "revenue-by-code", D, D)).status).toBe(200);
+      stalled = true;
+      env.DATABASE_STATEMENT_TIMEOUT_MS = 100; // replica deadline ≈ 5.1 s
+      const started = Date.now();
+      // Both answer from the primary: the first after the deadline, the second
+      // as soon as the slot is free (REPORT_HEAVY_CONCURRENCY 1), not 429.
+      const [first, second] = await Promise.all([
+        report(fom, "revenue-by-code", D, D),
+        report(fom, "revenue-by-code", D, D),
+      ]);
+      expect([first.status, second.status]).toEqual([200, 200]);
+      expect(Date.now() - started).toBeLessThan(15_000);
+    } finally {
+      env.DATABASE_STATEMENT_TIMEOUT_MS = saved;
+      await configureReadReplica(null);
+      relay.close();
+      for (const socket of sockets) socket.destroy();
+    }
+  }, 40_000);
 });

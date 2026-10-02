@@ -35,3 +35,11 @@ if (serverEnv().JOB_WORKER === "inline") {
       console.error("Job worker failed to start", error instanceof Error ? error.name : error);
     });
 }
+
+// Process, request, pool, job and realtime metrics for GET /api/metrics
+// (docs/OPERATIONS.md §11). In-memory only; nothing is sent anywhere.
+void import("./lib/observability/register")
+  .then(({ registerProcessMetrics }) => registerProcessMetrics("web"))
+  .catch((error: unknown) => {
+    console.error("Metrics failed to start", error instanceof Error ? error.name : error);
+  });

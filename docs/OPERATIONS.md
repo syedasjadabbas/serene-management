@@ -281,12 +281,12 @@ The application uses one connection pool per process (`lib/db/pool-config.ts`). 
 
 **Connection topology (SCALABILITY §32, ARCHITECTURE D64).**
 
-- Each instance opens up to `DATABASE_POOL_MAX` connections for requests, plus one LISTEN connection for
-  live updates. With the inline job worker (`JOB_WORKER=inline`) it may open as many again plus one
-  LISTEN: the worker runs in the server's instrumentation bundle, which has its own Prisma client and
-  pool (deliberately not shared, see `lib/db/prisma.ts`). A separate `npm run worker` process holds
-  `DATABASE_POOL_MAX` + 1. Keep the worst case, instances × (2 × max + 2) with inline workers or
-  instances × (max + 1) + workers × (max + 1) without, plus one instance of rolling-update surge and 10
+- Each instance opens up to `DATABASE_POOL_MAX` pooled connections, plus one LISTEN connection for
+  live updates and, with the inline job worker (`JOB_WORKER=inline`), one LISTEN for the worker. Every
+  server bundle of the process (route handlers, rendered pages, the instrumentation bundle that runs
+  the worker) shares that one pool (`lib/db/prisma.ts`; SCALABILITY §38.2). A separate `npm run
+worker` process holds `DATABASE_POOL_MAX` + 1. Keep the worst case, instances × (max + 2) with
+  inline workers or instances × (max + 1) + workers × (max + 1) without, plus one instance of rolling-update surge and 10
   (migrations, backups, monitoring, administrators), within `max_connections` − superuser reserve
   (`connectionBudget`, `lib/db/pool-config.ts`; table in SCALABILITY §37.10). `npm run ops:db-check`
   prints how many instances fit. The steady state is lower (idle connections close after 2 min;
@@ -434,3 +434,108 @@ so a rolling release's migration must be backwards compatible (expand now, contr
 responses carry `x-instance-id` and the readiness body adds the instance's state (uptime, draining,
 in-flight requests, open event streams, LISTEN state, worker activity). None of these carry secrets,
 addresses or connection strings.
+
+## 11. Observability
+
+Measured and validated in the final scalability phase (SCALABILITY §38, ARCHITECTURE D70).
+
+### 11.1 Metrics: `GET /api/metrics`
+
+Each application process serves its own metrics in the Prometheus text format (0.0.4). Prometheus or an OpenTelemetry Collector (`prometheus` receiver) can scrape it. Metric names follow the OpenTelemetry semantic conventions where one exists.
+
+**Access:**
+
+- Set `METRICS_TOKEN`: at least 32 random characters, refused in production when weak.
+- Scrape every instance directly, with `Authorization: Bearer <token>`, never through the public load balancer.
+- Without the token, or with a wrong one, the endpoint answers 404.
+- Worker processes serve the same output with `npm run worker -- --metrics-port <port>` at `GET /metrics`, using the same token.
+
+**What is never in the output:** tokens, credentials, addresses, connection strings, user names, e-mail addresses, amounts and query text. Labels are limited to:
+
+- route templates, with every id replaced by `{id}`;
+- method and status;
+- job kind;
+- rate-limit rule name;
+- pool name;
+- instance and role.
+
+Each metric holds at most 1,000 label sets; further sets fold into `overflow="true"`.
+
+| Area     | Metric                                                                                                           | Type      | Labels / notes                                                                                                                                                                                   |
+| -------- | ---------------------------------------------------------------------------------------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Requests | `http_server_request_duration_seconds`                                                                           | histogram | `method`, `route`, `status`. Count, rate, error rate and latency percentiles all derive from it. Event streams: until the response starts                                                        |
+|          | `http_server_active_requests`                                                                                    | gauge     | In-flight API requests                                                                                                                                                                           |
+| Database | `db_client_connection_wait_seconds`                                                                              | histogram | `pool`: waiting for a pooled connection                                                                                                                                                          |
+|          | `db_client_connection_use_seconds`                                                                               | histogram | `pool`: how long a connection was held (query or transaction time)                                                                                                                               |
+|          | `db_client_connection_count`                                                                                     | gauge     | `pool`, `state` (`used`, `idle`)                                                                                                                                                                 |
+|          | `db_client_connection_max`                                                                                       | gauge     | `pool`                                                                                                                                                                                           |
+|          | `db_client_connection_pending_requests`                                                                          | gauge     | `pool`: saturated while above 0                                                                                                                                                                  |
+|          | `db_read_route_total`                                                                                            | counter   | `target` (`primary`, `replica`, `fallback`): replica-eligible reads                                                                                                                              |
+| Jobs     | `jobs_total`                                                                                                     | counter   | `kind`, `outcome` (`finished`, `retry`, `failed`, `lease-lost`)                                                                                                                                  |
+|          | `job_duration_seconds`                                                                                           | histogram | `kind`, `outcome`                                                                                                                                                                                |
+|          | `job_queue_wait_seconds`                                                                                         | histogram | `kind`: created → claimed, first attempts                                                                                                                                                        |
+|          | `jobs_reclaimed_total`                                                                                           | counter   | `kind`: leases released after a worker died                                                                                                                                                      |
+|          | `jobs_running`                                                                                                   | gauge     | `state` (`running`, `slots`) for this process                                                                                                                                                    |
+|          | `jobs_queue`                                                                                                     | gauge     | Cluster queue from PostgreSQL, refreshed at most every 10 s: `queued`, `due`, `running`, `expired_lease`, `failed_24h`, `oldest_due_seconds`. Same value on every instance: aggregate with `max` |
+| Realtime | `realtime_streams_active`                                                                                        | gauge     | Open event streams on this instance                                                                                                                                                              |
+|          | `realtime_streams_opened_total`                                                                                  | counter   | First connections and reconnects                                                                                                                                                                 |
+|          | `realtime_streams_closed_total`                                                                                  | counter   | `reason` (`client`, `access`, `shutdown`, `expired`, `error`)                                                                                                                                    |
+|          | `realtime_listener_up`                                                                                           | gauge     | 1 while the LISTEN connection is up                                                                                                                                                              |
+|          | `realtime_listener_lost_total`                                                                                   | counter   | Each loss sends `degraded` to the streams                                                                                                                                                        |
+|          | `realtime_notifications_total`                                                                                   | counter   | `kind`                                                                                                                                                                                           |
+| Limits   | `rate_limit_rejections_total`                                                                                    | counter   | `rule`                                                                                                                                                                                           |
+|          | `rate_limit_store_errors_total`                                                                                  | counter   | `rule`, `policy` (`allow`, `deny`)                                                                                                                                                               |
+| Process  | `process_cpu_seconds_total`, `process_resident_memory_bytes`, `nodejs_heap_used_bytes`, `process_uptime_seconds` | gauge     | —                                                                                                                                                                                                |
+|          | `nodejs_eventloop_delay_seconds`                                                                                 | gauge     | `quantile` (0.5, 0.99, 1) over the last 15 s                                                                                                                                                     |
+|          | `serene_instance_info`, `serene_instance_draining`                                                               | gauge     | `instance`, `role`                                                                                                                                                                               |
+
+**Not covered by these metrics:**
+
+- **PostgreSQL CPU and memory, and the server's own connection count:** monitor them on the database host (node/Windows exporter, `pg_stat_activity`, `postgres_exporter`).
+- **End-to-end event delivery latency:** notifications carry no timestamp. It is measured externally (SCALABILITY §38.11).
+
+### 11.2 Logs and correlation
+
+**One request id end to end.** Configure the load balancer to set `X-Request-Id`, e.g. nginx `proxy_set_header X-Request-Id $request_id;` (log `$request_id` there too). The application keeps a valid incoming id; otherwise it uses a W3C `traceparent`'s trace id, otherwise a new UUID. It returns the id as `x-request-id`, and writes it to:
+
+- error logs;
+- slow-request logs;
+- `audit_logs.request_id`;
+- the payload of jobs the request queued, so a worker's job event lines carry `requestId`, and the job's own audit rows use it.
+
+Live-update events carry the PostgreSQL transaction id (`x`), not the request id.
+
+**Slow requests.** One JSON line per API request slower than `SLOW_REQUEST_MS` (default 2,000; 0 turns it off). It carries the request id, instance, method, route template, status, total, authentication and pool-wait milliseconds, and the number of checkouts. No path ids, query string, body, user or address are logged. Under saturation this is one line per slow request, so measure the log volume before lowering the threshold.
+
+**Other logs:**
+
+- **Errors:** redacted (G12).
+- **Shutdown:** `[shutdown <instance>]`.
+- **Worker events:** one JSON line per job event (`npm run worker`), including `queueWaitMs`, `runMs` and `requestId`.
+
+### 11.3 Alerts (PROPOSED: thresholds from the measurements in SCALABILITY §38; tune per deployment)
+
+| Alert              | Condition                                                                        | Why                                                                   |
+| ------------------ | -------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| Instance not ready | readiness ≠ 200 for 1 min on any instance, or on all                             | The database is unreachable, or the instance is draining              |
+| Error rate         | 5xx / all > 1 % over 5 min                                                       | Measured 0 % at every load level, including overload                  |
+| Latency            | p95 of `http_server_request_duration_seconds` > 2 s for 10 min                   | p95 was 0.4–0.8 s below saturation and 1.6 s at 2× it                 |
+| Pool saturation    | `db_client_connection_pending_requests` > 0 for 5 min, or wait p95 > 250 ms      | The first sign of database or pool saturation (§38.6)                 |
+| Event loop         | `nodejs_eventloop_delay_seconds{quantile="0.99"}` > 0.5 s for 5 min              | The process is CPU-bound                                              |
+| Job queue          | `jobs_queue{state="oldest_due_seconds"}` > 120, or `expired_lease` > 0 for 5 min | No worker is running, or workers are dying                            |
+| Job failures       | `jobs_total{outcome="failed"}` increases                                         | A night audit failed: someone must look                               |
+| Realtime           | `realtime_listener_up` = 0 while `realtime_streams_active` > 0 for 2 min         | Screens fall back to polling                                          |
+| Rate-limit store   | `rate_limit_store_errors_total` increases                                        | Login fails closed while the store is down                            |
+| Memory             | RSS grows > 20 % per day with flat load                                          | No leak was measured over 26 min (§38.13); watch for it in production |
+
+### 11.4 Slow queries in PostgreSQL (recommended production settings, not enabled locally)
+
+| Setting                                                    | Recommendation                                                                                                                                                               | Cost / note                                                                                                                                                                               |
+| ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pg_stat_statements`                                       | **Enable**: `shared_preload_libraries = 'pg_stat_statements'`, `pg_stat_statements.max = 5000`, `track = top`, then `CREATE EXTENSION pg_stat_statements` (restart required) | A few % of CPU at most; the per-query totals behind every query optimization so far. Version 1.12 is available on the development server but not loaded (not changed: it needs a restart) |
+| `log_min_duration_statement`                               | `1000` (ms)                                                                                                                                                                  | Logs statement text with values: treat the server log as sensitive (guest names in search terms)                                                                                          |
+| `auto_explain`                                             | Load per session or briefly (`auto_explain.log_min_duration = 3000`, `log_analyze = off`)                                                                                    | `log_analyze = on` slows every statement; never leave it on globally                                                                                                                      |
+| `log_lock_waits`                                           | `on` (logs waits beyond `deadlock_timeout`, 1 s)                                                                                                                             | Cheap; shows lock queues (rooms, folios, the night audit)                                                                                                                                 |
+| `track_io_timing`                                          | `on` after `pg_test_timing` shows a cheap clock                                                                                                                              | Adds I/O timings to `EXPLAIN (BUFFERS)` and `pg_stat_statements`                                                                                                                          |
+| `client_connection_check_interval`                         | `10s`                                                                                                                                                                        | Ends the work of a client that vanished mid-statement sooner (measured: an orphaned backend waited for its lock, §38.9)                                                                   |
+| `idle_in_transaction_session_timeout`, `statement_timeout` | Already set per connection (§6)                                                                                                                                              | —                                                                                                                                                                                         |

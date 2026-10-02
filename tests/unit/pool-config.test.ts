@@ -121,10 +121,10 @@ describe("database pool configuration (M19)", () => {
 describe("connection budget (scalability phase 9)", () => {
   const pg100 = { maxConnections: 100, superuserReserved: 3 };
 
-  it("counts the inline worker's own pool and both LISTEN connections", () => {
-    // 100 − 3 − 10 = 87 usable; 10 + 1 realtime + (10 + 1) worker = 22 per instance.
+  it("counts one shared pool and both LISTEN connections per instance", () => {
+    // 100 − 3 − 10 = 87 usable; 10 pooled + 1 realtime + 1 worker LISTEN = 12 per instance.
     expect(connectionBudget({ ...pg100, poolMax: 10, realtime: true, inlineWorker: true })).toEqual(
-      { usable: 87, perInstance: 22, perWorkerProcess: 11, workers: 0, instances: 2 },
+      { usable: 87, perInstance: 12, perWorkerProcess: 11, workers: 0, instances: 6 },
     );
   });
 
@@ -141,7 +141,7 @@ describe("connection budget (scalability phase 9)", () => {
   });
 
   it("keeps the rolling-update surge and never goes negative", () => {
-    const tight = { ...pg100, maxConnections: 30, poolMax: 10, realtime: true, inlineWorker: true };
+    const tight = { ...pg100, maxConnections: 20, poolMax: 10, realtime: true, inlineWorker: true };
     expect(connectionBudget(tight).instances).toBe(0);
     expect(
       connectionBudget({ ...pg100, poolMax: 5, realtime: true, inlineWorker: false, surge: 0 }),

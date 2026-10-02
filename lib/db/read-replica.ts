@@ -4,7 +4,8 @@ import pg from "pg";
 import { PrismaClient } from "@/generated/prisma/client";
 import { serverEnv } from "@/lib/env";
 import { pgPoolConfig } from "./pool-config";
-import { currentPoolUsage } from "./pool-metrics";
+import { counter } from "@/lib/observability/metrics";
+import { currentPoolUsage, instrumentPool, registerPool, unregisterPool } from "./pool-metrics";
 import { type Db, prisma } from "./prisma";
 import { databaseErrorCode, isConnectionError } from "./transaction";
 
@@ -80,6 +81,8 @@ function createState(
   });
   // A replica that drops connections must not crash the process.
   pool.on("error", () => undefined);
+  instrumentPool(pool, "replica");
+  registerPool("replica", pool);
   if (options.onAcquire) pool.on("acquire", options.onAcquire);
   const client = new PrismaClient({
     adapter: new PrismaPg(pool, { disposeExternalPool: true }),
@@ -129,7 +132,19 @@ export async function configureReadReplica(
         onAcquire: config.onAcquire,
       })
     : null;
-  await previous?.client.$disconnect().catch(() => undefined);
+  if (!config) unregisterPool("replica");
+  // Bounded: a connection the network silently dropped is never released, and
+  // closing the pool waits for it (shutdown must not hang on it). It closes in
+  // the background once the network gives the connection up.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    previous?.client.$disconnect().catch(() => undefined),
+    new Promise((resolve) => {
+      timer = setTimeout(resolve, 5_000);
+      timer.unref?.();
+    }),
+  ]);
+  clearTimeout(timer);
 }
 
 async function checkHealth(replica: ReplicaState): Promise<void> {
@@ -186,6 +201,10 @@ function shouldFallBack(error: unknown): boolean {
 }
 
 function noteRoute(route: ReadRoute) {
+  counter(
+    "db_read_route_total",
+    "Approved replica-eligible reads by where they ran: primary, replica or fallback",
+  ).inc({ target: route });
   const usage = currentPoolUsage();
   if (usage) usage.reads[route] = (usage.reads[route] ?? 0) + 1;
 }
@@ -197,6 +216,27 @@ function noteRoute(route: ReadRoute) {
  * side effects. Authorization is the caller's, before this call: the replica
  * only runs the same property-scoped queries the primary would.
  */
+class ReplicaTimeout extends Error {}
+
+/**
+ * A replica the network silently drops (no reset) never answers, and its
+ * server-side statement timeout cannot fire: without a client-side deadline
+ * the read would hang, holding a heavy-report slot (measured, docs/SCALABILITY.md
+ * §38). After the statement timeout + 5 s the read is abandoned and re-run on
+ * the primary, and the replica is marked unhealthy. The abandoned query keeps
+ * its replica connection until the network gives it up.
+ */
+function withReplicaDeadline<T>(work: Promise<T>): Promise<T> {
+  const ms = serverEnv().DATABASE_STATEMENT_TIMEOUT_MS + 5_000;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    work,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new ReplicaTimeout("replica read timed out")), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
 export async function readFromReplica<T>(
   eligible: boolean,
   work: (db: Db) => Promise<T>,
@@ -212,11 +252,11 @@ export async function readFromReplica<T>(
     return { value: await work(prisma), route: "fallback" };
   }
   try {
-    const value = await work(replica.client);
+    const value = await withReplicaDeadline(work(replica.client));
     noteRoute("replica");
     return { value, route: "replica" };
   } catch (error) {
-    if (!shouldFallBack(error)) throw error;
+    if (!(error instanceof ReplicaTimeout) && !shouldFallBack(error)) throw error;
     // Re-checked after the normal interval, so a dead replica costs one failed attempt per 10 s.
     replica.health = { ...replica.health, healthy: false, checkedAt: Date.now(), reason: "error" };
     noteRoute("fallback");

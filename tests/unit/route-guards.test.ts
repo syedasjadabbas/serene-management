@@ -17,6 +17,9 @@ const PUBLIC_ROUTES = new Set([
   "health",
   "health/live",
   "health/ready",
+  // Internal scrape endpoint: no session, but 404 unless METRICS_TOKEN is sent
+  // as a bearer token (tests/integration/observability.test.ts).
+  "metrics",
   "v1/auth/login",
   "v1/auth/logout",
   "v1/auth/password/reset",

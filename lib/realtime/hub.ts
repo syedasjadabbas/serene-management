@@ -3,6 +3,7 @@ import pg from "pg";
 import { serverEnv } from "@/lib/env";
 import { pgPoolConfig } from "@/lib/db/pool-config";
 import { logServerError } from "@/lib/http/log";
+import { counter } from "@/lib/observability/metrics";
 import { type RealtimeTopic, isRealtimeTopic } from "./topics";
 
 /**
@@ -40,6 +41,15 @@ const ACCESS = "serene_access";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const RETRY_MIN_MS = 1_000;
 const RETRY_MAX_MS = 30_000;
+/**
+ * The LISTEN connection is checked with a query this often. A connection the
+ * network silently drops (no reset: a partition, a stalled proxy) would
+ * otherwise look healthy while no notification arrives; an unanswered check
+ * counts as lost: streams get `degraded` and the hub reconnects. Measured
+ * with a black-holing proxy (docs/SCALABILITY.md §38).
+ */
+const PING_INTERVAL_MS = 15_000;
+const PING_TIMEOUT_MS = 5_000;
 
 const uuidOrUndefined = (value: unknown) =>
   typeof value === "string" && UUID.test(value) ? value : undefined;
@@ -82,6 +92,7 @@ export class RealtimeHub {
   private connecting = false;
   private retryMs = RETRY_MIN_MS;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
+  private pingTimer: ReturnType<typeof setInterval> | null = null;
   private stopped = false;
 
   constructor(private readonly connectionString: () => string) {}
@@ -112,6 +123,8 @@ export class RealtimeHub {
   async stop(): Promise<void> {
     this.stopped = true;
     if (this.retryTimer) clearTimeout(this.retryTimer);
+    if (this.pingTimer) clearInterval(this.pingTimer);
+    this.pingTimer = null;
     const client = this.client;
     this.client = null;
     await client?.end().catch(() => undefined);
@@ -151,6 +164,12 @@ export class RealtimeHub {
     const lost = () => {
       if (this.client !== client) return;
       this.client = null;
+      if (this.pingTimer) clearInterval(this.pingTimer);
+      this.pingTimer = null;
+      counter(
+        "realtime_listener_lost_total",
+        "LISTEN connection losses; streams are degraded (clients poll) until it is back",
+      ).inc();
       this.emit({ kind: "degraded" });
       this.scheduleRetry();
     };
@@ -162,7 +181,12 @@ export class RealtimeHub {
     client.on("end", lost);
     client.on("notification", (message) => {
       const event = parseNotification(message.channel, message.payload);
-      if (event) this.emit(event);
+      if (event) {
+        counter("realtime_notifications_total", "Notifications received, by kind").inc({
+          kind: event.kind,
+        });
+        this.emit(event);
+      }
     });
     try {
       await client.connect();
@@ -174,6 +198,26 @@ export class RealtimeHub {
       }
       this.client = client;
       this.retryMs = RETRY_MIN_MS;
+      this.pingTimer = setInterval(() => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const unanswered = new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error("LISTEN connection check timed out")),
+            PING_TIMEOUT_MS,
+          );
+        });
+        Promise.race([client.query("SELECT 1"), unanswered])
+          .catch(() => {
+            lost();
+            // A silent connection may never close by itself.
+            (
+              client as unknown as { connection?: { stream?: { destroy(): void } } }
+            ).connection?.stream?.destroy();
+            void client.end().catch(() => undefined);
+          })
+          .finally(() => clearTimeout(timer));
+      }, PING_INTERVAL_MS);
+      this.pingTimer.unref?.();
       this.emit({ kind: "live" });
     } catch (error) {
       logServerError("realtime connect", error);

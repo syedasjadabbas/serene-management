@@ -21,6 +21,7 @@
 //                   anonymous: loginFail, loginOk (needs BENCH_PASSWORD), passwordReset
 //   MODE=vus        closed model instead: VUS users back to back for DURATION
 //   MIX             JSON object of weights overriding the default mix, e.g. '{"me":1}'
+//   PROFILE         "canonical": the final capacity workload (docs/SCALABILITY.md §38.3)
 //   SUMMARY         path of the JSON summary written at the end
 //   COOKIE          access cookie name (default production "__Host-sm_at")
 //
@@ -69,7 +70,45 @@ const DEFAULT_MIX = {
   writeGuestNote: 1,
 };
 
-const mix = __ENV.ONLY ? { [__ENV.ONLY]: 1 } : __ENV.MIX ? JSON.parse(__ENV.MIX) : DEFAULT_MIX;
+/**
+ * Canonical PMS workload (final scalability phase, docs/SCALABILITY.md §38.3): the
+ * default mix with the unified global search (one request per keystroke, as the
+ * palette sends since phase 2) and the two common desk writes. Percent of user
+ * actions; writeRoomStatus is two requests (board read, then the change). Job
+ * enqueues are not user requests here: the night audit is a few per property per
+ * day, so the capacity runs add a separate low-rate job feed.
+ */
+const CANONICAL_MIX = {
+  businessDate: 16,
+  me: 4,
+  frontDeskSummary: 5,
+  arrivals: 7,
+  inHouse: 5,
+  departures: 4,
+  roomBoard: 7,
+  housekeepingTasks: 5,
+  housekeepingSummary: 3,
+  maintenanceSummary: 2,
+  dashboard: 4,
+  reservationList: 6,
+  reservationSearch: 5,
+  guestSearch: 4,
+  unifiedSearch: 4,
+  availability: 5,
+  folioList: 3,
+  folioRead: 4,
+  report: 1,
+  writeGuestNote: 2,
+  writeRoomStatus: 4,
+};
+
+const mix = __ENV.ONLY
+  ? { [__ENV.ONLY]: 1 }
+  : __ENV.MIX
+    ? JSON.parse(__ENV.MIX)
+    : __ENV.PROFILE === "canonical"
+      ? CANONICAL_MIX
+      : DEFAULT_MIX;
 const classes = Object.entries(mix).filter(([, weight]) => weight > 0);
 const totalWeight = classes.reduce((sum, [, weight]) => sum + weight, 0);
 
@@ -157,6 +196,7 @@ export const options = {
 };
 
 const statusCount = new Counter("status_non_2xx");
+const roomConflicts = new Counter("room_status_conflicts");
 const bodyBytes = new Trend("response_bytes");
 // Present only when the server runs with SERVER_TIMING=1.
 const serverAuth = new Trend("server_auth_ms", true);
@@ -374,6 +414,47 @@ const GLOBAL_SEARCH = [
   ["searchMaintenance", "GET", (b, t) => `${b}/maintenance?view=all&limit=5&q=${t}`],
 ];
 
+/**
+ * A housekeeper's action: read the board, then mark one room clean or dirty with
+ * its version (optimistic concurrency). 409 (someone else changed it first) is a
+ * correct answer, not a failure.
+ */
+function roomStatusChange(data, n, user) {
+  const p = pick(data.properties, n);
+  const url = (path) =>
+    BASES.length > 1 ? BASES[n % BASES.length] + path.slice(BASE.length) : path;
+  const headers = { Cookie: `${COOKIE}=${user.cookie}`, "X-Forwarded-For": user.ip };
+  const board = http.get(url(`${BASE}/api/v1/properties/${p.id}/rooms/board?limit=100`), {
+    headers,
+    tags: { name: "writeRoomStatus", step: "read" },
+  });
+  const okRead = board.status === 200;
+  check(board, { "2xx": () => okRead }, { name: "writeRoomStatus" });
+  if (!okRead) {
+    statusCount.add(1, { name: "writeRoomStatus", status: String(board.status) });
+    return;
+  }
+  const rooms = (board.json("data.items") || []).filter(
+    (r) => !r.block && (r.housekeepingStatus === "DIRTY" || r.housekeepingStatus === "CLEAN"),
+  );
+  if (rooms.length === 0) return;
+  const room = rooms[n % rooms.length];
+  const action = room.housekeepingStatus === "DIRTY" ? "mark-clean" : "mark-dirty";
+  const res = http.post(
+    url(`${BASE}/api/v1/properties/${p.id}/rooms/${room.id}/${action}`),
+    JSON.stringify({ version: room.version }),
+    {
+      headers: { ...headers, "Content-Type": "application/json", Origin: ORIGIN },
+      tags: { name: "writeRoomStatus", step: "write" },
+      responseCallback: http.expectedStatuses({ min: 200, max: 299 }, 409),
+    },
+  );
+  const ok = res.status === 200 || res.status === 409;
+  check(res, { "2xx": () => ok }, { name: "writeRoomStatus" });
+  if (!ok) statusCount.add(1, { name: "writeRoomStatus", status: String(res.status) });
+  if (res.status === 409) roomConflicts.add(1);
+}
+
 export default function pmsIteration(data) {
   const n = __VU * 100003 + __ITER;
   const name = choose(n);
@@ -394,6 +475,10 @@ export default function pmsIteration(data) {
       check(res, { "2xx": () => ok }, { name });
       if (!ok) statusCount.add(1, { name, status: String(res.status) });
     }
+    return;
+  }
+  if (name === "writeRoomStatus") {
+    roomStatusChange(data, n, user);
     return;
   }
   const [method, path, body] = requestFor(name, data, n);

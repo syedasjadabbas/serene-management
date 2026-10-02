@@ -137,6 +137,14 @@ const baseSchema = z.object({
    */
   SHUTDOWN_DRAIN_MS: z.coerce.number().int().min(0).max(60_000).default(5_000),
   SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(120_000).default(25_000),
+  /**
+   * Bearer token for GET /api/metrics (Prometheus / OpenMetrics text,
+   * docs/OPERATIONS.md §11). Unset: the endpoint answers 404. At least 32
+   * characters; a scraper secret, never a user credential.
+   */
+  METRICS_TOKEN: z.string().min(32).optional(),
+  /** API requests slower than this are logged once (request id, route, status, timings); 0 = off. */
+  SLOW_REQUEST_MS: z.coerce.number().int().min(0).max(600_000).default(2_000),
   /** Names this process in observability output; default host-pid-random. No secrets. */
   INSTANCE_ID: z
     .string()
@@ -244,6 +252,10 @@ export function parseServerEnv(
   for (const variable of ["AUTH_ACCESS_TOKEN_SECRET", "AUTH_REFRESH_TOKEN_SECRET"] as const) {
     const reason = weakSecretReason(env[variable]);
     if (reason) add(variable, reason);
+  }
+  if (env.METRICS_TOKEN) {
+    const reason = weakSecretReason(env.METRICS_TOKEN);
+    if (reason) add("METRICS_TOKEN", reason);
   }
   if (env.AUTH_ACCESS_TOKEN_SECRET === env.AUTH_REFRESH_TOKEN_SECRET) {
     add("AUTH_REFRESH_TOKEN_SECRET", "Must differ from AUTH_ACCESS_TOKEN_SECRET");

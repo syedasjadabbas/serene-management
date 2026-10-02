@@ -5,6 +5,7 @@ import pg from "pg";
 import { pgPoolConfig } from "@/lib/db/pool-config";
 import { describeError, logServerError } from "@/lib/http/log";
 import { serverEnv } from "@/lib/env";
+import { counter, gauge, histogram } from "@/lib/observability/metrics";
 import {
   JobFailure,
   LeaseLostError,
@@ -48,10 +49,20 @@ export interface WorkerEvent {
   jobId: string;
   kind: string;
   attempt?: number;
-  /** Created → claimed (first attempt) or due → claimed (retries), ms. */
+  /** Created → claimed, ms (first attempts only; retries wait their backoff on purpose). */
   queueWaitMs?: number;
   runMs?: number;
+  /** The request that queued the job (payload.requestId), for log correlation. */
+  requestId?: string;
 }
+
+const jobOutcomes = () =>
+  counter("jobs_total", "Job attempts by kind and outcome (finished, retry, failed, lease-lost)");
+const jobDuration = () =>
+  histogram("job_duration_seconds", "Job attempt execution time by kind and outcome");
+const jobQueueWait = () =>
+  histogram("job_queue_wait_seconds", "Created → claimed for first attempts, by kind");
+const workersHolder = globalThis as unknown as { __sereneJobWorkers?: Set<JobWorker> };
 
 export interface WorkerOptions {
   concurrency: number;
@@ -102,6 +113,16 @@ export class JobWorker {
   }
 
   start(): void {
+    workersHolder.__sereneJobWorkers ??= new Set();
+    const workers = workersHolder.__sereneJobWorkers;
+    workers.add(this);
+    gauge("jobs_running", "Jobs this process is executing now, and its worker slots", () => [
+      { labels: { state: "running" }, value: [...workers].reduce((n, w) => n + w.running, 0) },
+      {
+        labels: { state: "slots" },
+        value: [...workers].reduce((n, w) => n + (w.stopping ? 0 : w.options.concurrency), 0),
+      },
+    ]);
     this.pollTimer = setInterval(() => void this.tick(), this.options.pollIntervalMs);
     this.pollTimer.unref?.();
     if (this.options.listenUrl) void this.listen(this.options.listenUrl);
@@ -183,6 +204,12 @@ export class JobWorker {
     this.lastReclaim = now;
     const reclaimed = await reclaimExpiredLeases(50, this.filter);
     for (const job of reclaimed) {
+      counter(
+        "jobs_reclaimed_total",
+        "Expired leases released (a worker died or lost the database)",
+      ).inc({
+        kind: job.kind,
+      });
       this.options.onEvent?.({ type: "reclaimed", jobId: job.id, kind: job.kind });
       if (job.status === "FAILED") await this.giveUp(job.id, job.kind);
     }
@@ -234,14 +261,29 @@ export class JobWorker {
         completedInTx = true;
       },
     };
-    const event = (type: WorkerEvent["type"]) =>
+    const payload = job.payload as { requestId?: unknown } | null;
+    const requestId =
+      typeof payload?.requestId === "string" && /^[A-Za-z0-9-]{8,64}$/.test(payload.requestId)
+        ? payload.requestId
+        : undefined;
+    const queueWaitMs = job.attempts === 1 ? started - job.createdAt.getTime() : undefined;
+    if (queueWaitMs !== undefined) {
+      jobQueueWait().observe({ kind: job.kind }, Math.max(0, queueWaitMs) / 1000);
+    }
+    const event = (type: Exclude<WorkerEvent["type"], "reclaimed">) => {
+      const runMs = Date.now() - started;
+      jobOutcomes().inc({ kind: job.kind, outcome: type });
+      jobDuration().observe({ kind: job.kind, outcome: type }, runMs / 1000);
       this.options.onEvent?.({
         type,
         jobId: job.id,
         kind: job.kind,
         attempt: job.attempts,
-        runMs: Date.now() - started,
+        runMs,
+        ...(queueWaitMs !== undefined ? { queueWaitMs } : {}),
+        ...(requestId ? { requestId } : {}),
       });
+    };
 
     try {
       const result = await handler.run(run);

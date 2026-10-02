@@ -5,6 +5,7 @@ import { z } from "zod";
 import { ACCESS_COOKIE } from "@/lib/auth/cookies";
 import { type PoolUsage, withPoolUsage } from "@/lib/db/pool-metrics";
 import { instanceId, trackRequest } from "@/lib/lifecycle/shutdown";
+import { recordRequest, routeTemplate } from "@/lib/observability/metrics";
 import { verifyAccessToken } from "@/lib/auth/tokens";
 import { serverEnv } from "@/lib/env";
 import { type Permission, isHighRisk } from "@/lib/permissions/catalog";
@@ -245,9 +246,8 @@ async function run(
 ): Promise<Response> {
   const started = performance.now();
   const meta = requestMeta(request);
-  const pool: PoolUsage | null = serverTimingEnabled()
-    ? { waitMs: 0, acquisitions: 0, opened: 0, reads: {} }
-    : null;
+  // Pool waits of this request: Server-Timing (opt-in) and the slow-request log.
+  const pool: PoolUsage = { waitMs: 0, acquisitions: 0, opened: 0, reads: {} };
   const handle = async () => {
     if (MUTATING.has(request.method)) {
       assertSameOrigin(request);
@@ -257,7 +257,7 @@ async function run(
   };
   try {
     // Counted for the graceful shutdown (lib/lifecycle/shutdown.ts).
-    const result = await trackRequest(() => (pool ? withPoolUsage(pool, handle) : handle()));
+    const result = await trackRequest(() => withPoolUsage(pool, handle));
     const response =
       result instanceof Response
         ? result
@@ -272,6 +272,7 @@ async function run(
     // Which instance answered (load tests, multi-instance QA); never in normal operation.
     if (timing) response.headers.set("x-instance-id", instanceId());
     if (timing) response.headers.set("server-timing", timing);
+    observe(request, meta, started, pool, response.status);
     return response;
   } catch (error) {
     const headers: Record<string, string> = { "cache-control": "no-store" };
@@ -283,13 +284,58 @@ async function run(
     ) {
       headers["retry-after"] = String(error.details.retryAfterSeconds);
     }
-    return toErrorResponse(error, meta.requestId, headers);
+    const response = toErrorResponse(error, meta.requestId, headers);
+    observe(request, meta, started, pool, response.status);
+    return response;
+  }
+}
+
+/**
+ * Request metrics (GET /api/metrics) and one log line for a slow request, with
+ * what correlates it: request id, instance, route template, status, timings.
+ * Never the path's ids, the query string, the body or the user.
+ */
+function observe(
+  request: NextRequest,
+  meta: RequestMeta,
+  started: number,
+  pool: PoolUsage,
+  status: number,
+) {
+  const ms = performance.now() - started;
+  recordRequest(request.method, request.nextUrl.pathname, status, ms / 1000);
+  const slow = serverEnv().SLOW_REQUEST_MS;
+  if (slow > 0 && ms >= slow) {
+    console.warn(
+      JSON.stringify({
+        msg: "slow request",
+        requestId: meta.requestId,
+        instance: instanceId(),
+        method: request.method,
+        route: routeTemplate(request.nextUrl.pathname),
+        status,
+        ms: Math.round(ms),
+        authMs: Math.round(authTimings.get(request) ?? 0),
+        dbWaitMs: Math.round(pool.waitMs),
+        dbCheckouts: pool.acquisitions,
+      }),
+    );
   }
 }
 
 function requestMeta(request: NextRequest): RequestMeta {
+  // The load balancer's id (X-Request-Id), else a W3C traceparent's trace id,
+  // else a new one: the same id then appears in logs, audit rows and jobs.
   const incoming = request.headers.get("x-request-id");
-  const requestId = incoming && /^[A-Za-z0-9-]{8,64}$/.test(incoming) ? incoming : randomUUID();
+  const trace = /^[0-9a-f]{2}-([0-9a-f]{32})-[0-9a-f]{16}-[0-9a-f]{2}$/.exec(
+    request.headers.get("traceparent") ?? "",
+  )?.[1];
+  const requestId =
+    incoming && /^[A-Za-z0-9-]{8,64}$/.test(incoming)
+      ? incoming
+      : trace && !/^0+$/.test(trace)
+        ? trace
+        : randomUUID();
   // Only the hops written by our own reverse proxies are trusted (D44); the
   // same address is used for rate limits, sessions and audit rows.
   const ipAddress = resolveClientIp(request.headers, serverEnv().TRUSTED_PROXY_HOPS);

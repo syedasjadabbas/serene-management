@@ -2367,7 +2367,7 @@ The application then owns the shutdown sequence (OPERATIONS §10):
 
 The whole sequence is bounded by `SHUTDOWN_TIMEOUT_MS`, plus a hard exit 5 s later. On Windows, Ctrl+Break (SIGBREAK) is handled too, because Next.js never handles it.
 
-Each Prisma client registers its own pool close (`lib/db/prisma.ts`). This phase found that the job worker's bundle has its own pool, which the first version of the shutdown hook did not reach.
+Each Prisma client registers its own pool close (`lib/db/prisma.ts`). This phase found that the job worker's bundle has its own pool, which the first version of the shutdown hook did not reach. (Superseded in the final phase, §38.2: a production process actually loads the module in three bundles, and they now share one pool, closed once.)
 
 **MEASURED (one instance, 3 s drain, real signal):**
 
@@ -2494,9 +2494,9 @@ Setup:
 
 **Per web instance, worst case:**
 
-- `DATABASE_POOL_MAX` for the route bundle's pool;
+- `DATABASE_POOL_MAX` for the process's pool (shared by every server bundle since the final phase);
 - 1 for the realtime LISTEN;
-- with `JOB_WORKER=inline`, another `DATABASE_POOL_MAX` + 1: the instrumentation bundle's own pool and the worker's LISTEN.
+- with `JOB_WORKER=inline`, 1 for the worker's LISTEN. (Corrected in the final phase, §38.2: phase 9 counted a second pool for the worker's bundle; there were in fact three pools per process, now one shared pool.)
 
 **Separate worker processes:** `DATABASE_POOL_MAX` + 1 each.
 
@@ -2506,15 +2506,15 @@ Instances that fit:
 
 | `max_connections` | inline, pool 10 | inline, pool 5 | `JOB_WORKER=off` + 1 worker, pool 10 | off + 1 worker, pool 5 | off + 2 workers, pool 5 |
 | ----------------- | --------------- | -------------- | ------------------------------------ | ---------------------- | ----------------------- |
-| 100 (default)     | 2               | 6              | 5                                    | 12                     | 11                      |
-| 200               | 7               | 14             | 15                                   | 29                     | 28                      |
-| 400               | 16              | 31             | 33                                   | 62                     | 61                      |
+| 100 (default)     | 6               | 11             | 5                                    | 12                     | 11                      |
+| 200               | 14              | 25             | 15                                   | 29                     | 28                      |
+| 400               | 31              | 54             | 33                                   | 62                     | 61                      |
 
-- **`ops:db-check` on the development server (MEASURED):** "max_connections=100 (87 usable after reserves), up to 22 per instance … → at most 2 instances plus 1 during a rolling update".
+- **`ops:db-check` on the development server (MEASURED, final phase):** "max_connections=100 (87 usable after reserves), up to 12 per instance … → at most 6 instances plus 1 during a rolling update". In phase 9 it printed 22 and 2 under the superseded formula.
 - **Steady state is far below the worst case (MEASURED):** 13 connections per instance under 64 users, 52 for 4 instances.
 - **The 8-instance tests** stayed under `max_connections` only because the pools were mostly idle. Eight instances is not a supported configuration at the defaults.
 - **Recommendation (PROPOSED):**
-  - **Beyond 2 instances:** set `JOB_WORKER=off` on the web instances and run 1–2 `npm run worker` processes. Lower `DATABASE_POOL_MAX` to 5; the measured active average is 2–3 per instance.
+  - **Beyond 2 instances:** set `JOB_WORKER=off` on the web instances and run 1–2 `npm run worker` processes. Lower `DATABASE_POOL_MAX` to 5 when more than 6 instances are planned; the measured active average is 2–5 per instance (§38).
   - **Beyond about 10–12 instances:** use PgBouncer in transaction mode (OPERATIONS §6).
   - **`max_connections`:** raise it only deliberately, accounting for memory, and never to improve a benchmark.
 
@@ -2651,3 +2651,413 @@ once per release: npm run db:deploy (schema owner), never from the instances
 - PgBouncer with several instances.
 - 404s for static chunks during a mixed-release rollout.
 - A write in flight during a hard kill.
+
+## 38. Final validation: observability and production-style load
+
+This is the last phase of the scalability program. It added the minimum production observability and validated capacity and failure behaviour with one canonical workload. It fixed only what the validation showed to be unsafe.
+
+**Environment:** the same 8-thread laptop (i5-8365U) runs PostgreSQL 18, every Next.js instance, the workers, k6, the test load balancer, TLS proxy and samplers, on the clone `serene_bench_na6` (300,000 guests, 210 staff accounts, 2 properties). Every throughput number below is therefore **this machine's**: CPU is shared between the database and the application, so adding instances cannot add CPU. Same-host contention is labelled wherever it decides the result. Every result is MEASURED unless marked ESTIMATED, NOT MEASURED or PROPOSED.
+
+### 38.1 Observability audit (before this phase)
+
+| Concern                                | What existed                                                                                                        | Gap closed here                                                                                                                                                                                |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Request latency, p50/p95/p99           | Per response only: opt-in `Server-Timing` (`SERVER_TIMING=1`)                                                       | Aggregated histogram `http_server_request_duration_seconds` by method, route template and status, always on                                                                                    |
+| DB time, pool wait                     | Per response, opt-in (`db-acquire`), and only while `SERVER_TIMING=1`                                               | Wait and hold-time histograms per pool, always on; pool size, idle and pending gauges                                                                                                          |
+| PostgreSQL CPU / connections           | None in the application (`ops:db-check` budget only)                                                                | Left to the database host's monitoring (OPERATIONS §11.1); `db_client_connection_*` covers the application side                                                                                |
+| Worker queue depth                     | `npm run worker -- --stats` (CLI)                                                                                   | `jobs_queue` gauge (cluster queue from PostgreSQL, cached 10 s)                                                                                                                                |
+| Worker execution / retries / failures  | JSON event lines, standalone worker only (the inline worker had no handler); `queueWaitMs` declared but never set   | `jobs_total`, `job_duration_seconds`, `job_queue_wait_seconds`, `jobs_reclaimed_total`, `jobs_running`, for inline and standalone workers; event lines now carry `queueWaitMs` and `requestId` |
+| SSE connections                        | Count in the readiness body (opt-in)                                                                                | `realtime_streams_active`, opened/closed by reason, listener up/lost, notifications                                                                                                            |
+| SSE reconnects                         | None                                                                                                                | Opens per reason; reconnect gaps measured externally (§38.11)                                                                                                                                  |
+| Rate-limit failures                    | 429 responses, one log line per minute on store failure                                                             | `rate_limit_rejections_total`, `rate_limit_store_errors_total{policy}`                                                                                                                         |
+| Health / readiness / instance identity | Complete (phase 9)                                                                                                  | `serene_instance_info`, `serene_instance_draining`                                                                                                                                             |
+| System                                 | None                                                                                                                | CPU, RSS, heap, uptime, event-loop delay (p50, p99, max over 15 s)                                                                                                                             |
+| Correlation                            | `x-request-id` (honoured or generated) in responses, error logs and audit rows; jobs keep the starter's `requestId` | `traceparent` trace id accepted; slow-request log line; worker events carry `requestId`                                                                                                        |
+
+**Implementation (no new dependencies):**
+
+- `lib/observability/metrics.ts`: a registry on `globalThis`, so the route bundles and the worker bundle record into one. It renders Prometheus text 0.0.4, which an OpenTelemetry Collector scrapes, with OTel-style names.
+- **Endpoint:** `GET /api/metrics`, 404 unless `METRICS_TOKEN` is set and sent as a bearer token. The worker serves the same with `--metrics-port`.
+- **Label rules:** the route label is a template (UUIDs → `{id}`, any other non-word segment → `{param}`); each metric keeps at most 1,000 label sets. The test asserts no ids, e-mails, tokens or connection strings appear.
+- **Cost (MEASURED):** 3.8 µs per request (one request record plus two pool observations) against 11–17 ms of application CPU per request, i.e. under 0.04 %.
+
+The metric catalog, logs, correlation chain, proposed alerts and PostgreSQL slow-query settings are in OPERATIONS §11.
+
+### 38.2 Production-safety fixes found by the validation
+
+Each fix below has a regression test that fails without it.
+
+1. **Three database pools per process (found by the new pool gauges).** A production process loads `lib/db/prisma.ts` in three bundles: route handlers, rendered pages and instrumentation. Each created its own pool of `DATABASE_POOL_MAX`. Phase 9 had counted two, so the real worst case was 3 × pool + LISTENs per instance and the budget table was wrong.
+   - **Fix:** one `pg.Pool` per process on `globalThis` (`pg` is an external package: one copy per process). Each bundle still gets its own PrismaClient, so the per-bundle `instanceof` checks on Prisma errors keep working. Only the creating client may close the pool; shutdown closes it once.
+   - **Result:** per instance = pool + 1 realtime LISTEN (+1 worker LISTEN). `ops:db-check` at the defaults: 6 instances + 1 surge (it said 2 before).
+   - **Test:** `tests/integration/observability.test.ts` re-imports the module as a second bundle.
+2. **A silently dropped LISTEN connection was never noticed.** In a black-holing proxy test the streams kept showing `live` while no notification could arrive; nothing would end it without a TCP reset.
+   - **Fix:** the hub checks the connection with `SELECT 1` every 15 s (5 s timeout). An unanswered check counts as lost, so streams get `degraded`, clients poll, and the hub reconnects.
+   - **Result:** `degraded` 12.5 s into the hang and `live` 4.7 s after recovery (§38.9).
+3. **A silently dropped read replica hung reports and leaked the heavy-report slot.** A replica read on a black-holed connection never returned. It held the only heavy-report slot, so every other heavy report waited 30 s and got 429 for as long as the connection stayed stuck (in the test, indefinitely).
+   - **Fix:** a replica read is abandoned after `DATABASE_STATEMENT_TIMEOUT_MS` + 5 s, the replica is marked unhealthy, and the read re-runs on the primary.
+   - **Fix:** the heavy slot is now held around the whole read (replica attempt and fallback), not inside the replica attempt.
+   - **Fix:** closing the replica pool is bounded at 5 s, so shutdown cannot hang on it.
+   - **Result:** every report answered 200; the one request that hit the black hole took 36.3 s (§38.10).
+   - **Tests:** two in `tests/integration/read-replica.test.ts`. The slot test was mutation-checked: it fails with the old code.
+
+Not changed:
+
+- **500 vs 503 on database unavailability.** It fails fast and predictably, and readiness takes the instance out. PROPOSED: map connection errors to 503 with `Retry-After`.
+- **Hung queries on the primary.** A primary query whose connection the network silently drops has no client-side bound beyond the TCP stack. Readiness fails within 2 s and new checkouts time out after 5 s. PROPOSED: TCP keepalive on pool sockets and `client_connection_check_interval` (OPERATIONS §11.4). NOT MEASURED: needs a real partition, not a proxy.
+
+### 38.3 Canonical workload (`PROFILE=canonical`, `scripts/load/k6/pms-mix.js`)
+
+It is derived from the screens' real API calls since live updates replaced most polling (§31). Percent of user actions:
+
+| Class                      | %   | Class                                                                              | %   |
+| -------------------------- | --- | ---------------------------------------------------------------------------------- | --- |
+| business date (open pages) | 16  | reservation search                                                                 | 5   |
+| me                         | 4   | guest search                                                                       | 4   |
+| front-desk summary         | 5   | unified global search (1 request per keystroke)                                    | 4   |
+| arrivals                   | 7   | availability                                                                       | 5   |
+| in-house                   | 5   | folio list                                                                         | 3   |
+| departures                 | 4   | folio read                                                                         | 4   |
+| room board                 | 7   | report (manager flash)                                                             | 1   |
+| housekeeping tasks         | 5   | **write: guest note**                                                              | 2   |
+| housekeeping summary       | 3   | **write: room status** (board read + change with version; 409 is a correct answer) | 4   |
+| maintenance summary        | 2   |                                                                                    |     |
+| dashboard                  | 4   |                                                                                    |     |
+| reservation list           | 6   |                                                                                    |     |
+
+**Total:** 100 % of actions. 6 % are writes; the room-status action is two requests.
+
+**Alongside the user actions:**
+
+- **Job feed:** 2 short jobs/s (claim → fence → finish), standing in for job enqueues. Real enqueues are the night audit, a few per property per day.
+- **Event streams:** one per user, up to 100.
+- **Heavy reports:** only the manager flash report (1 %); exports are not in the mix, since they are rare.
+
+**Where the server time goes (16 users, k6 `server_total_ms` × count):**
+
+| Class                 | Share of server time       | Average |
+| --------------------- | -------------------------- | ------- |
+| Unified global search | 24 % (from 4 % of actions) | 790 ms  |
+| Guest search          | 8 %                        | —       |
+| Reservation search    | 7 %                        | —       |
+| Room board            | 7 %                        | —       |
+| Arrivals              | 7 %                        | —       |
+| Availability          | 6 %                        | —       |
+
+### 38.4 Capacity: 2 instances (inline workers, pool 10), increasing users (MEASURED, same host, 60 s per point)
+
+| Users | req/s | p50      | p95      | p99      | Errors | PG CPU | App CPU | Pool wait avg / p95 | Event loop p99 | Job queue p95 |
+| ----- | ----- | -------- | -------- | -------- | ------ | ------ | ------- | ------------------- | -------------- | ------------- |
+| 8     | 83.5  | 74 ms    | 205 ms   | 599 ms   | 0 %    | 289 %  | 112 %   | 0.6 / ≤ 5 ms        | 42–47 ms       | 27 ms         |
+| 16    | 93.3  | 127 ms   | 385 ms   | 1,087 ms | 0 %    | 345 %  | 124 %   | 3.9 / ≤ 25 ms       | 71–94 ms       | 45 ms         |
+| 32    | 99.2  | 258 ms   | 777 ms   | 1,323 ms | 0 %    | 379 %  | 127 %   | 30 / ≤ 100 ms       | 107 ms         | 75 ms         |
+| 64    | 101.7 | 496 ms   | 1,591 ms | 2,197 ms | 0 %    | 390 %  | 133 %   | 97 / ≤ 250 ms       | 102–110 ms     | 344 ms        |
+| 128   | 102.6 | 959 ms   | 3,473 ms | 4,478 ms | 0 %    | 381 %  | 132 %   | 249 / ≤ 1 s         | 119–154 ms     | 5.9 s         |
+| 192   | 102.9 | 1,448 ms | 5,303 ms | 6,592 ms | 0 %    | 394 %  | 133 %   | 394 / ≤ 1 s         | 112–153 ms     | 8.1 s         |
+| 256   | 104.4 | 1,856 ms | 6,549 ms | 7,820 ms | 0 %    | 407 %  | 139 %   | 532 / ≤ 2.5 s       | 113–166 ms     | 32 s          |
+
+CPU is a percentage of one thread (800 % = the machine). The other columns:
+
+- **DB connections:** 24 at every load (2 × 10 pooled + 4 LISTEN).
+- **RSS of the two instances:** 1.1–1.4 GB.
+- **Streams:** 8–100 held, all open.
+- **Jobs:** 0 re-executed.
+
+**Saturation point (MEASURED):** about 100 req/s, reached at 32 users. Past it throughput stays flat (≤ 104 req/s at 256 users) while latency and pool wait rise linearly. There were no errors and no timeouts up to 256 users, 8× the saturation load.
+
+- **First bottleneck: PostgreSQL CPU.** It was about 3.8–4.1 threads, roughly 38 ms of PostgreSQL CPU per request in this mix. The instances used about 1.3 threads and the rest of the machine ran k6, the samplers and Windows.
+- **Under overload the queueing happens in the pool** (`pending` > 0), which is the predictable place.
+- **Jobs share that pool** (§38.2, fix 1), so their queue wait grows with overload. A separate worker process has its own pool (PROPOSED for production beyond 2 instances, §37.10).
+
+### 38.5 Instances: 1, 2, 4, 8 (MEASURED, same host)
+
+| Instances (pool) | 16 users: req/s, p95 | 64 users: req/s, p95, p99  | PG CPU at 64 | App CPU at 64 | DB connections | Event loop p99 at 64 |
+| ---------------- | -------------------- | -------------------------- | ------------ | ------------- | -------------- | -------------------- |
+| 1 (10)           | 76.9, 408 ms         | 78.1, 1,655, 2,090 ms      | 220 %        | 84 %          | 12             | 63 ms                |
+| 2 (10)           | 93.3, 385 ms         | 101.7, 1,591, 2,197 ms     | 390 %        | 133 %         | 24             | 102–110 ms           |
+| 2 (5)            | 73.0, 590 ms         | 91.7, 2,070, 2,814 ms      | 370 %        | 113 %         | 14             | 49–52 ms             |
+| 4 (10)           | 99.2, 368 ms         | 104.1, 1,672, 2,680 ms     | 409 %        | 158 %         | 48             | 245–296 ms           |
+| 4 (5)            | 105.5, 466 ms        | **116.1**, 1,741, 2,557 ms | 466 %        | 170 %         | 28             | 110–186 ms           |
+| 8 (5)            | 89.4, 543 ms         | 101.3, 1,590, 3,106 ms     | 428 %        | 167 %         | 56             | 315–414 ms           |
+
+**Scaling efficiency at 64 users, relative to 1 instance:**
+
+| Instances | Throughput | Efficiency |
+| --------- | ---------- | ---------- |
+| 2         | ×1.30      | 65 %       |
+| 4         | ×1.33–1.49 | 33–37 %    |
+| 8         | ×1.30      | 16 %       |
+
+**Where scaling stops on this machine:**
+
+- **One instance is limited by the Node process itself:** 0.84 cores of application CPU, with PostgreSQL only half busy.
+- **From two instances on, PostgreSQL saturates the shared host.** More processes then add CPU contention: event-loop p99 rose to 0.3–0.4 s at 8 instances, and so did tail latency.
+- **8 instances × 64 users:** 3 guest-note writes (0.049 %) failed at the client. No instance recorded an error, so they were transport-level, under 8-process CPU oversubscription. The cause was NOT determined.
+- **What this does not show:** these numbers say nothing about scaling on separate hosts.
+
+**Maximum measured throughput:** 116.1 req/s (4 instances, pool 5, 64 users, p95 1.7 s). The best latency at near-maximum throughput was 2 instances at 32 users: 99 req/s, p95 0.78 s.
+
+### 38.6 Backpressure and limits (MEASURED unless marked)
+
+| Pressure                     | Behaviour                                                                                                                           | Evidence                                                                                                                                                                                                                                                                                    |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Requests beyond capacity     | No queue limit or 503 shedding in the application. Requests wait for the pool (`pending`), latency grows, nothing fails             | 256 users (8× saturation): 0 errors, p99 7.8 s. Requests waiting longer than the 5 s connect timeout would answer 500; not reached even with pool 2 at 192 users (p99 6.6 s, 0 errors)                                                                                                      |
+| DB pool saturation           | Visible as `db_client_connection_pending_requests` > 0 and wait p95                                                                 | Pool of 2 at 64 users: 41.6 req/s, wait avg 343 ms, 0 errors                                                                                                                                                                                                                                |
+| Heavy reports over the limit | 1 per process at a time; others wait up to 30 s, then **429 `REPORTS_BUSY`, `Retry-After: 5`**                                      | 16 parallel year-long guest ledgers: 5 served one by one (8.9–31.9 s), 11 refused at 30.8 s                                                                                                                                                                                                 |
+| Rate limits                  | 429 with `Retry-After`, shared across instances. On a store failure, login and password change fail closed (500); other rules allow | §37.6; database outage §38.9                                                                                                                                                                                                                                                                |
+| Job queue growth             | Nothing refused; jobs wait, never lost                                                                                              | Overload: queue wait p95 32 s at 256 users, 0 lost or duplicated                                                                                                                                                                                                                            |
+| Many event streams           | No per-user or per-instance cap. Each stream costs memory only, no database connection                                              | 1,000 streams on one instance: opened in 3.9 s, RSS +32 MB, request p50/p95 unchanged (16/20 → 17/23 ms). 3,000: opened in 11.6 s, heap +138 MB (≈ 47 KB each), latency unchanged, all closed cleanly (0 left). NOT MEASURED: notification fan-out to thousands of streams under write load |
+
+**PROPOSED, not implemented:** these need evidence from production traffic first.
+
+- **Load shedding:** above roughly 2× the measured saturation, answer 503 with `Retry-After` early instead of queueing (e.g. when pool pending > 4 × pool size). Measured overload stayed error-free but slow.
+- **A per-session stream cap** (e.g. 10).
+
+### 38.7 Failure under sustained load (MEASURED)
+
+2 instances behind the load balancer; k6 with 16 users; probes every 50 ms; 10 reconnecting streams; a job feed of 10 jobs/s.
+
+| Event                        | Load balancer                                                                                                       | Failed requests                                                                                                      | Streams                                  | Jobs                                                                                            | Sessions         |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- | ----------------------------------------------------------------------------------------------- | ---------------- |
+| Hard kill of instance 2      | Removed on its first connection error, ≤ 2.2 s after the kill was issued (the PowerShell sender itself takes 1–2 s) | Probes 0 / 981. k6 1 / 10,665: a guest-note POST in flight on the dead instance (the balancer does not retry writes) | Reconnected in 0.27–1.0 s                | 1 job held by the dead instance: retried once, finished once. 1,233 total, 0 duplicates, 0 lost | Valid throughout |
+| Restore of instance 2        | Healthy 0.5 s after it answered liveness; restart to back in rotation ≈ 9 s                                         | —                                                                                                                    | —                                        | —                                                                                               | —                |
+| Graceful drain of instance 1 | Removed as soon as draining started (readiness 503)                                                                 | 0                                                                                                                    | `reauth:shutdown`, reconnected elsewhere | Not affected                                                                                    | Valid            |
+| Restore of instance 1        | Back in rotation ≈ 12 s after the restart was issued                                                                | —                                                                                                                    | —                                        | —                                                                                               | —                |
+
+**k6 over the whole run:** 1 failure in 10,665 requests (0.009 %); p95 542 ms, p99 1.2 s.
+
+### 38.8 A write killed mid-transaction (MEASURED; new in this phase)
+
+A room status change touches `rooms`, `room_status_history` and `audit_logs` in one transaction. The test froze it at its audit insert by holding `LOCK TABLE audit_logs IN SHARE MODE`, after `pg_locks` showed the request's backend already holding row writes on `rooms` and `room_status_history`. Then:
+
+- **Hard kill**, 0.22 s after the freeze:
+  - the client got `ECONNRESET`;
+  - after the lock was released, the room version, status, history count and audit count were all unchanged;
+  - the orphaned backend was gone.
+
+  **Atomic:** PostgreSQL rolled back the transaction because no COMMIT ever arrived. While the lock was held, the orphaned backend kept waiting; `client_connection_check_interval` would end it sooner (OPERATIONS §11.4).
+
+- **Graceful drain:** the drain waited for the frozen request. Once the lock was released it completed with 200, applied exactly once (version +1, one history row, one audit row).
+
+### 38.9 Database failures (MEASURED; one instance whose database connections go through a controllable TCP proxy)
+
+| Phase                               | Liveness | Readiness               | Authenticated reads                                                                       | Login (rate-limit store denies on failure) | Event stream                                        | Jobs                       |
+| ----------------------------------- | -------- | ----------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------ | --------------------------------------------------- | -------------------------- |
+| Database down (connections refused) | 200      | 503 within 57–251 ms    | 500 `INTERNAL_ERROR` within ≤ 58 ms (fast fail)                                           | 500 (fail closed: no unlimited attempts)   | `degraded` immediately                              | Not claimed; 20 queued     |
+| Recovered                           | 200      | 200 after 0.2 s         | 200 after 0.1–0.2 s                                                                       | —                                          | `live` after 1.6 s (reconnect backoff)              | All run, 0 retried, 0 lost |
+| Connections hang (black hole)       | 200      | 503 (2 s check timeout) | 500 after ≤ 5 s (connect timeout); a request already in flight hung beyond the 12 s probe | Same                                       | Before the fix: silent. After: `degraded` at 12.5 s | Not claimed                |
+| Recovered                           | 200      | 200 after 0.26 s        | 200 after 0.26 s                                                                          | —                                          | `live` 4.7 s after                                  | 40 / 40 run, none twice    |
+
+**Pool exhaustion:** see §38.6 (queueing, no errors).
+
+### 38.10 Read replica unavailable (MEASURED; the replica is the primary behind a second proxy, lag 0, so it counts as healthy)
+
+Closed-date guest ledgers ran back to back.
+
+| Replica phase             | Result                                                                                                                                                                |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Pass                      | Read from the replica, 200                                                                                                                                            |
+| Refused                   | Every request fell back to the primary, 200                                                                                                                           |
+| Back                      | The replica was used again after the 10 s re-check                                                                                                                    |
+| Black hole, after the fix | The first request was abandoned at the 35 s deadline and answered from the primary (36.3 s total); later ones skipped the unhealthy replica (≈ 1.3 s); 200 throughout |
+| Back                      | The replica was used again                                                                                                                                            |
+
+`db_read_route_total` counted replica 70, fallback 36. A user without access to the property still got 403 on the replica path: authorization runs first.
+
+### 38.11 Realtime (MEASURED; 2 instances, 4 streams each, one room change per second, half delivered across instances)
+
+| Condition                   | Deliveries | Lost | Duplicates | p50    | p95    | p99    | Max    |
+| --------------------------- | ---------- | ---- | ---------- | ------ | ------ | ------ | ------ |
+| Under 32 users of read load | 480 / 480  | 0    | 0          | 213 ms | 269 ms | 340 ms | 359 ms |
+| Idle                        | 320 / 320  | 0    | 0          | 208 ms | 214 ms | 215 ms | 216 ms |
+
+About 200 ms of each is the deliberate merge window.
+
+**Loss behaviour:** notifications sent while a LISTEN connection is down are not replayed. Streams get `degraded`, clients poll, and on `live` the screens refetch (§31).
+
+### 38.12 Workers killed during a job, under load (MEASURED)
+
+2 web instances (`JOB_WORKER=off`), 2 worker processes (concurrency 4), k6 with 16 users and a job feed of 2 jobs/s. 8 jobs were held mid-run by a lock on `night_audit_runs`, then the worker holding 4 of them was killed hard.
+
+- **Killed worker's jobs:** the 4 jobs were reclaimed after their lease expired and finished exactly once, on attempt 2, 66.9–68.3 s after the kill. That is the 60 s lease, plus a reclaim poll of ≤ 5 s, plus the retry backoff.
+- **Surviving worker's jobs:** its 4 jobs finished on attempt 1.
+- **Feed:** 266 jobs, 0 re-executed, queue wait p95 144 ms.
+- **Load:** 0 failed requests out of 17,367.
+
+Idempotency of real night-audit jobs (fenced writes, no double posting) is covered by the phase-6 tests.
+
+### 38.13 Endurance: 26 minutes (MEASURED)
+
+**Setup:** 2 instances behind the load balancer, inline workers plus one worker process. Canonical load at 16 users, 200 long-lived streams and a job feed of 2 jobs/s. Every 30 s the run sampled the metrics, the PostgreSQL connection count and the process count.
+
+**Events during the run:**
+
+- a reconnect storm at 8 min: all 200 streams dropped at once;
+- a graceful drain of instance 2 at 12 min, restarted at 13 min;
+- a hard kill of the worker at 18 min, restarted 9 s later.
+
+**Load:**
+
+- k6 sent 157,041 requests at 100.5 req/s; p50 101 ms, p95 378 ms, p99 1.4 s.
+- 3 failed (0.002 %), all writes. The servers recorded no error: only the expected 409 version conflicts (781). The failures were therefore transport-level at the balancer during the instance exit and restart. The cause is ESTIMATED: a keep-alive connection closing under a forwarded request.
+
+**Memory (instance 1, never restarted):**
+
+- RSS averaged 1,011 MB over its first 5 samples and 827 MB over its last 5 (min 793, max 1,085 MB).
+- Heap ranged 212–809 MB with GC, trend −8 MB/min.
+- No monotonic growth.
+- The worker process was sampled only at the end: 133 MB RSS, 301 jobs since its restart. The sampler used the wrong path for its endpoint, so it was not tracked over time.
+
+**Steady state:**
+
+- 10 pooled connections per instance throughout;
+- 28–32 PostgreSQL sessions in total;
+- process count constant at 3;
+- job queue at 0–1;
+- 2,842 jobs with 0 lost and 0 re-executed, across the drain and the worker kill.
+
+**Streams:**
+
+- **Ends:** 200 by the storm (client), 99 by the drain (`reauth:shutdown`), and 200 at the 15-minute lifetime (`reauth:expired`). Every one reconnected; 50 attempts were refused with 503 by the draining instance first.
+- **Reconnect gaps:** at most 1.9 s.
+- **Heartbeats and errors:** 14,214 heartbeats received, 0 stream errors.
+- **Leaks:** none. Instance 1's counters closed with 0 left over beyond the open streams (opened 351 = closed 351 after the end).
+
+### 38.14 Security across instances (MEASURED; 3 instances behind an appending load balancer)
+
+**All passed:**
+
+- **Sessions:** login on A, request on B, refresh on C, logout on A; the revoked, pre-refresh and old refresh tokens all got 401 on the other instances. A foreign `Origin` got 403 on every instance (CSRF).
+- **Property isolation and RBAC:** the other property's stream and data got 403, someone else's job 404, and an own job at an inaccessible property 404. A role change ended the user's stream on another instance within 15 ms, and a logout ended the session's stream on another instance within 33 ms.
+- **Organization isolation:** a second organization, created on the clone, got 403 on the first organization's property, stream and room write, and 404 on its guest and job. Its own guest search returned none of the first organization's guests.
+- **Rate limits:** identical at 1 and 3 instances (10 / 20 / 10 before 429).
+- **Forwarded headers:** forged `X-Forwarded-For`, `X-Real-IP` and `Forwarded` on every request did not change the identity being limited (20, then 429).
+- **Read-replica routing:** authorization runs before the replica (403, §38.10).
+
+### 38.15 Browser smoke test (MEASURED; production build, headless Chrome → TLS proxy → appending load balancer → 2 instances, `TRUSTED_PROXY_HOPS=2`)
+
+**Covered:**
+
+- login and the dashboard;
+- front desk, reservations, housekeeping, billing, reports, night audit, guests, availability, and the room board (51 rows);
+- property switch SMR → SDX;
+- global search: Reservations 5, Guests 5, Folios 5;
+- sign-out, after which `/me` returns 401.
+
+**Results:**
+
+- **Load spread:** 216 API responses, 124 and 92 by instance.
+- **Errors:** no page exceptions and no console errors.
+- **Instance stop:** stopping the instance that held the page's stream got 2 × 503 (draining), then the stream continued on the other instance.
+- **Offline:** "Offline mode" was shown and the data kept. Back online, the stream reopened and no requests failed.
+
+### 38.16 Capacity model
+
+**Measured inputs (canonical mix, this machine):**
+
+| Quantity                          | Value           | Basis                                                               |
+| --------------------------------- | --------------- | ------------------------------------------------------------------- |
+| PostgreSQL CPU per request        | ≈ 35–40 ms      | 289–466 % CPU ÷ 83–116 req/s                                        |
+| Application CPU per request       | ≈ 11–17 ms      | One instance: 0.84 cores at 78 req/s; two: 1.33 cores at 102 req/s  |
+| Instance-bound ceiling, 1 process | ≈ 78 req/s      | Event loop and application CPU, PostgreSQL half idle                |
+| Host-bound ceiling, 2–8 processes | ≈ 100–116 req/s | PostgreSQL ≈ 4 threads + instances ≈ 1.7 threads + k6, on 8 threads |
+
+**ESTIMATED, assuming separate hosts and the same mix.** These are linear CPU arithmetic, an upper bound: real scaling loses to lock contention, cache misses and network latency, none of which was measured.
+
+**Per-component ceilings:**
+
+| Component      | Estimated ceiling                                                                                                                                                                                                                       |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| App CPU        | One Node process ≈ 1 core. At 70 % target utilisation and 11–17 ms per request: ≈ 40–65 req/s per process (78 measured at 84 %). An 8-vCPU host with 6 processes: ≈ 250–400 req/s                                                       |
+| DB CPU         | 35–40 ms per request ⇒ ≈ 25–28 req/s per PostgreSQL core. At 70 % utilisation: 8 cores ≈ 160–200 req/s, 32 cores ≈ 640–800, 64 cores ≈ 1,300–1,600. The database saturates first; the application needs ≈ 1 core per 2–3 database cores |
+| DB connections | Per instance: pool + 2. At `max_connections` 100: 6 instances (inline, pool 10) or 12 (separate workers, pool 5); 200: 14 / 29; 400: 31 / 62 (§37.10). Beyond that, PgBouncer (transaction mode)                                        |
+| Workers        | Measured 74 short jobs/s per worker slot. Real jobs (night audit) are a few per property per day; not a ceiling for this workload                                                                                                       |
+| SSE            | Measured 3,000 idle streams per instance (≈ 47 KB of heap each, no database connection). Memory bounds it in the tens of thousands per instance (ESTIMATED, NOT MEASURED); fan-out per notification grows with streams (NOT MEASURED)   |
+| Load balancer  | NOT MEASURED (a 90-line test balancer was used). Any production balancer handles several orders of magnitude more than this application's ceiling                                                                                       |
+
+**What a production deployment needs, from the table:**
+
+- **Large hotel group (ESTIMATED):** a 16–32-core primary, 4–8 application instances on 2–4 hosts, 1–2 worker processes and PgBouncer. That gives roughly 300–800 req/s of this mix with headroom.
+- **Meaning in users:** at about 0.5–1 dynamic request per active staff member per second, that is 300–1,600 concurrently active staff.
+
+### 38.17 The 100K RPS question
+
+1. **Measured locally:** the canonical mix saturates this laptop at 100–116 req/s with 0 % errors. One instance peaks at 78 req/s. Overload up to 256 users stayed error-free (MEASURED).
+2. **Measured with several instances:** 1/2/4/8 instances on the same host gave 78 / 102 / 104–116 / 101 req/s. Scaling stops at 2 because PostgreSQL and the instances share 8 threads (MEASURED).
+3. **Local saturation point:** about 100 req/s at 32 users, 2 instances (MEASURED).
+4. **First bottleneck:** PostgreSQL CPU, about 38 ms per request. The unified global search alone is 24 % of server time, then guest and reservation search, the room board and arrivals (MEASURED). With one instance, the Node process saturates first (MEASURED).
+5. **Architecture needed even to test 100K req/s of this mix (ESTIMATED):**
+   - **Application:** 100,000 × 11–17 ms ≈ 1,100–1,700 cores of application CPU, i.e. about 1,500–2,500 Node processes at 70 %.
+   - **Database:** 100,000 × 35–40 ms ≈ 3,500–4,000 database cores. No single PostgreSQL primary has that.
+   - **What 100K would therefore require (PROPOSED):**
+     - one or more of: caching the read-mostly screens (business date, dashboard, room board); read replicas, which today could take only about 4 % of the mix (§35); and partitioning tenants across several PostgreSQL clusters by organization (the natural isolation key);
+     - an order-of-magnitude cut in database CPU per request for search;
+     - a managed load-balancer tier.
+6. **Traffic mix the target refers to:** undefined. **100K req/s of dynamic staff API traffic means roughly 100,000–200,000 concurrently active staff.** That is far beyond the hotel groups this PMS serves. A 100K figure that includes CDN-served static assets, health checks or a public booking engine (which this application does not have) is a different workload, and must be stated before it is tested.
+7. **Database capacity required:** see 5. In short, about 4,000 cores' worth at today's cost per request, or a much smaller cluster after caching and query work. Either way, multiple primaries (sharding) for writes beyond a single server (ESTIMATED).
+8. **App instances required:** about 1,500–2,500 single-threaded processes, i.e. about 200–300 hosts with 8 vCPU each (ESTIMATED).
+9. **Load-generator infrastructure:** k6 here reached a few hundred req/s on a shared laptop. 100K req/s of authenticated dynamic traffic needs a distributed generator fleet, on the order of 20–50 dedicated 8-vCPU hosts or a cloud load-testing service. It also needs pre-created sessions for tens of thousands of users, and must be in the same region as the system under test (ESTIMATED).
+
+**Status: 100K RPS is NOT MEASURED and NOT CLAIMED.** It cannot be tested on this machine. Nothing measured here suggests the current single-primary architecture could reach it; the arithmetic in point 5 suggests it could not without the changes listed there.
+
+### 38.18 Production readiness checklist
+
+| Area           | Item                                                                                                                                   | State                                                                            |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| Application    | Stateless instances, no affinity                                                                                                       | Done (§37.1, re-verified §38.14–15)                                              |
+|                | Health: liveness without database, readiness with database and draining                                                                | Done                                                                             |
+|                | Graceful shutdown (`npm start`), bounded                                                                                               | Done; measured under load (§38.7–8)                                              |
+|                | Environment validation (secrets, `TRUSTED_PROXY_HOPS`, `METRICS_TOKEN`)                                                                | Done                                                                             |
+|                | Timeouts: statement 30 s, transaction 15 s, connect 5 s, replica read 35 s, stream heartbeat 25 s / lifetime 15 min, LISTEN check 15 s | Done                                                                             |
+| Database       | Connection budget: one pool per process, `ops:db-check`                                                                                | Done (corrected this phase)                                                      |
+|                | Migrations as a single separate step; expand/contract for rolling releases                                                             | Done (§37.11)                                                                    |
+|                | Backups and restore drill                                                                                                              | Documented (OPERATIONS §2); not exercised in this phase                          |
+|                | Replication readiness, deadline and fallback                                                                                           | Done (§38.10); not enabled                                                       |
+|                | Slow-query settings                                                                                                                    | PROPOSED settings in OPERATIONS §11.4; enable `pg_stat_statements` in production |
+| Infrastructure | Load balancer: readiness checks, no affinity, GET-only retries                                                                         | Contract in OPERATIONS §10                                                       |
+|                | TLS at the proxy; HSTS from the application                                                                                            | Done                                                                             |
+|                | Proxy buffering off for `/events`; idle timeout > 25 s; abort upstream on client disconnect                                            | Contract                                                                         |
+|                | Forwarded headers: append, hops counted                                                                                                | Done; spoofing tested                                                            |
+|                | Connection draining ≥ `SHUTDOWN_DRAIN_MS`; upstream keep-alive idle < Node's                                                           | Contract (§37.13)                                                                |
+| Workers        | Inline (≤ 2 instances) or separate processes (beyond)                                                                                  | Documented; both measured                                                        |
+|                | Concurrency (`JOB_WORKER_CONCURRENCY`), lease 60 s, retry with backoff, fencing                                                        | Done; recovery 67–68 s measured                                                  |
+| Observability  | Metrics (`/api/metrics`, worker `--metrics-port`)                                                                                      | Done                                                                             |
+|                | Logs: errors (redacted), slow requests, job events, shutdown                                                                           | Done                                                                             |
+|                | Traces: request id and `traceparent` correlation; no distributed tracing SDK                                                           | Partial: PROPOSED, an OpenTelemetry SDK if a tracing backend exists              |
+|                | Alerts                                                                                                                                 | PROPOSED rules in OPERATIONS §11.3                                               |
+| Security       | Secrets validated; never logged or in metrics                                                                                          | Done                                                                             |
+|                | Authentication, RBAC, property and organization isolation across instances                                                             | Done (§38.14)                                                                    |
+|                | Rate limiting shared across instances, fail-closed for login                                                                           | Done                                                                             |
+
+### 38.19 Final conclusion
+
+**Measured capacity:**
+
+- On one shared 8-thread machine, the canonical PMS workload runs at about 100 req/s with 2 instances (≈ 78 req/s per instance alone), peaking at 116 req/s.
+- Errors were 0 % at every concurrency from 8 to 256 users. p95 was 0.4 s at 16 users and 0.78 s at the 32-user saturation point.
+
+**Saturation point:** 32 users, about 100 req/s. PostgreSQL CPU, at about 38 ms per request, is the first bottleneck. Under overload, queueing happens in the pool; there are no errors, no timeouts and no leaks.
+
+**Production architecture:**
+
+- stateless Next.js instances behind a health-checking load balancer, with no affinity;
+- 1–2 worker processes;
+- one PostgreSQL primary per tenant group, with PgBouncer beyond about 12 instances;
+- an optional replica for closed-date reports;
+- scrape `/api/metrics` with the alerts in OPERATIONS §11.
+
+**Known limitations:**
+
+- Search-heavy screens (the unified global search above all) dominate database CPU.
+- Hung primary connections after a silent network partition are bounded only by readiness and the TCP stack.
+- Overload is not shed, only queued.
+- No measurement exists on separate hosts, behind a real load balancer, or with PgBouncer under load.
+
+**100K RPS status:** NOT MEASURED, NOT CLAIMED, and not achievable with a single-primary architecture at today's cost per request (ESTIMATED, §38.17).
+
+**Next operational requirements:**
+
+1. Measure on production-like separate hosts (the application tier and PostgreSQL apart).
+2. Enable `pg_stat_statements` and the alerts.
+3. Define the 100K target's traffic mix.
+4. If a much larger scale is truly needed: reduce search cost, cache read-mostly screens, and plan organization-level partitioning.

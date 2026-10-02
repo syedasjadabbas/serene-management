@@ -2,6 +2,7 @@ import "server-only";
 import { prisma } from "@/lib/db/prisma";
 import { PostgresRateLimitStore } from "@/lib/db/rate-limit-store";
 import { serverEnv } from "@/lib/env";
+import { counter } from "@/lib/observability/metrics";
 import { AppError } from "./errors";
 import { logServerError } from "./log";
 
@@ -136,6 +137,10 @@ export async function consumeRateLimit(
   try {
     window = await currentStore().hit(`${rule.name}:${key}`, rule.windowMs, now);
   } catch (error) {
+    counter(
+      "rate_limit_store_errors_total",
+      "Rate-limit store failures by rule and the policy applied (allow or deny)",
+    ).inc({ rule: rule.name, policy: rule.onStoreFailure === "deny" ? "deny" : "allow" });
     if (now - (lastFailureLog.get(rule.name) ?? 0) >= 60_000) {
       lastFailureLog.set(rule.name, now);
       logServerError(`rate-limit:${rule.name}`, error);
@@ -147,6 +152,11 @@ export async function consumeRateLimit(
       );
     }
     return { allowed: true, retryAfterSeconds: 0 };
+  }
+  if (window.count > rule.limit) {
+    counter("rate_limit_rejections_total", "Requests refused with 429 by rate-limit rule").inc({
+      rule: rule.name,
+    });
   }
   return {
     allowed: window.count <= rule.limit,

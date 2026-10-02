@@ -1391,13 +1391,14 @@ async function computeReport(
   // Closed dates only (finalized by night audit; seconds of replica lag are
   // harmless there). The open business date and live-state reports stay on
   // the primary, so a posting is in the next report at once.
-  const { value: output } = await readFromReplica(
-    to < businessDate && !LIVE_REPORT_KEYS.has(key),
-    (db) => {
-      const routed = { ...env, db };
-      return HEAVY_REPORT_KEYS.has(key) ? runHeavy(() => report.run(routed)) : report.run(routed);
-    },
-  );
+  // A heavy report holds its slot for the whole read, replica attempt and
+  // primary fallback included: a replica read abandoned at its deadline
+  // (lib/db/read-replica.ts) must not keep the slot (docs/SCALABILITY.md §38).
+  const read = () =>
+    readFromReplica(to < businessDate && !LIVE_REPORT_KEYS.has(key), (db) =>
+      report.run({ ...env, db }),
+    );
+  const { value: output } = HEAVY_REPORT_KEYS.has(key) ? await runHeavy(read) : await read();
   if (output.rows.length > REPORT_ROW_LIMIT) {
     throw new AppError(
       "BUSINESS_RULE_VIOLATION",

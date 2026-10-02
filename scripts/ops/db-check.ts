@@ -99,9 +99,9 @@ async function main(): Promise<number> {
     if (settings!.idle_tx === "0") failures.push("idle_in_transaction_session_timeout is disabled");
 
     // Connection budget (docs/OPERATIONS.md §6, docs/SCALABILITY.md §37.10):
-    // lib/db/pool-config.ts connectionBudget. Per instance: the route bundle's
+    // lib/db/pool-config.ts connectionBudget. Per instance: the process's one
     // pool, the realtime LISTEN connection and, with JOB_WORKER=inline, the
-    // worker bundle's own pool and LISTEN connection. One instance of surge is
+    // worker's LISTEN connection. One instance of surge is
     // kept free for rolling updates. Separate `npm run worker` processes are
     // not known here; subtract DATABASE_POOL_MAX + 1 for each.
     const [limits] = await prisma.$queryRaw<{ max: number; reserved: number }[]>`
@@ -126,7 +126,7 @@ async function main(): Promise<number> {
       const budget =
         `connection budget: max_connections=${limits!.max} (${plan.usable} usable after reserves), ` +
         `up to ${plan.perInstance} per instance (DATABASE_POOL_MAX=${env.DATABASE_POOL_MAX}` +
-        `${inlineWorker ? " ×2 with the inline worker" : ""} + LISTEN) → at most ` +
+        ` + LISTEN${inlineWorker ? " ×2 with the inline worker" : ""}) → at most ` +
         `${plan.instances} instances plus 1 during a rolling update`;
       if (plan.instances < 2) warnings.push(`${budget}: fewer than 2 instances fit`);
       else ok.push(budget);

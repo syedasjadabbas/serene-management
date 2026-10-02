@@ -5,32 +5,41 @@ import { PrismaClient, type Prisma } from "@/generated/prisma/client";
 import { serverEnv } from "@/lib/env";
 import { onShutdown } from "@/lib/lifecycle/shutdown";
 import { pgPoolConfig } from "./pool-config";
-import { instrumentPool } from "./pool-metrics";
+import { instrumentPool, registerPool } from "./pool-metrics";
 
 /**
- * One PrismaClient per server bundle. In development the instance is cached on
- * globalThis so hot reload does not exhaust database connections.
+ * One PostgreSQL pool per process, one PrismaClient per server bundle.
  *
- * In production the instrumentation bundle (inline job worker) and the route
- * bundles each load this module, so a process can hold two pools of up to
- * DATABASE_POOL_MAX connections (connectionBudget in ./pool-config). They are
- * deliberately not shared: each bundle checks errors with `instanceof` against
- * its own copy of the Prisma error classes. Every client closes its own pool
- * on shutdown (lib/lifecycle/shutdown.ts).
+ * In production a process loads this module several times: the route
+ * handlers, the server-rendered pages and the instrumentation bundle (inline
+ * job worker) are separate bundles (measured: three). Each gets its own
+ * PrismaClient, deliberately: each bundle checks errors with `instanceof`
+ * against its own copy of the Prisma error classes. They all share the one
+ * pg.Pool kept on globalThis (`pg` is an external package: one copy per
+ * process), so a process holds at most DATABASE_POOL_MAX pooled connections
+ * (connectionBudget in ./pool-config).
+ *
+ * The pool closes once, on shutdown (lib/lifecycle/shutdown.ts), or when the
+ * client that created it disconnects (operational commands, tests: one bundle).
+ * In development the client is also cached so hot reload does not reconnect.
  */
+const poolHolder = globalThis as unknown as { __serenePrimaryPool?: pg.Pool };
+
 function createPrismaClient() {
   const env = serverEnv();
-  // Pool size, timeouts, lifetime and the UTC session zone (D29, D52, D64):
-  // lib/db/pool-config.ts. The pool is created here (not by the adapter) so
-  // its checkouts can be measured for the opt-in Server-Timing header.
-  const pool = new pg.Pool(pgPoolConfig(env));
-  if (env.SERVER_TIMING === "1") instrumentPool(pool);
-  const adapter = new PrismaPg(pool, { disposeExternalPool: true });
-  const client = new PrismaClient({ adapter });
-  const count = globalThis as unknown as { __serenePrismaClients?: number };
-  count.__serenePrismaClients = (count.__serenePrismaClients ?? 0) + 1;
-  onShutdown(`database pool ${count.__serenePrismaClients}`, "close", () => client.$disconnect());
-  return client;
+  const created = !poolHolder.__serenePrimaryPool;
+  if (created) {
+    // Pool size, timeouts, lifetime and the UTC session zone (D29, D52, D64):
+    // lib/db/pool-config.ts. Created here (not by the adapter) so its
+    // checkouts can be measured (metrics, slow-request log, Server-Timing).
+    const pool = new pg.Pool(pgPoolConfig(env));
+    instrumentPool(pool, "primary");
+    registerPool("primary", pool);
+    poolHolder.__serenePrimaryPool = pool;
+    onShutdown("database pool", "close", () => pool.end().catch(() => undefined));
+  }
+  const adapter = new PrismaPg(poolHolder.__serenePrimaryPool!, { disposeExternalPool: created });
+  return new PrismaClient({ adapter });
 }
 
 const globalForPrisma = globalThis as unknown as { prisma?: ReturnType<typeof createPrismaClient> };

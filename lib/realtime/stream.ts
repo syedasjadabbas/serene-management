@@ -1,4 +1,5 @@
 import "server-only";
+import { counter } from "@/lib/observability/metrics";
 import type { HubEvent, RealtimeHub } from "./hub";
 import type { RealtimeTopic } from "./topics";
 
@@ -64,7 +65,7 @@ export function openEventStream(
         try {
           controller.enqueue(encoder.encode(text));
         } catch {
-          close();
+          close("error");
         }
       };
       const event = (name: string, data: unknown) =>
@@ -90,7 +91,7 @@ export function openEventStream(
           case "access":
             if (accessAffects(hubEvent, scope)) {
               event("reauth", { reason: "access" });
-              close();
+              close("access");
             }
             return;
           case "degraded":
@@ -102,7 +103,7 @@ export function openEventStream(
           case "shutdown":
             // Reconnect now: the load balancer sends the new stream elsewhere.
             event("reauth", { reason: "shutdown" });
-            close();
+            close("shutdown");
             return;
         }
       });
@@ -111,14 +112,18 @@ export function openEventStream(
       const lifetime = setTimeout(
         () => {
           event("reauth", { reason: "expired" });
-          close();
+          close("expired");
         },
         Math.max(1_000, Math.min(STREAM_MAX_MS, options.endsAt - Date.now())),
       );
 
-      function close() {
+      function close(reason: "client" | "access" | "shutdown" | "expired" | "error") {
         if (closed) return;
         closed = true;
+        counter(
+          "realtime_streams_closed_total",
+          "Event streams ended, by reason (client: the browser left or reconnected)",
+        ).inc({ reason });
         unsubscribe();
         clearInterval(heartbeat);
         clearTimeout(lifetime);
@@ -129,8 +134,12 @@ export function openEventStream(
           // Already closed by the client.
         }
       }
-      cleanup = close;
-      options.signal.addEventListener("abort", close, { once: true });
+      cleanup = () => close("client");
+      options.signal.addEventListener("abort", () => close("client"), { once: true });
+      counter(
+        "realtime_streams_opened_total",
+        "Event streams opened (first connections and reconnects)",
+      ).inc();
 
       // The client retries on its own schedule (with backoff); `retry` only
       // guides plain EventSource clients.

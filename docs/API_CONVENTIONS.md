@@ -288,7 +288,7 @@ Lists:
 - `201 Created` for creations (body contains the created resource); `200` otherwise; `202 Accepted` when the work continues in a background job (the night audit start): the body is the resource being worked on (the RUNNING run) with its `job`. See §14.
 - Response DTOs are explicit (`<domain>.types.ts`); never return Prisma rows directly (no leaking internal columns, hashes or ciphertexts).
 - Money: `{ "amount": "1250.0000", "currency": "PKR" }` or `amount` + a sibling `currencyCode` on the resource.
-- Every response carries `x-request-id`.
+- Every response carries `x-request-id`: the caller's `X-Request-Id` when valid (8–64 letters, digits or `-`, e.g. set by the load balancer), else the trace id of a W3C `traceparent`, else a new UUID. The same id is written to error and slow-request logs, audit rows and queued jobs (OPERATIONS §11).
 
 ## 5. Error structure
 
