@@ -142,7 +142,7 @@ export function StayDetailView({
   ];
 
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-6">
+    <div className="flex w-full flex-col gap-6">
       <PageHeader
         breadcrumbs={[
           { label: "Front desk", href: `/${property.code}/front-desk` },
@@ -202,7 +202,7 @@ export function StayDetailView({
 
       <section
         aria-labelledby="stay-heading"
-        className="rounded-lg border border-border-subtle bg-surface"
+        className="rounded-lg border border-border-subtle bg-surface shadow-card"
       >
         {can("guests:read") ? (
           <div className="px-4 pt-3">
@@ -222,7 +222,7 @@ export function StayDetailView({
       <div className="grid gap-4 lg:grid-cols-2">
         <section
           aria-labelledby="rooms-heading"
-          className="rounded-lg border border-border-subtle bg-surface p-4"
+          className="rounded-lg border border-border-subtle bg-surface p-5 shadow-card sm:p-6"
         >
           <h2 id="rooms-heading" className="mb-2 text-lg font-semibold">
             Room history
@@ -251,7 +251,7 @@ export function StayDetailView({
 
         <section
           aria-labelledby="status-heading"
-          className="rounded-lg border border-border-subtle bg-surface p-4"
+          className="rounded-lg border border-border-subtle bg-surface p-5 shadow-card sm:p-6"
         >
           <h2 id="status-heading" className="mb-2 text-lg font-semibold">
             Room status changes
@@ -282,7 +282,7 @@ export function StayDetailView({
       {stay.notes.length > 0 ? (
         <section
           aria-labelledby="stay-notes-heading"
-          className="rounded-lg border border-border-subtle bg-surface p-4"
+          className="rounded-lg border border-border-subtle bg-surface p-5 shadow-card sm:p-6"
         >
           <h2 id="stay-notes-heading" className="mb-2 text-lg font-semibold">
             Notes and special requests

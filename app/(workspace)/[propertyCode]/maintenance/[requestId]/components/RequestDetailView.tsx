@@ -94,7 +94,7 @@ export function RequestDetailView({ requestId }: { requestId: string }) {
   const pending = (action: string) => isLoading && originalArgs?.action === action;
 
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
+    <div className="flex w-full flex-col gap-6">
       <PageHeader
         back={{ href: `/${property.code}/maintenance`, label: "Maintenance" }}
         icon={Wrench}
@@ -185,7 +185,7 @@ export function RequestDetailView({ requestId }: { requestId: string }) {
       />
       {actionError && !dialog ? <Alert tone="danger">{actionError.message}</Alert> : null}
 
-      <section className="rounded-lg border border-border-subtle bg-surface">
+      <section className="rounded-lg border border-border-subtle bg-surface shadow-card">
         <dl className="grid grid-cols-1 gap-x-6 gap-y-1.5 p-4 sm:grid-cols-[10rem_1fr]">
           {(
             [
@@ -209,7 +209,7 @@ export function RequestDetailView({ requestId }: { requestId: string }) {
         </dl>
         {request.blocks.length > 0 ? (
           <div className="border-t border-border-subtle px-4 py-3 text-sm">
-            <h2 className="mb-1 font-semibold">Room availability</h2>
+            <h2 className="mb-3 text-lg font-semibold tracking-[-0.01em]">Room availability</h2>
             <ul className="flex flex-col gap-1">
               {request.blocks.map((b) => (
                 <li key={b.id}>
@@ -256,7 +256,7 @@ function ActivityLog({ request }: { request: MaintenanceDetail }) {
   return (
     <section
       aria-labelledby="activity-heading"
-      className="rounded-lg border border-border-subtle bg-surface p-4"
+      className="rounded-lg border border-border-subtle bg-surface p-5 shadow-card sm:p-6"
     >
       <h2 id="activity-heading" className="mb-2 text-lg font-semibold">
         Activity

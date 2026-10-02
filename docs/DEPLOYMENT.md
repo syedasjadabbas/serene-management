@@ -201,6 +201,8 @@ Do not expose the Node port directly when `TRUSTED_PROXY_HOPS` > 0.
 
 Also forward `Host` and `X-Forwarded-Proto`. Serve only HTTPS, because cookies are `Secure` in production.
 
+**Request size.** The application refuses JSON bodies above 1 MiB with `413 PAYLOAD_TOO_LARGE` before reading them in full (the largest legitimate body, an avatar, is ≈ 350 KB). Keep a matching limit at the proxy (`client_max_body_size 1m;`, the nginx default) so oversized uploads stop there.
+
 **Request ids and metrics** ([OPERATIONS.md §11](OPERATIONS.md#11-observability)): have the proxy set `X-Request-Id` (nginx `proxy_set_header X-Request-Id $request_id;`) so its access log and the application's logs, audit rows and jobs share one id. Set `METRICS_TOKEN` and let the monitoring system scrape `/api/metrics` on every instance directly; do not route it through the public proxy (it answers 404 there without the token anyway).
 
 **Load balancer in front of several instances** ([OPERATIONS.md §10](OPERATIONS.md#10-several-instances-and-graceful-shutdown)): no sticky sessions are needed; health-check `/api/health/ready` (unauthenticated) and remove a target on 503; do not buffer `/api/v1/properties/*/events` (server-sent events: `proxy_buffering off`, read timeout above 25 s, the heartbeat interval); abort the upstream request when the client disconnects (the nginx and HAProxy default) so closed event streams do not stay open on the instance; and count every proxy that appends to `X-Forwarded-For` in `TRUSTED_PROXY_HOPS`.

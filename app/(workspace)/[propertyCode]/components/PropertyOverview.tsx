@@ -178,15 +178,20 @@ export function PropertyOverview() {
       : null;
   const facts = [
     { label: "Business date", value: bd?.businessDate ?? "Not initialized", mono: true },
-    { label: "Business date status", value: bd?.status ?? "—" },
     {
-      label: "Property local date and time",
+      label: "Business date status",
+      value: bd?.status
+        ? bd.status.charAt(0) + bd.status.slice(1).toLowerCase().replaceAll("_", " ")
+        : "—",
+    },
+    {
+      label: "Local date and time",
       value: clock ? `${clock.date} ${clock.time}` : "—",
       mono: true,
     },
     { label: "Time zone", value: property.timezone, mono: true },
     { label: "Currency", value: property.currencyCode, mono: true },
-    { label: "Your permissions here", value: String(permissionCount) },
+    { label: "Your permissions", value: String(permissionCount) },
   ];
 
   const showOperations = housekeepingAllowed || maintenanceAllowed;
@@ -325,7 +330,10 @@ function StatSkeletons() {
     <div role="status" className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
       <span className="sr-only">Loading today&apos;s figures</span>
       {[0, 1, 2, 3].map((i) => (
-        <div key={i} className="flex gap-3 rounded-lg border border-border-subtle bg-surface p-4">
+        <div
+          key={i}
+          className="flex gap-3 rounded-lg border border-border-subtle bg-surface p-5 shadow-card sm:p-6"
+        >
           <Skeleton className="size-10 rounded-md" />
           <div className="flex flex-1 flex-col gap-2">
             <Skeleton className="h-3 w-24" />

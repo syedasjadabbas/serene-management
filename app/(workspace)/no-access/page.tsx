@@ -5,13 +5,16 @@ import { StatusPanel } from "@/components/ui/StatusPanel";
 export const metadata: Metadata = { title: "No property access" };
 
 export default function NoAccessPage() {
+  // Rendered outside the workspace shell, so the page provides its own main landmark.
   return (
-    <StatusPanel
-      level={1}
-      kind="forbidden"
-      title="No property access"
-      description="Your account is active but has not been given access to any property. Ask an administrator to assign you a role."
-      action={<SignOutButton variant="secondary" />}
-    />
+    <main id="main">
+      <StatusPanel
+        level={1}
+        kind="forbidden"
+        title="No property access"
+        description="Your account is active but has not been given access to any property. Ask an administrator to assign you a role."
+        action={<SignOutButton variant="secondary" />}
+      />
+    </main>
   );
 }

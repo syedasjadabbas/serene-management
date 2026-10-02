@@ -54,6 +54,7 @@ const RESOURCE_TYPES: { value: string; label: string; group: string }[] = [
   ["PropertyConfiguration", "Property settings", "Administration"],
   ["Organization", "Organization", "Administration"],
 ].map(([value, label, group]) => ({ value: value!, label: label!, group: group! }));
+const RESOURCE_LABELS = new Map(RESOURCE_TYPES.map((t) => [t.value, t.label]));
 
 function summarize(value: unknown): string {
   if (!value || typeof value !== "object") return "";
@@ -114,7 +115,7 @@ export function OrganizationAuditTrail() {
         description="Newest first. Times are shown in each property's time zone; organization-level records in UTC."
       />
       <form
-        className="grid grid-cols-2 items-end gap-2 rounded-lg border border-border-subtle bg-surface p-3 md:flex md:flex-wrap"
+        className="grid grid-cols-2 items-end gap-2 rounded-lg border border-border-subtle bg-surface p-3 shadow-card md:flex md:flex-wrap"
         onSubmit={(event) => {
           event.preventDefault();
           if (invalidRange) return;
@@ -202,7 +203,7 @@ export function OrganizationAuditTrail() {
           <StatusPanel kind="empty" title="No audit records yet" />
         )
       ) : rows ? (
-        <section className="rounded-lg border border-border-subtle bg-surface">
+        <section className="rounded-lg border border-border-subtle bg-surface shadow-card">
           <ol className="flex flex-col divide-y divide-border-subtle text-sm">
             {rows.items.map((row) => (
               <li key={row.id} className="flex flex-col gap-0.5 px-4 py-2.5">
@@ -223,8 +224,10 @@ export function OrganizationAuditTrail() {
                   </span>
                 </div>
                 <p className="text-xs text-fg-secondary">
-                  {row.resourceType}
-                  {row.resourceId ? ` · ${row.resourceId}` : ""}
+                  {RESOURCE_LABELS.get(row.resourceType) ?? row.resourceType}
+                  {row.resourceId ? (
+                    <span className="font-mono text-2xs text-fg-muted"> · {row.resourceId}</span>
+                  ) : null}
                 </p>
                 {row.reason ? (
                   <p className="text-xs text-fg-secondary">Reason: {row.reason}</p>

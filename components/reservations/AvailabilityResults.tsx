@@ -53,7 +53,7 @@ export function AvailabilityResults({
 }) {
   if (view.roomTypes.length === 0) {
     return (
-      <p className="rounded-lg border border-border-subtle bg-surface px-4 py-10 text-center text-sm text-fg-secondary">
+      <p className="rounded-lg border border-border-subtle bg-surface px-4 py-10 text-center text-sm text-fg-secondary shadow-card">
         No sellable room types are configured for this property.
       </p>
     );

@@ -72,7 +72,11 @@ export function TrendCard({ trend }: { trend: DashboardView["trend"] }) {
       {points.length > 1 ? (
         <div aria-hidden="true" className="h-56">
           <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={points} margin={{ top: 8, right: 8, bottom: 0, left: -8 }}>
+            <AreaChart
+              data={points}
+              margin={{ top: 8, right: 8, bottom: 0, left: -8 }}
+              accessibilityLayer={false}
+            >
               <CartesianGrid {...chartGridProps} />
               <XAxis
                 dataKey="date"

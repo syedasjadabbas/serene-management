@@ -21,6 +21,7 @@ import { toClientApiError } from "@/lib/api/errors";
 import { formatCurrency, formatDate } from "@/lib/utils/format";
 import { addDays, daysBetween, isDateOnly } from "@/modules/business-date/business-date.policy";
 import type { PerformanceFigures } from "@/modules/organization/organization.types";
+import { Table, TBody, Th, Tr, THead, Td } from "@/components/ui/Table";
 
 type Counts = Pick<
   PerformanceFigures,
@@ -162,7 +163,7 @@ export function PerformanceReport() {
         }
       />
       <form
-        className="flex flex-wrap items-end gap-2 rounded-lg border border-border-subtle bg-surface p-3 print:hidden"
+        className="flex flex-wrap items-end gap-2 rounded-lg border border-border-subtle bg-surface p-3 shadow-card print:hidden"
         onSubmit={(event) => {
           event.preventDefault();
           if (rangeError || !valueFrom || !valueTo) return;
@@ -188,7 +189,7 @@ export function PerformanceReport() {
         />
         <Button
           type="submit"
-          size="touch"
+
           className="md:h-control md:text-sm"
           pending={report.isFetching}
           disabled={!!rangeError || !valueFrom || !valueTo}
@@ -231,13 +232,12 @@ export function PerformanceReport() {
       ) : data ? (
         <>
           <Section id="rooms" title="Rooms and movements">
-            <table className="w-full min-w-[720px] text-sm">
-              <caption className="sr-only">Rooms and movements by property</caption>
+            <Table caption="Rooms and movements by property" minWidth="720px">
               <Head first="Property" columns={COUNT_COLUMNS.map(([label]) => label)} />
-              <tbody className="divide-y divide-border-subtle">
+              <TBody>
                 {data.properties.map((row) => (
-                  <tr key={row.property.id}>
-                    <th scope="row" className="px-4 py-2 text-left font-medium">
+                  <Tr interactive key={row.property.id}>
+                    <Th scope="row">
                       <span className="me-2 font-mono text-xs text-fg-muted">
                         {row.property.code}
                       </span>
@@ -252,66 +252,62 @@ export function PerformanceReport() {
                           <Badge tone="warning">Through {row.coveredTo}</Badge>
                         ) : null}
                       </span>
-                    </th>
+                    </Th>
                     <Cells values={COUNT_COLUMNS.map(([, get]) => get(row))} />
-                  </tr>
+                  </Tr>
                 ))}
                 {data.properties.length > 1 ? (
-                  <tr className="bg-surface-sunken font-medium">
-                    <th scope="row" className="px-4 py-2 text-left">
-                      All properties
-                    </th>
+                  <Tr interactive className="-sunken">
+                    <Th scope="row">All properties</Th>
                     <Cells values={COUNT_COLUMNS.map(([, get]) => get(data.overall))} />
-                  </tr>
+                  </Tr>
                 ) : null}
-              </tbody>
-            </table>
+              </TBody>
+            </Table>
           </Section>
 
           <Section id="money" title="Money by property (own currency)">
-            <table className="w-full min-w-[820px] text-sm">
-              <caption className="sr-only">Money by property, each in its own currency</caption>
+            <Table caption="Money by property, each in its own currency" minWidth="820px">
               <Head first="Property" columns={MONEY_COLUMNS.map(([label]) => label)} />
-              <tbody className="divide-y divide-border-subtle">
+              <TBody>
                 {data.properties.map((row) => (
-                  <tr key={row.property.id}>
-                    <th scope="row" className="px-4 py-2 text-left font-medium">
+                  <Tr interactive key={row.property.id}>
+                    <Th scope="row">
                       <span className="me-2 font-mono text-xs text-fg-muted">
                         {row.property.code}
                       </span>
                       <Badge tone="neutral">{row.currencyCode}</Badge>
-                    </th>
+                    </Th>
                     <Cells
                       values={MONEY_COLUMNS.map(([, get]) => money(get(row), row.currencyCode))}
                     />
-                  </tr>
+                  </Tr>
                 ))}
-              </tbody>
-            </table>
+              </TBody>
+            </Table>
           </Section>
 
           <Section id="currency" title="Totals per currency">
-            <table className="w-full min-w-[820px] text-sm">
-              <caption className="sr-only">Totals per currency, never converted</caption>
+            <Table caption="Totals per currency, never converted" minWidth="820px">
               <Head first="Currency" columns={MONEY_COLUMNS.map(([label]) => label)} />
-              <tbody className="divide-y divide-border-subtle">
+              <TBody>
                 {data.currencies.map((row) => (
-                  <tr key={row.currencyCode}>
-                    <th scope="row" className="px-4 py-2 text-left font-medium">
+                  <Tr interactive key={row.currencyCode}>
+                    <Th scope="row">
                       {row.currencyCode}
                       <span className="ms-2 text-xs font-normal text-fg-muted">
                         {row.propertyCount} {row.propertyCount === 1 ? "property" : "properties"}
                         {" · "}
                         {row.occupancy}% occ.
                       </span>
-                    </th>
+                    </Th>
                     <Cells
                       values={MONEY_COLUMNS.map(([, get]) => money(get(row), row.currencyCode))}
                     />
-                  </tr>
+                  </Tr>
                 ))}
-              </tbody>
-            </table>
+              </TBody>
+            </Table>
           </Section>
 
           {data.excluded.length > 0 ? (
@@ -343,7 +339,10 @@ function money(value: string | null, currency: string) {
 
 function Section({ id, title, children }: { id: string; title: string; children: ReactNode }) {
   return (
-    <section aria-labelledby={id} className="rounded-lg border border-border-subtle bg-surface">
+    <section
+      aria-labelledby={id}
+      className="rounded-lg border border-border-subtle bg-surface shadow-card"
+    >
       <h2 id={id} className="border-b border-border-subtle px-4 py-2.5 font-semibold">
         {title}
       </h2>
@@ -354,18 +353,18 @@ function Section({ id, title, children }: { id: string; title: string; children:
 
 function Head({ first, columns }: { first: string; columns: string[] }) {
   return (
-    <thead className="text-left text-xs text-fg-muted">
+    <THead>
       <tr>
         <th scope="col" className="px-4 py-2 font-medium">
           {first}
         </th>
         {columns.map((label) => (
-          <th key={label} scope="col" className="py-2 pe-3 text-right font-medium">
+          <Th key={label} numeric>
             {label}
-          </th>
+          </Th>
         ))}
       </tr>
-    </thead>
+    </THead>
   );
 }
 
@@ -374,9 +373,9 @@ function Cells({ values }: { values: string[] }) {
     <>
       {values.map((value, index) => (
         // Columns are fixed per table, so the position is a stable key.
-        <td key={index} className="py-2 pe-3 text-right tabular-nums">
+        <Td key={index} numeric>
           {value}
-        </td>
+        </Td>
       ))}
     </>
   );

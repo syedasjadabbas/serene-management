@@ -5,7 +5,7 @@ import type { Route } from "next";
 import { useState } from "react";
 import { Alert } from "@/components/ui/Alert";
 import { Badge } from "@/components/ui/Badge";
-import { Receipt } from "lucide-react";
+import { Receipt, Plus } from "lucide-react";
 import { Button, buttonClass } from "@/components/ui/Button";
 import { IdChip, type KeyFact, KeyFacts } from "@/components/ui/KeyFacts";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -84,11 +84,11 @@ export function FolioWorkspace({ reservationRoomId }: { reservationRoomId: strin
     formatCurrency(value, account.currencyCode, "en", account.minorUnits);
 
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-6">
+    <div className="flex w-full flex-col gap-6">
       <Header account={account} />
 
       {account.windows.length === 0 ? (
-        <section className="rounded-lg border border-border-subtle bg-surface p-4">
+        <section className="rounded-lg border border-border-subtle bg-surface p-5 shadow-card sm:p-6">
           <StatusPanel
             kind="empty"
             title="No folio yet"
@@ -100,7 +100,6 @@ export function FolioWorkspace({ reservationRoomId }: { reservationRoomId: strin
             action={
               a.openWindow ? (
                 <Button
-                  size="touch"
                   pending={openState.isLoading}
                   onClick={() => void openWindow({ propertyId: property.id, reservationRoomId })}
                 >
@@ -134,7 +133,7 @@ export function FolioWorkspace({ reservationRoomId }: { reservationRoomId: strin
             </Alert>
           ) : null}
 
-          <section className="rounded-lg border border-border-subtle bg-surface">
+          <section className="rounded-lg border border-border-subtle bg-surface shadow-card">
             <div className="flex flex-wrap items-center gap-2 border-b border-border-subtle px-3 py-2">
               <div role="tablist" aria-label="Billing windows" className="flex flex-wrap gap-1">
                 {account.windows.map((w) => (
@@ -153,7 +152,6 @@ export function FolioWorkspace({ reservationRoomId }: { reservationRoomId: strin
                 <Button
                   size="sm"
                   variant="ghost"
-                  className="min-h-11 md:min-h-0"
                   pending={openState.isLoading}
                   onClick={async () => {
                     const result = await openWindow({ propertyId: property.id, reservationRoomId });
@@ -161,7 +159,8 @@ export function FolioWorkspace({ reservationRoomId }: { reservationRoomId: strin
                       setSelected(result.data.windows.at(-1)!.window);
                   }}
                 >
-                  + Window
+                  <Plus aria-hidden="true" className="size-4" />
+                  New window
                 </Button>
               ) : null}
             </div>
@@ -176,15 +175,12 @@ export function FolioWorkspace({ reservationRoomId }: { reservationRoomId: strin
                   </p>
                   <WindowStatus win={win} />
                 </div>
-                <div className="flex flex-wrap gap-1.5 px-4 pt-3">
+                <div className="flex flex-wrap gap-2 px-4 pt-3">
                   {a.postCharge && win.status !== "CLOSED" ? (
-                    <Button size="touch" onClick={() => setDialog("charge")}>
-                      Post charge
-                    </Button>
+                    <Button onClick={() => setDialog("charge")}>Post charge</Button>
                   ) : null}
                   {a.takePayment && win.status !== "CLOSED" ? (
                     <Button
-                      size="touch"
                       variant="secondary"
                       disabled={parseMoney(win.balance) <= 0n}
                       onClick={() => setDialog("payment")}
@@ -193,16 +189,12 @@ export function FolioWorkspace({ reservationRoomId }: { reservationRoomId: strin
                     </Button>
                   ) : null}
                   {a.postRoomCharges ? (
-                    <Button
-                      size="touch"
-                      variant="secondary"
-                      onClick={() => setDialog("roomCharges")}
-                    >
+                    <Button variant="secondary" onClick={() => setDialog("roomCharges")}>
                       Post room charges
                     </Button>
                   ) : null}
                   {a.settle && win.status === "OPEN" && win.balance === "0.0000" ? (
-                    <Button size="touch" variant="secondary" onClick={() => setDialog("settle")}>
+                    <Button variant="secondary" onClick={() => setDialog("settle")}>
                       Settle window
                     </Button>
                   ) : null}

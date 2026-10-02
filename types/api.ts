@@ -14,6 +14,7 @@ export const ERROR_CODES = [
   "INVALID_STATE_TRANSITION", // 422: state machine forbids the transition
   "BUSINESS_DATE_LOCKED", // 423: night audit in progress / date closed
   "IDEMPOTENCY_CONFLICT", // 409: same Idempotency-Key, different payload
+  "PAYLOAD_TOO_LARGE", // 413: request body above the JSON body limit (1 MiB)
   "RATE_LIMITED", // 429
   "PAYMENT_PROVIDER_ERROR", // 502: gateway declined / unavailable
   "INTERNAL_ERROR", // 500

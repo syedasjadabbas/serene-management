@@ -413,15 +413,51 @@ async function parse<P, Q, B>(
     if (!contentType.toLowerCase().startsWith("application/json")) {
       throw new AppError("VALIDATION_FAILED", "Expected a JSON request body");
     }
+    const text = await readBodyText(request);
     let raw: unknown;
     try {
-      raw = await request.json();
+      raw = JSON.parse(text);
     } catch {
       throw new AppError("VALIDATION_FAILED", "Malformed JSON request body");
     }
     body = schemas.body.parse(raw);
   }
   return { request, params, query, body };
+}
+
+/**
+ * Largest JSON request body accepted (the biggest legitimate one, an avatar,
+ * is ≈ 350 KB of base64). Checked against Content-Length and again while the
+ * body streams in (chunked requests have no length), so an oversized body is
+ * never buffered: without it one anonymous sign-in request could make the
+ * process read and parse hundreds of megabytes.
+ */
+export const MAX_JSON_BODY_BYTES = 1_048_576;
+
+function payloadTooLarge(): AppError {
+  return new AppError("PAYLOAD_TOO_LARGE", "The request body is too large", {
+    limitBytes: MAX_JSON_BODY_BYTES,
+  });
+}
+
+async function readBodyText(request: NextRequest): Promise<string> {
+  const declared = Number(request.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > MAX_JSON_BODY_BYTES) throw payloadTooLarge();
+  if (!request.body) return "";
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > MAX_JSON_BODY_BYTES) {
+      await reader.cancel().catch(() => undefined);
+      throw payloadTooLarge();
+    }
+    chunks.push(value);
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks));
 }
 
 /** High-risk permissions demand a written reason on state-changing requests (docs/RBAC.md §2). */

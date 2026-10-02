@@ -8,6 +8,7 @@ import {
   advancePropertyTime,
   msUntilAfterLocalMidnight,
 } from "@/modules/business-date/business-date.policy";
+import { useHydrated } from "./useHydrated";
 import { useProperty } from "./useProperty";
 
 /**
@@ -34,7 +35,22 @@ export function useBusinessDate(options: { rollover?: boolean } = {}) {
     const timer = window.setTimeout(() => void refetch(), wait);
     return () => window.clearTimeout(timer);
   }, [rollover, data, fulfilledTimeStamp, refetch]);
-  return query;
+  const hydrated = useHydrated();
+  if (hydrated) return query;
+  // While hydrating, report what the server rendered (loading, no data): the
+  // shell may already have started or finished this request, and pages that
+  // switch to a skeleton on `isLoading` must not differ from the server HTML.
+  return {
+    ...query,
+    data: undefined,
+    currentData: undefined,
+    fulfilledTimeStamp: undefined,
+    error: undefined,
+    isLoading: true,
+    isFetching: true,
+    isSuccess: false,
+    isError: false,
+  } as typeof query;
 }
 
 /**

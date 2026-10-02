@@ -97,7 +97,7 @@ export function RateCalendarPanel({ initialPlanId }: { initialPlanId?: string })
           description={optionsError.message}
           requestId={optionsError.requestId}
           action={
-            <Button size="touch" variant="secondary" onClick={() => void options.refetch()}>
+            <Button variant="secondary" onClick={() => void options.refetch()}>
               Retry
             </Button>
           }
@@ -125,7 +125,7 @@ export function RateCalendarPanel({ initialPlanId }: { initialPlanId?: string })
           description={error.message}
           requestId={error.requestId}
           action={
-            <Button size="touch" variant="secondary" onClick={() => void query.refetch()}>
+            <Button variant="secondary" onClick={() => void query.refetch()}>
               Retry
             </Button>
           }
@@ -133,7 +133,7 @@ export function RateCalendarPanel({ initialPlanId }: { initialPlanId?: string })
       ) : null}
       {data ? (
         <div
-          className="relative overflow-x-auto rounded-lg border border-border-subtle bg-surface"
+          className="relative overflow-x-auto rounded-lg border border-border-subtle bg-surface shadow-card"
           aria-busy={query.isFetching}
         >
           <table className="w-full min-w-[560px] text-sm">

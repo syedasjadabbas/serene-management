@@ -1089,6 +1089,12 @@ export async function postNightsInTx(
   // Ledger amounts inserted (net charge + non-zero taxes): the folio balance moves by this.
   let inserted = 0n;
   for (const night of nights) {
+    // A posted night is final: its lines were planned and posted together from
+    // the configuration of that moment. Today's configuration (a package added
+    // to the rate plan, a component added to a package) must never add lines to
+    // it, and a reversed package line must not come back. Reversing the room
+    // line clears the flag (`markNightPosting`), which re-opens the night.
+    if (night.posted) continue;
     const lines = planned.byNight.get(night.stayDate)!;
 
     let postedAny = false;

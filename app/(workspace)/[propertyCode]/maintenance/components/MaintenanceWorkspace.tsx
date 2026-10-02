@@ -304,7 +304,7 @@ function RequestPage({
   const apiError = toClientApiError(error);
   if (isLoading) {
     return (
-      <div className="overflow-hidden rounded-lg border border-border-subtle bg-surface">
+      <div className="overflow-hidden rounded-lg border border-border-subtle bg-surface shadow-card">
         <SkeletonRows rows={first ? 4 : 2} columns={3} label="Loading requests" />
       </div>
     );
@@ -349,7 +349,7 @@ function RequestPage({
   }
   return (
     <>
-      <ul className="divide-y divide-border-subtle overflow-hidden rounded-lg border border-border-subtle bg-surface">
+      <ul className="divide-y divide-border-subtle overflow-hidden rounded-lg border border-border-subtle bg-surface shadow-card">
         {data.items.map((item) => (
           <li key={item.id}>
             <RequestRow item={item} />

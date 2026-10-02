@@ -48,9 +48,7 @@ export function PackagesView() {
     <section className="flex flex-col gap-3">
       {can("packages:manage") ? (
         <div>
-          <Button size="touch" onClick={() => setEditing("new")}>
-            New package
-          </Button>
+          <Button onClick={() => setEditing("new")}>New package</Button>
         </div>
       ) : null}
       {(query.data ?? []).length === 0 ? (
@@ -58,7 +56,10 @@ export function PackagesView() {
       ) : null}
       <ul className="flex flex-col gap-2">
         {(query.data ?? []).map((pkg) => (
-          <li key={pkg.id} className="rounded-lg border border-border-subtle bg-surface p-4">
+          <li
+            key={pkg.id}
+            className="rounded-lg border border-border-subtle bg-surface p-4 shadow-card"
+          >
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="font-semibold">
                 {pkg.code} · {pkg.name}

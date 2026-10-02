@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/Button";
 import { TextField } from "@/components/ui/TextField";
 import { availabilityQuerySchema } from "@/modules/availability/availability.schema";
 import { addDays, daysBetween, isDateOnly } from "@/modules/business-date/business-date.policy";
+import { MAX_STAY_NIGHTS } from "@/modules/reservations/reservations.policy";
 
 export interface StaySearchValues {
   arrival: string;
@@ -50,8 +51,12 @@ export function StaySearchForm({
   function submit(event: FormEvent) {
     event.preventDefault();
     const fieldErrors: Record<string, string[]> = {};
-    if (isDateOnly(arrival) && arrival < businessDate)
-      fieldErrors.arrival = [`On or after ${businessDate}`];
+    // Plain-language messages for the fields staff type; the schema's own
+    // messages ("Invalid ISO date" for a missing departure) are a fallback.
+    if (!isDateOnly(arrival)) fieldErrors.arrival = ["Enter the arrival date"];
+    else if (arrival < businessDate) fieldErrors.arrival = [`On or after ${businessDate}`];
+    if (!/^\d+$/.test(nights.trim()) || nightCount < 1 || nightCount > MAX_STAY_NIGHTS)
+      fieldErrors.nights = [`Enter 1 to ${MAX_STAY_NIGHTS} nights`];
     const parsed = availabilityQuerySchema.safeParse({
       arrival,
       departure,
@@ -61,8 +66,9 @@ export function StaySearchForm({
     });
     if (!parsed.success) {
       for (const issue of parsed.error.issues) {
-        const key = String(issue.path[0] ?? "arrival");
-        fieldErrors[key === "departure" ? "nights" : key] = [issue.message];
+        const raw = String(issue.path[0] ?? "arrival");
+        const key = raw === "departure" ? "nights" : raw;
+        fieldErrors[key] ??= [issue.message];
       }
     }
     setErrors(fieldErrors);
@@ -102,19 +108,13 @@ export function StaySearchForm({
         type="number"
         inputMode="numeric"
         min={1}
-        max={90}
+        max={MAX_STAY_NIGHTS}
         value={nights}
         onChange={(e) => setNights(e.target.value)}
         errors={errors.nights}
         required
       />
-      <TextField
-        label="Departure"
-        value={departure}
-        readOnly
-        tabIndex={-1}
-        hint="Arrival + nights"
-      />
+      <TextField label="Departure" type="date" value={departure} readOnly hint="Arrival + nights" />
       <TextField
         label="Adults"
         type="number"

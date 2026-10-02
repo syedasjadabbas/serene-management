@@ -511,6 +511,65 @@ describe("room charges", () => {
     expect(breakfast!.amount.toFixed(2)).toBe("1500.00");
   });
 
+  it("never posts lines for a night already posted, whatever was configured later (audit P0)", async () => {
+    // Night D-2 is posted; afterwards a package covering it appears (a package
+    // added to the rate plan, or a component added to a package, has the same
+    // effect: today's configuration plans a line that has no posting key yet).
+    const guest = await withPastNights(2);
+    const first = addDays(D, -2);
+    expect((await roomCharges(agent, guest.rrId, { through: first })).status).toBe(201);
+    await prisma.reservationPackage.create({
+      data: {
+        propertyId: A,
+        reservationRoomId: guest.rrId,
+        packageId: invA.packages.BB!,
+        quantity: 1,
+        startDate: fromDateOnly(first),
+        endDate: fromDateOnly(addDays(D, -1)),
+      },
+    });
+    expect((await roomCharges(agent, guest.rrId)).status).toBe(201);
+    const { items } = await expectLedgerConsistent((await window1(guest.rrId)).id);
+    const breakfast = items.filter(
+      (i) => i.kind === "CHARGE" && i.transactionCodeId === invA.chargeCodes["2030"],
+    );
+    // Only the night posted after the change carries the package.
+    expect(breakfast.map((b) => b.revenueDate?.toISOString().slice(0, 10))).toEqual([
+      addDays(D, -1),
+    ]);
+  });
+
+  it("does not bring back a reversed package line at the next posting (audit)", async () => {
+    const guest = await withPastNights(2);
+    const first = addDays(D, -2);
+    await prisma.reservationPackage.create({
+      data: {
+        propertyId: A,
+        reservationRoomId: guest.rrId,
+        packageId: invA.packages.BB!,
+        quantity: 1,
+        startDate: fromDateOnly(first),
+        endDate: fromDateOnly(first),
+      },
+    });
+    expect((await roomCharges(agent, guest.rrId, { through: first })).status).toBe(201);
+    const w = await window1(guest.rrId);
+    const breakfast = (await ledgerOf(w.id)).find(
+      (i) => i.kind === "CHARGE" && i.transactionCodeId === invA.chargeCodes["2030"],
+    )!;
+    const reversed = await reverse(fom, breakfast.id, {
+      reason: "Guest declined breakfast",
+      reasonCodeId: reason("VOID:ERR"),
+    });
+    expect(reversed.status).toBe(201);
+    // The next posting covers the remaining night only; the declined breakfast stays reversed.
+    expect((await roomCharges(agent, guest.rrId)).status).toBe(201);
+    const lines = (await expectLedgerConsistent(w.id)).items.filter(
+      (i) => i.kind === "CHARGE" && i.transactionCodeId === invA.chargeCodes["2030"],
+    );
+    expect(lines).toHaveLength(1);
+  });
+
   it("re-posts a reversed night with the next generation", async () => {
     const guest = await withPastNights(1);
     expect((await roomCharges(agent, guest.rrId)).status).toBe(201);

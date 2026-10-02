@@ -79,11 +79,7 @@ export function GuestsPanel() {
             restart();
           }}
         />
-        {can("guests:create") ? (
-          <Button size="touch" onClick={() => setCreating(true)}>
-            New guest
-          </Button>
-        ) : null}
+        {can("guests:create") ? <Button onClick={() => setCreating(true)}>New guest</Button> : null}
       </div>
       {q.trim().length === 1 ? (
         <p className="text-xs text-fg-muted">Type at least 2 characters to search.</p>
@@ -96,7 +92,7 @@ export function GuestsPanel() {
           description={error.message}
           requestId={error.requestId}
           action={
-            <Button size="touch" variant="secondary" onClick={() => void query.refetch()}>
+            <Button variant="secondary" onClick={() => void query.refetch()}>
               Retry
             </Button>
           }
@@ -109,7 +105,7 @@ export function GuestsPanel() {
           description={searching ? "Try another name, e-mail or phone." : undefined}
           action={
             filtered ? (
-              <Button size="touch" variant="secondary" onClick={clearFilters}>
+              <Button variant="secondary" onClick={clearFilters}>
                 Clear filters
               </Button>
             ) : undefined
@@ -118,14 +114,14 @@ export function GuestsPanel() {
       ) : null}
       {data && data.items.length > 0 ? (
         <ul
-          className="divide-y divide-border-subtle overflow-hidden rounded-lg border border-border-subtle bg-surface"
+          className="divide-y divide-border-subtle overflow-hidden rounded-lg border border-border-subtle bg-surface shadow-card"
           aria-busy={query.isFetching}
         >
           {data.items.map((guest) => (
             <li key={guest.id}>
               <Link
                 href={`/${property.code}/guests/${guest.id}` as Route}
-                className="grid min-h-14 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-0.5 px-4 py-2.5 hover:bg-surface-sunken md:grid-cols-[minmax(0,2fr)_minmax(0,2fr)_auto]"
+                className="grid min-h-14 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-0.5 px-4 py-2.5 hover:bg-surface-sunken md:grid-cols-[minmax(0,2fr)_minmax(0,2fr)_9rem]"
               >
                 <span className="min-w-0">
                   <span className="block truncate font-medium">{guest.fullName}</span>
@@ -149,7 +145,6 @@ export function GuestsPanel() {
       {cursors.length > 1 || data?.meta.nextCursor ? (
         <div className="flex justify-between gap-2">
           <Button
-            size="touch"
             variant="secondary"
             disabled={cursors.length <= 1}
             onClick={() => setCursors((c) => c.slice(0, -1))}
@@ -157,7 +152,6 @@ export function GuestsPanel() {
             Previous
           </Button>
           <Button
-            size="touch"
             variant="secondary"
             disabled={!data?.meta.nextCursor}
             onClick={() => {

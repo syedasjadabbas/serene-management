@@ -84,9 +84,7 @@ export function GroupsWorkspace() {
         description="Blocks hold rooms for a group; guests are picked up into them at the block's rate."
         actions={
           can("groups:manage") ? (
-            <Button size="touch" onClick={() => setCreating(true)}>
-              New group
-            </Button>
+            <Button onClick={() => setCreating(true)}>New group</Button>
           ) : undefined
         }
       />
@@ -131,7 +129,7 @@ function GroupList({
   return (
     <section
       aria-label="Groups"
-      className="overflow-hidden rounded-lg border border-border-subtle bg-surface"
+      className="overflow-hidden rounded-lg border border-border-subtle bg-surface shadow-card"
     >
       <div
         aria-hidden="true"

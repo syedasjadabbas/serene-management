@@ -4,7 +4,7 @@ import { runInTransaction } from "@/lib/db/transaction";
 import { auditActor, type PropertyContext } from "@/lib/http/context";
 import { AppError, forbidden, notFound, staleVersion } from "@/lib/http/errors";
 import type { Permission } from "@/lib/permissions/catalog";
-import { hasPermission } from "@/lib/permissions/evaluate";
+import { hasPermission, hasPermissionAnywhere } from "@/lib/permissions/evaluate";
 import { decodeCursor, encodeCursor } from "@/lib/utils/cursor";
 import {
   recordAudit,
@@ -871,6 +871,7 @@ export async function getStay(ctx: PropertyContext, stayId: string): Promise<Sta
   const arrival = toDateOnly(rr.arrivalDate);
   const departure = toDateOnly(rr.departureDate);
   const businessDate = ctx.businessDate;
+  const contactVisible = hasPermissionAnywhere(ctx.access, "guests:read");
 
   const history = await propertyResourceHistory(prisma, ctx, [stay.id, rr.id]);
   // Status changes of the rooms this stay used, while the guest was in house.
@@ -915,8 +916,10 @@ export async function getStay(ctx: PropertyContext, stayId: string): Promise<Sta
         .join(" "),
       vip: stay.primaryGuest.vipLevel?.code ?? null,
       profileNumber: stay.primaryGuest.profileNumber,
-      email: stay.primaryGuest.primaryEmail,
-      phone: stay.primaryGuest.primaryPhone,
+      // Guest contact data follows the guest-profile permission (D56, RBAC.md):
+      // frontdesk:read alone (e.g. a housekeeping manager) does not reveal it.
+      email: contactVisible ? stay.primaryGuest.primaryEmail : null,
+      phone: contactVisible ? stay.primaryGuest.primaryPhone : null,
     },
     room: stay.room,
     roomType: rr.roomType,

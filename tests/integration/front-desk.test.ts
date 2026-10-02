@@ -934,6 +934,28 @@ describe("room assignment before arrival (Phase 2 endpoint)", () => {
 });
 
 describe("financial data in history and audit (M1)", () => {
+  it("shows guest contact data on a stay only to callers with guests:read (audit P1)", async () => {
+    const guest = await inHouse("KNG", 1);
+    const stay = (await getStay(fom, guest.stay.id)).body.data;
+    await prisma.guest.update({
+      where: { id: stay.guest.id },
+      data: { primaryEmail: "contact.check@guest.test", primaryPhone: "+92 300 0000000" },
+    });
+    // A front office manager reads guest profiles: contact data shown.
+    const byFom = (await getStay(fom, guest.stay.id)).body.data;
+    expect(byFom.guest).toMatchObject({
+      email: "contact.check@guest.test",
+      phone: "+92 300 0000000",
+    });
+    // A housekeeping manager reads stays (frontdesk:read) but not guest profiles.
+    const hkmc = await createUser(org, "hkmc", [{ role: "HOUSEKEEPING_MANAGER", property: "A" }]);
+    const byHkm = await getStay(await loginAs(hkmc.email, TEST_PASSWORD), guest.stay.id);
+    expect(byHkm.status).toBe(200);
+    expect(byHkm.body.data.guest.name).toBeTruthy();
+    expect(byHkm.body.data.guest).toMatchObject({ email: null, phone: null });
+    expect(JSON.stringify(byHkm.body.data)).not.toContain("contact.check@guest.test");
+  });
+
   it("hides folio balances from history and audit readers without billing:read", async () => {
     const guest = await inHouse("KNG", 1);
     await backdate(guest.reservationRoomId, 2, 0);

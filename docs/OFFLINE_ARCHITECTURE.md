@@ -212,7 +212,16 @@ reported as a conflict (safe, but confusing). Hence the phase-3 prerequisite.
   revoked sessions), sign-in of a different user, "Clear offline data" in the indicator panel.
 - Reconciled on every online workspace load against `/me`: snapshots of other users, of
   properties no longer accessible, or taken under a permission no longer held are deleted.
+- **`/offline` asks the server first** (production-readiness audit, P1-2): while the server is
+  reachable, the offline view shows nothing until `/me` (refreshing the access token once if
+  needed) confirms a live session. No session (expired, revoked, disabled user, a closed browser on
+  a shared PC): everything is wiped. A live session: snapshots are reconciled with its access before
+  they are shown. Only an unreachable server (the real offline case) shows the stored copy
+  unconfirmed (`lib/offline/verifySession.ts`). Verified in a production build: a session revoked
+  server-side without signing out leaves nothing readable at `/offline`.
 - CSP unchanged. No new dependencies.
+- **Residual risk**: while the server is unreachable the session cannot be confirmed, so the
+  last snapshot (≤ 24 h) stays readable on that device until the connection returns.
 - **Residual risk**: IndexedDB is not encrypted at rest by the app; anyone with access to the
   unlocked OS account can read the snapshot until it expires or is wiped, exactly as they could
   use the still-signed-in browser session. Mitigations: minimisation, 24 h expiry, sign-out

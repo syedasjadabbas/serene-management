@@ -50,8 +50,8 @@ export function ArrivalsView({
           </Link>
         </Alert>
       ) : null}
-      {/* Narrow screens scroll the table sideways; the guest column stays pinned. */}
-      <div className="relative overflow-x-auto rounded-lg border border-border-subtle bg-surface">
+      {/* Narrow screens scroll the table sideways; the guest column and the row action stay pinned. */}
+      <div className="relative overflow-x-auto rounded-lg border border-border-subtle bg-surface shadow-card">
         <table className="w-full min-w-[940px] text-sm">
           <caption className="sr-only">Arrivals for the business date</caption>
           <thead className="bg-surface-sunken text-left text-xs text-fg-secondary">
@@ -83,7 +83,10 @@ export function ArrivalsView({
               <th scope="col" className="px-2 py-2 font-medium">
                 Status
               </th>
-              <th scope="col" className="px-3 py-2 text-end font-medium">
+              <th
+                scope="col"
+                className="sticky end-0 z-[1] border-s border-border-subtle bg-surface-sunken px-3 py-2 text-end font-medium lg:border-s-0"
+              >
                 <span className="sr-only">Actions</span>
               </th>
             </tr>
@@ -250,7 +253,7 @@ function ArrivalsPage({
           <td className="px-2 py-2">
             <ArrivalStateBadge state={row.state} />
           </td>
-          <td className="px-3 py-2 text-end whitespace-nowrap">
+          <td className="sticky end-0 z-[1] border-s border-border-subtle bg-surface px-3 py-2 text-end whitespace-nowrap group-hover:bg-[color-mix(in_srgb,var(--sm-surface-sunken)_60%,var(--sm-surface))] lg:border-s-0">
             {row.stayId ? (
               <Link
                 href={`/${property.code}/front-desk/stays/${row.stayId}` as Route}
@@ -266,7 +269,7 @@ function ArrivalsPage({
                 Confirm first
               </Link>
             ) : canCheckIn ? (
-              <Button size="sm" onClick={() => onCheckIn(row)}>
+              <Button size="sm" variant="secondary" onClick={() => onCheckIn(row)}>
                 Check in
               </Button>
             ) : null}

@@ -60,8 +60,8 @@ export function StaysView({
           marked for cleaning.
         </Alert>
       ) : null}
-      {/* Narrow screens scroll the table sideways; the room column stays pinned. */}
-      <div className="relative overflow-x-auto rounded-lg border border-border-subtle bg-surface">
+      {/* Narrow screens scroll the table sideways; the room column and the row action stay pinned. */}
+      <div className="relative overflow-x-auto rounded-lg border border-border-subtle bg-surface shadow-card">
         <table className="w-full min-w-[900px] text-sm">
           <caption className="sr-only">
             {kind === "in-house" ? "Guests in house" : "Departures for the business date"}
@@ -92,7 +92,10 @@ export function StaysView({
               <th scope="col" className="px-2 py-2 font-medium">
                 Status
               </th>
-              <th scope="col" className="px-3 py-2 text-end font-medium">
+              <th
+                scope="col"
+                className="sticky end-0 z-[1] border-s border-border-subtle bg-surface-sunken px-3 py-2 text-end font-medium lg:border-s-0"
+              >
                 <span className="sr-only">Actions</span>
               </th>
             </tr>
@@ -256,7 +259,7 @@ function StaysPage({
             <td className="px-2 py-2">
               <Badge tone={state.tone}>{state.label}</Badge>
             </td>
-            <td className="px-3 py-2 text-end whitespace-nowrap">
+            <td className="sticky end-0 z-[1] border-s border-border-subtle bg-surface px-3 py-2 text-end whitespace-nowrap group-hover:bg-[color-mix(in_srgb,var(--sm-surface-sunken)_60%,var(--sm-surface))] lg:border-s-0">
               <span className="inline-flex items-center gap-2">
                 <Link
                   href={`/${property.code}/front-desk/stays/${row.stayId}` as Route}
@@ -265,7 +268,7 @@ function StaysPage({
                   Open stay
                 </Link>
                 {canCheckOut && checkOutReady ? (
-                  <Button size="sm" onClick={() => onCheckOut(row.stayId)}>
+                  <Button size="sm" variant="secondary" onClick={() => onCheckOut(row.stayId)}>
                     Check out
                   </Button>
                 ) : null}

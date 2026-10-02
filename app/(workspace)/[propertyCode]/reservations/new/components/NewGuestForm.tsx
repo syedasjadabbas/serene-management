@@ -64,7 +64,7 @@ export function NewGuestForm({
       className="flex flex-col gap-3 rounded-lg border border-border-subtle bg-surface p-5 shadow-card"
       aria-label="New guest profile"
     >
-      <h2 className="text-lg font-semibold">New guest profile</h2>
+      <h2 className="text-lg font-semibold tracking-[-0.01em]">New guest profile</h2>
       {duplicates.length > 0 ? (
         <Alert tone="warning">
           <p>

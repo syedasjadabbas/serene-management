@@ -24,6 +24,7 @@ import {
   PickupDialog,
   ReleaseDialog,
 } from "./GroupDialogs";
+import { Table, TBody, Td, Th, THead, Tr } from "@/components/ui/Table";
 
 type Dialog =
   | null
@@ -79,7 +80,7 @@ export function GroupDetailView({ groupId }: { groupId: string }) {
   const a = group.actions;
 
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-6">
+    <div className="flex w-full flex-col gap-6">
       <PageHeader
         back={{ href: `/${property.code}/groups`, label: "Groups" }}
         icon={UsersRound}
@@ -112,7 +113,7 @@ export function GroupDetailView({ groupId }: { groupId: string }) {
         }
       />
       {group.notes ? (
-        <section className="rounded-lg border border-border-subtle bg-surface p-4">
+        <section className="rounded-lg border border-border-subtle bg-surface p-5 shadow-card sm:p-6">
           <p className="text-sm whitespace-pre-wrap text-fg-secondary">{group.notes}</p>
         </section>
       ) : null}
@@ -134,60 +135,45 @@ export function GroupDetailView({ groupId }: { groupId: string }) {
         ))
       )}
 
-      <section className="rounded-lg border border-border-subtle bg-surface p-4">
-        <h2 className="mb-2 text-lg font-semibold">Reservations</h2>
+      <section className="rounded-lg border border-border-subtle bg-surface p-5 shadow-card sm:p-6">
+        <h2 className="mb-3 text-lg font-semibold tracking-[-0.01em]">Reservations</h2>
         {group.reservations.length === 0 ? (
           <p className="text-sm text-fg-secondary">No rooms picked up yet.</p>
         ) : (
           <div className="relative overflow-x-auto">
-            <table className="w-full min-w-[560px] text-sm">
-              <caption className="sr-only">
-                Reservations picked up from the group&apos;s blocks
-              </caption>
-              <thead className="text-left text-xs text-fg-muted">
+            <Table caption="Reservations picked up from the group's blocks" minWidth="560px">
+              <THead>
                 <tr>
-                  <th scope="col" className="py-2 pr-3 font-medium">
-                    Confirmation
-                  </th>
-                  <th scope="col" className="py-2 pr-3 font-medium">
-                    Guest
-                  </th>
-                  <th scope="col" className="py-2 pr-3 font-medium">
-                    Room type
-                  </th>
-                  <th scope="col" className="py-2 pr-3 font-medium">
-                    Stay
-                  </th>
-                  <th scope="col" className="py-2 pr-3 font-medium">
-                    Block
-                  </th>
-                  <th scope="col" className="py-2 font-medium">
-                    Status
-                  </th>
+                  <Th>Confirmation</Th>
+                  <Th>Guest</Th>
+                  <Th>Room type</Th>
+                  <Th>Stay</Th>
+                  <Th>Block</Th>
+                  <Th>Status</Th>
                 </tr>
-              </thead>
-              <tbody className="divide-y divide-border-subtle">
+              </THead>
+              <TBody>
                 {group.reservations.map((r) => (
-                  <tr key={r.reservationRoomId}>
-                    <td className="py-2 pr-3">
+                  <Tr interactive key={r.reservationRoomId}>
+                    <Td>
                       <Link
                         href={`/${property.code}/reservations/${r.reservationId}` as Route}
                         className="text-brand hover:underline"
                       >
                         {r.confirmation}
                       </Link>
-                    </td>
-                    <td className="py-2 pr-3">{r.guestName}</td>
-                    <td className="py-2 pr-3">{r.roomType}</td>
-                    <td className="py-2 pr-3 whitespace-nowrap">
+                    </Td>
+                    <Td>{r.guestName}</Td>
+                    <Td>{r.roomType}</Td>
+                    <Td className="whitespace-nowrap">
                       {formatShortDate(r.arrival)} → {formatShortDate(r.departure)}
-                    </td>
-                    <td className="py-2 pr-3">{r.blockCode ?? "—"}</td>
-                    <td className="py-2">{r.status.toLowerCase().replace("_", " ")}</td>
-                  </tr>
+                    </Td>
+                    <Td>{r.blockCode ?? "—"}</Td>
+                    <Td>{r.status.toLowerCase().replace("_", " ")}</Td>
+                  </Tr>
                 ))}
-              </tbody>
-            </table>
+              </TBody>
+            </Table>
           </div>
         )}
       </section>
@@ -228,7 +214,7 @@ function BlockCard({
   const cancelled = block.status.type === "CANCEL";
   const t = block.totals;
   return (
-    <section className="rounded-lg border border-border-subtle bg-surface">
+    <section className="rounded-lg border border-border-subtle bg-surface shadow-card">
       <div className="flex flex-wrap items-center gap-2 border-b border-border-subtle px-4 py-2.5">
         <h2 className="font-semibold">
           {block.code} · {block.name}
@@ -252,7 +238,6 @@ function BlockCard({
         <div className="flex flex-wrap gap-1.5 px-4 pt-3">
           {a.pickup && definite && block.status.allowsPickup ? (
             <Button
-              size="touch"
               onClick={() => onAction("pickup")}
               disabled={t.remaining === 0 && !block.isElastic}
             >
@@ -260,17 +245,17 @@ function BlockCard({
             </Button>
           ) : null}
           {a.manage ? (
-            <Button size="touch" variant="secondary" onClick={() => onAction("allocation")}>
+            <Button variant="secondary" onClick={() => onAction("allocation")}>
               Change allocation
             </Button>
           ) : null}
           {a.manage ? (
-            <Button size="touch" variant="secondary" onClick={() => onAction("status")}>
+            <Button variant="secondary" onClick={() => onAction("status")}>
               Change status
             </Button>
           ) : null}
           {a.manage && t.remaining > 0 ? (
-            <Button size="touch" variant="ghost" onClick={() => onAction("release")}>
+            <Button variant="ghost" onClick={() => onAction("release")}>
               Release rooms
             </Button>
           ) : null}
@@ -281,31 +266,22 @@ function BlockCard({
           key={rt.roomType.id}
           className="relative mt-3 overflow-x-auto border-t border-border-subtle"
         >
-          <table className="w-full min-w-max text-sm">
-            <caption className="px-4 pt-2 text-left text-xs font-medium text-fg-secondary">
-              {rt.roomType.code} · {rt.roomType.name} — {rt.totals.pickedUp}/{rt.totals.allocated}{" "}
-              picked up
-            </caption>
-            <thead className="text-xs text-fg-muted">
+          <Table
+            caption={`${rt.roomType.code} · ${rt.roomType.name} — ${rt.totals.pickedUp}/${rt.totals.allocated} picked up`}
+            captionHidden={false}
+            minWidth="max-content"
+          >
+            <THead>
               <tr>
-                <th
-                  scope="col"
-                  className="sticky left-0 bg-surface px-4 py-1.5 text-left font-medium"
-                >
-                  Night
-                </th>
+                <Th className="sticky left-0 bg-surface">Night</Th>
                 {rt.nights.map((n) => (
-                  <th
-                    key={n.date}
-                    scope="col"
-                    className="px-2 py-1.5 text-center font-medium whitespace-nowrap"
-                  >
+                  <Th className="text-center" key={n.date}>
                     {formatShortDate(n.date)}
-                  </th>
+                  </Th>
                 ))}
               </tr>
-            </thead>
-            <tbody className="tabular-nums">
+            </THead>
+            <TBody>
               {(
                 [
                   ["Held", "allocated"],
@@ -314,22 +290,23 @@ function BlockCard({
                   ["Remaining", "remaining"],
                 ] as const
               ).map(([label, key]) => (
-                <tr key={key} className={key === "remaining" ? "font-semibold" : undefined}>
-                  <th
-                    scope="row"
-                    className="sticky left-0 bg-surface px-4 py-1 text-left text-xs font-medium text-fg-secondary"
-                  >
+                <Tr
+                  interactive
+                  key={key}
+                  className={key === "remaining" ? "font-semibold" : undefined}
+                >
+                  <Th className="sticky left-0 bg-surface text-xs text-fg-secondary" scope="row">
                     {label}
-                  </th>
+                  </Th>
                   {rt.nights.map((n) => (
-                    <td key={n.date} className="px-2 py-1 text-center">
+                    <Td className="text-center" key={n.date}>
                       {n[key]}
-                    </td>
+                    </Td>
                   ))}
-                </tr>
+                </Tr>
               ))}
-            </tbody>
-          </table>
+            </TBody>
+          </Table>
         </div>
       ))}
       <div className="h-3" />

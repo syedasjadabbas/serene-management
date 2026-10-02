@@ -23,6 +23,7 @@ import {
 import { toClientApiError } from "@/lib/api/errors";
 import { formatDate } from "@/lib/utils/format";
 import type { LoyaltyProgramView, LoyaltyTierView } from "@/modules/loyalty/loyalty.types";
+import { Table, TBody, Td, Th, THead, Tr } from "@/components/ui/Table";
 
 type Dialog =
   | null
@@ -58,14 +59,17 @@ export function LoyaltyPanel() {
           arrives with night audit.
         </p>
         {manage ? (
-          <Button size="touch" className="ms-auto" onClick={() => setDialog({ kind: "program" })}>
+          <Button className="ms-auto" onClick={() => setDialog({ kind: "program" })}>
             New program
           </Button>
         ) : null}
       </div>
       {programs.length === 0 ? <StatusPanel kind="empty" title="No loyalty program yet" /> : null}
       {programs.map((program) => (
-        <section key={program.id} className="rounded-lg border border-border-subtle bg-surface">
+        <section
+          key={program.id}
+          className="rounded-lg border border-border-subtle bg-surface shadow-card"
+        >
           <div className="flex flex-wrap items-center gap-2 border-b border-border-subtle px-4 py-2.5">
             <h2 className="font-semibold">
               {program.code} · {program.name}
@@ -99,58 +103,47 @@ export function LoyaltyPanel() {
             ) : null}
           </div>
           <div className="relative overflow-x-auto">
-            <table className="w-full min-w-[520px] text-sm">
-              <caption className="sr-only">Tiers of {program.name}</caption>
-              <thead className="text-left text-xs text-fg-muted">
+            <Table caption={`Tiers of ${program.name}`} minWidth="520px">
+              <THead>
                 <tr>
-                  <th scope="col" className="px-4 py-2 font-medium">
-                    Rank
-                  </th>
-                  <th scope="col" className="py-2 pr-3 font-medium">
-                    Tier
-                  </th>
-                  <th scope="col" className="py-2 pr-3 font-medium">
-                    Qualifies at
-                  </th>
-                  <th scope="col" className="py-2 pr-3 font-medium">
-                    Members
-                  </th>
-                  <th scope="col" className="py-2 pr-3 font-medium">
-                    Status
-                  </th>
+                  <Th>Rank</Th>
+                  <Th>Tier</Th>
+                  <Th>Qualifies at</Th>
+                  <Th>Members</Th>
+                  <Th>Status</Th>
                   {manage ? (
-                    <th scope="col" className="py-2 pr-4">
+                    <Th>
                       <span className="sr-only">Actions</span>
-                    </th>
+                    </Th>
                   ) : null}
                 </tr>
-              </thead>
-              <tbody className="divide-y divide-border-subtle">
+              </THead>
+              <TBody>
                 {program.tiers.length === 0 ? (
-                  <tr>
-                    <td colSpan={6} className="px-4 py-3 text-fg-secondary">
+                  <Tr interactive>
+                    <Td className="text-fg-secondary" colSpan={6}>
                       No tiers yet.
-                    </td>
-                  </tr>
+                    </Td>
+                  </Tr>
                 ) : null}
                 {program.tiers.map((tier) => (
-                  <tr key={tier.id}>
-                    <td className="px-4 py-2 tabular-nums">{tier.rank}</td>
-                    <td className="py-2 pr-3">
+                  <Tr interactive key={tier.id}>
+                    <Td className="tabular-nums">{tier.rank}</Td>
+                    <Td>
                       {tier.code} · {tier.name}
-                    </td>
-                    <td className="py-2 pr-3 text-fg-secondary">
+                    </Td>
+                    <Td className="text-fg-secondary">
                       {[
                         tier.qualifyingNights !== null ? `${tier.qualifyingNights} nights` : null,
                         tier.qualifyingStays !== null ? `${tier.qualifyingStays} stays` : null,
                       ]
                         .filter(Boolean)
                         .join(" or ") || "—"}
-                    </td>
-                    <td className="py-2 pr-3 tabular-nums">{tier.members}</td>
-                    <td className="py-2 pr-3">{tier.status.toLowerCase()}</td>
+                    </Td>
+                    <Td className="tabular-nums">{tier.members}</Td>
+                    <Td>{tier.status.toLowerCase()}</Td>
                     {manage ? (
-                      <td className="py-1 pr-4 text-end">
+                      <Td>
                         <Button
                           size="sm"
                           variant="ghost"
@@ -159,12 +152,12 @@ export function LoyaltyPanel() {
                         >
                           Edit
                         </Button>
-                      </td>
+                      </Td>
                     ) : null}
-                  </tr>
+                  </Tr>
                 ))}
-              </tbody>
-            </table>
+              </TBody>
+            </Table>
           </div>
         </section>
       ))}
@@ -206,9 +199,9 @@ function MembersList({
   const data = members.currentData;
   const loading = members.isFetching && !data && !membersError;
   return (
-    <section className="flex flex-col gap-2 rounded-lg border border-border-subtle bg-surface p-4">
+    <section className="flex flex-col gap-2 rounded-lg border border-border-subtle bg-surface p-4 shadow-card">
       <div className="flex flex-wrap items-end gap-3">
-        <h2 className="text-lg font-semibold">Members</h2>
+        <h2 className="text-lg font-semibold tracking-[-0.01em]">Members</h2>
         <Select
           label="Program"
           options={programs.map((p) => ({ value: p.id, label: `${p.code} · ${p.name}` }))}
@@ -228,7 +221,7 @@ function MembersList({
           description={membersError.message}
           requestId={membersError.requestId}
           action={
-            <Button size="touch" variant="secondary" onClick={() => void members.refetch()}>
+            <Button variant="secondary" onClick={() => void members.refetch()}>
               Retry
             </Button>
           }
@@ -239,58 +232,42 @@ function MembersList({
       ) : null}
       {data && data.items.length > 0 ? (
         <div className="relative overflow-x-auto" aria-busy={members.isFetching}>
-          <table className="w-full min-w-[560px] text-sm">
-            <caption className="sr-only">Members of the program</caption>
-            <thead className="text-left text-xs text-fg-muted">
+          <Table caption="Members of the program" minWidth="560px">
+            <THead>
               <tr>
-                <th scope="col" className="py-2 pr-3 font-medium">
-                  Member
-                </th>
-                <th scope="col" className="py-2 pr-3 font-medium">
-                  Number
-                </th>
-                <th scope="col" className="py-2 pr-3 font-medium">
-                  Tier
-                </th>
-                <th scope="col" className="py-2 pr-3 text-end font-medium">
-                  Points
-                </th>
-                <th scope="col" className="py-2 pr-3 font-medium">
-                  Status
-                </th>
-                <th scope="col" className="py-2 font-medium">
-                  Since
-                </th>
+                <Th>Member</Th>
+                <Th>Number</Th>
+                <Th>Tier</Th>
+                <Th numeric>Points</Th>
+                <Th>Status</Th>
+                <Th>Since</Th>
               </tr>
-            </thead>
-            <tbody className="divide-y divide-border-subtle">
+            </THead>
+            <TBody>
               {data.items.map((m) => (
-                <tr key={m.membershipId}>
-                  <td className="py-2 pr-3">
+                <Tr interactive key={m.membershipId}>
+                  <Td>
                     <Link
                       href={`/${propertyCode}/guests/${m.guest.id}` as Route}
                       className="text-brand hover:underline"
                     >
                       {m.guest.fullName}
                     </Link>
-                  </td>
-                  <td className="py-2 pr-3 font-mono text-xs">{m.membershipNumber}</td>
-                  <td className="py-2 pr-3">{m.tier ?? "—"}</td>
-                  <td className="py-2 pr-3 text-end tabular-nums">{m.pointsBalance}</td>
-                  <td className="py-2 pr-3">{m.status.toLowerCase()}</td>
-                  <td className="py-2 whitespace-nowrap">
-                    {formatDate(m.enrolledAt.slice(0, 10))}
-                  </td>
-                </tr>
+                  </Td>
+                  <Td className="font-mono text-xs">{m.membershipNumber}</Td>
+                  <Td>{m.tier ?? "—"}</Td>
+                  <Td numeric>{m.pointsBalance}</Td>
+                  <Td>{m.status.toLowerCase()}</Td>
+                  <Td className="whitespace-nowrap">{formatDate(m.enrolledAt.slice(0, 10))}</Td>
+                </Tr>
               ))}
-            </tbody>
-          </table>
+            </TBody>
+          </Table>
         </div>
       ) : null}
       {cursors.length > 1 || data?.meta.nextCursor ? (
         <div className="flex justify-between gap-2">
           <Button
-            size="touch"
             variant="secondary"
             disabled={cursors.length <= 1}
             onClick={() => setCursors((c) => c.slice(0, -1))}
@@ -298,7 +275,6 @@ function MembersList({
             Previous
           </Button>
           <Button
-            size="touch"
             variant="secondary"
             disabled={!data?.meta.nextCursor}
             onClick={() => {

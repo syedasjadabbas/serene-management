@@ -18,6 +18,7 @@ import {
   snapshotUsability,
 } from "@/lib/offline/policy";
 import { useConnectivity } from "@/lib/offline/useConnectivity";
+import { applySessionCheck, checkSession, type SessionCheck } from "@/lib/offline/verifySession";
 import { useOfflineStore } from "@/lib/offline/useOfflineStore";
 
 type View = "arrivals" | "inHouse" | "departures" | "rooms";
@@ -73,6 +74,22 @@ function useFrom(): string | null {
 export function OfflineView() {
   const store = useOfflineStore();
   const { online, recheck } = useConnectivity();
+  // Nothing is shown until the server confirmed the session (online), or
+  // cannot be asked (offline): see lib/offline/verifySession.ts.
+  const [verified, setVerified] = useState<SessionCheck["state"] | "checking">("checking");
+  useEffect(() => {
+    if (online !== true) return;
+    let cancelled = false;
+    void (async () => {
+      const check = await checkSession();
+      await applySessionCheck(check);
+      if (!cancelled) setVerified(check.state);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [online]);
+  const session = online === false ? "unreachable" : online === null ? "checking" : verified;
   const from = useFrom();
   // The property of the page being opened (SMR from /SMR/front-desk) until the user picks one.
   const requested = from?.split("/")[1]?.toUpperCase() ?? null;
@@ -164,7 +181,7 @@ export function OfflineView() {
           </Alert>
         )}
 
-        {!store.loaded ? null : !store.session || usable.length === 0 ? (
+        {!store.loaded || session === "checking" ? null : !store.session || usable.length === 0 ? (
           <section className="rounded-lg border border-border-subtle bg-surface p-6 shadow-card">
             <h1 className="text-lg font-semibold">No offline copy in this browser</h1>
             <p className="mt-1.5 max-w-prose text-sm text-fg-secondary">

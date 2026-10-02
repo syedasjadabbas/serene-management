@@ -3061,3 +3061,19 @@ Idempotency of real night-audit jobs (fenced writes, no double posting) is cover
 2. Enable `pg_stat_statements` and the alerts.
 3. Define the 100K target's traffic mix.
 4. If a much larger scale is truly needed: reduce search cost, cache read-mostly screens, and plan organization-level partitioning.
+
+## 39. Production-readiness regression
+
+After the production-readiness fixes (docs/PRODUCTION_READINESS.md), the canonical workload of §38 was re-run on the same machine (MEASURED, 2 instances, inline workers, pool 10):
+
+| Measurement                     | §38 baseline                       | After the fixes                           |
+| ------------------------------- | ---------------------------------- | ----------------------------------------- |
+| 16 users                        | 93.3 req/s, p95 385 ms             | 111.4 and 119.2 req/s, p95 302 and 283 ms |
+| 64 users                        | 101.7 req/s, p95 1,591 ms          | 111.3 req/s, p95 1,454 ms                 |
+| Errors                          | 0 %                                | 0 %                                       |
+| PostgreSQL CPU                  | 345–390 %                          | 367–390 %                                 |
+| Realtime (idle, cross-instance) | p50 / p95 / p99 208 / 214 / 215 ms | 208 / 216 / 218 ms; 0 lost, 0 duplicates  |
+| Workers (2 instances)           | 114–135 jobs/s                     | 199 jobs/s                                |
+| Crash recovery (200 jobs)       | 17.5 s                             | 14.3 s                                    |
+
+No regression. The host varies about ±25 % between identical runs, so the higher numbers are not claimed as improvements.

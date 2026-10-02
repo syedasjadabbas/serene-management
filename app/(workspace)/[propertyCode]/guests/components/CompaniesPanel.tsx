@@ -87,9 +87,7 @@ export function CompaniesPanel() {
           }}
         />
         {can("accounts:manage") ? (
-          <Button size="touch" onClick={() => setCreating(true)}>
-            New company
-          </Button>
+          <Button onClick={() => setCreating(true)}>New company</Button>
         ) : null}
       </div>
       {q.trim().length === 1 ? (
@@ -103,7 +101,7 @@ export function CompaniesPanel() {
           description={error.message}
           requestId={error.requestId}
           action={
-            <Button size="touch" variant="secondary" onClick={() => void query.refetch()}>
+            <Button variant="secondary" onClick={() => void query.refetch()}>
               Retry
             </Button>
           }
@@ -116,7 +114,7 @@ export function CompaniesPanel() {
             title="No company matches"
             description="No company or travel agent matches these filters."
             action={
-              <Button size="touch" variant="secondary" onClick={clearFilters}>
+              <Button variant="secondary" onClick={clearFilters}>
                 Clear filters
               </Button>
             }
@@ -131,14 +129,14 @@ export function CompaniesPanel() {
       ) : null}
       {data && data.items.length > 0 ? (
         <ul
-          className="divide-y divide-border-subtle overflow-hidden rounded-lg border border-border-subtle bg-surface"
+          className="divide-y divide-border-subtle overflow-hidden rounded-lg border border-border-subtle bg-surface shadow-card"
           aria-busy={query.isFetching}
         >
           {data.items.map((a) => (
             <li key={a.id}>
               <Link
                 href={`/${property.code}/companies/${a.id}` as Route}
-                className="grid min-h-14 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-0.5 px-4 py-2.5 hover:bg-surface-sunken md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_auto]"
+                className="grid min-h-14 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-0.5 px-4 py-2.5 hover:bg-surface-sunken md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_10rem]"
               >
                 <span className="min-w-0">
                   <span className="block truncate font-medium">{a.name}</span>
@@ -162,7 +160,6 @@ export function CompaniesPanel() {
       {cursors.length > 1 || data?.meta.nextCursor ? (
         <div className="flex justify-between gap-2">
           <Button
-            size="touch"
             variant="secondary"
             disabled={cursors.length <= 1}
             onClick={() => setCursors((c) => c.slice(0, -1))}
@@ -170,7 +167,6 @@ export function CompaniesPanel() {
             Previous
           </Button>
           <Button
-            size="touch"
             variant="secondary"
             disabled={!data?.meta.nextCursor}
             onClick={() => {

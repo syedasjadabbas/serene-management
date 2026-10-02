@@ -314,6 +314,7 @@ Lists:
 | `BUSINESS_RULE_VIOLATION`  | 422  | Valid input rejected by a rule (no availability, balance not zero, closed folio)  |
 | `INVALID_STATE_TRANSITION` | 422  | State machine forbids the transition                                              |
 | `BUSINESS_DATE_LOCKED`     | 423  | Night audit in progress / date closed                                             |
+| `PAYLOAD_TOO_LARGE`        | 413  | JSON body above 1 MiB (checked before it is read in full; `details.limitBytes`)   |
 | `RATE_LIMITED`             | 429  | With `Retry-After`; `details.reason` `REPORTS_BUSY` when heavy reports are full   |
 | `INTERNAL_ERROR`           | 500  | Unexpected; logged with stack; message generic                                    |
 | `PAYMENT_PROVIDER_ERROR`   | 502  | Gateway declined/unavailable; `details.providerCode`                              |

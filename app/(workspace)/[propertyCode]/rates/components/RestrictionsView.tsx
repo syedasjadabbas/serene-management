@@ -70,7 +70,7 @@ export function RestrictionsView() {
         />
         <p className="pb-2 text-xs text-fg-muted">Next 31 days</p>
         {can("availability:manage") ? (
-          <Button size="touch" className="ms-auto" onClick={() => setEditing(true)}>
+          <Button className="ms-auto" onClick={() => setEditing(true)}>
             Set or clear restrictions
           </Button>
         ) : null}
@@ -82,7 +82,7 @@ export function RestrictionsView() {
           description={optionsError.message}
           requestId={optionsError.requestId}
           action={
-            <Button size="touch" variant="secondary" onClick={() => void options.refetch()}>
+            <Button variant="secondary" onClick={() => void options.refetch()}>
               Retry
             </Button>
           }
@@ -96,7 +96,7 @@ export function RestrictionsView() {
           description={error.message}
           requestId={error.requestId}
           action={
-            <Button size="touch" variant="secondary" onClick={() => void query.refetch()}>
+            <Button variant="secondary" onClick={() => void query.refetch()}>
               Retry
             </Button>
           }
@@ -110,7 +110,7 @@ export function RestrictionsView() {
         />
       ) : null}
       {byDate.size > 0 ? (
-        <ul className="divide-y divide-border-subtle rounded-lg border border-border-subtle bg-surface">
+        <ul className="divide-y divide-border-subtle rounded-lg border border-border-subtle bg-surface shadow-card">
           {[...byDate].map(([date, list]) => (
             <li key={date} className="flex flex-wrap items-center gap-2 px-4 py-2.5">
               <span className="w-28 text-sm font-medium">{formatShortDate(date)}</span>

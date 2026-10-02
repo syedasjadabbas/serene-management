@@ -93,7 +93,7 @@ export function ReportsCatalog() {
                 <li key={report.key}>
                   <Link
                     href={`/${property.code}/reports/${report.key}` as Route}
-                    className="flex h-full flex-col gap-1 rounded-lg border border-border-subtle bg-surface p-3 hover:border-border-strong"
+                    className="flex h-full flex-col gap-1 rounded-lg border border-border-subtle bg-surface p-3 shadow-card hover:border-border-strong"
                   >
                     <span className="text-sm font-medium">{report.title}</span>
                     <span className="text-xs text-fg-secondary">{report.description}</span>

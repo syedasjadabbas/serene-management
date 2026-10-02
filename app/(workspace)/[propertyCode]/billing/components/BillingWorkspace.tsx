@@ -85,7 +85,7 @@ export function BillingWorkspace() {
         onChange={(v) => setParam({ view: v === "in_house" ? "" : v })}
       />
 
-      <section className="overflow-hidden rounded-lg border border-border-subtle bg-surface">
+      <section className="overflow-hidden rounded-lg border border-border-subtle bg-surface shadow-card">
         {cursors.map((cursor, index) => (
           <FolioPage
             key={`${listKey}-${cursor ?? "first"}`}

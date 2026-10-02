@@ -50,23 +50,24 @@ export function RatePlansView() {
     <section className="flex flex-col gap-3">
       {can("rates:manage") ? (
         <div>
-          <Button size="touch" onClick={() => setCreating(true)}>
-            New rate plan
-          </Button>
+          <Button onClick={() => setCreating(true)}>New rate plan</Button>
         </div>
       ) : null}
       {plans.length === 0 ? (
         <StatusPanel kind="empty" title="No rate plans yet" />
       ) : (
-        <ul className="divide-y divide-border-subtle overflow-hidden rounded-lg border border-border-subtle bg-surface">
+        <ul className="divide-y divide-border-subtle overflow-hidden rounded-lg border border-border-subtle bg-surface shadow-card">
           {plans.map((plan) => (
             <li key={plan.id}>
               <Link
                 href={`/${property.code}/rates/${plan.id}` as Route}
-                className="grid min-h-14 grid-cols-[1fr_auto] items-center gap-x-4 gap-y-0.5 px-4 py-2.5 hover:bg-surface-sunken md:grid-cols-[minmax(0,2fr)_minmax(0,2fr)_minmax(0,1.5fr)_auto]"
+                className="grid min-h-14 grid-cols-[1fr_auto] items-center gap-x-4 gap-y-0.5 px-4 py-2.5 hover:bg-surface-sunken md:grid-cols-[minmax(0,2.5fr)_minmax(0,1.5fr)_minmax(0,1.5fr)_10.5rem] lg:grid-cols-[minmax(0,2fr)_minmax(0,2fr)_minmax(0,1.5fr)_12rem]"
               >
                 <span className="min-w-0">
-                  <span className="block truncate font-medium">
+                  <span
+                    className="line-clamp-2 font-medium break-words"
+                    title={`${plan.code} · ${plan.name}`}
+                  >
                     {plan.code} · {plan.name}
                   </span>
                   <span className="text-xs text-fg-muted">
@@ -81,7 +82,7 @@ export function RatePlansView() {
                   {plan.seasons > 0 ? ` · ${plan.seasons} seasons` : ""}
                   {plan.packages.length > 0 ? ` · includes ${plan.packages.join(", ")}` : ""}
                 </span>
-                <span className="col-span-2 flex gap-1 md:col-span-1 md:justify-end">
+                <span className="col-span-2 flex flex-wrap gap-1 md:col-span-1 md:justify-end">
                   {plan.kind === "GROUP" ? <Badge tone="info">Groups only</Badge> : null}
                   {plan.requiresNegotiation ? <Badge tone="info">Negotiated</Badge> : null}
                   {plan.taxInclusive ? <Badge>Tax incl.</Badge> : null}

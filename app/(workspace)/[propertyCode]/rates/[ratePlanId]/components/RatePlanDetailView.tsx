@@ -114,7 +114,7 @@ export function RatePlanDetailView({ ratePlanId }: { ratePlanId: string }) {
   ];
 
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-6">
+    <div className="flex w-full flex-col gap-6">
       <PageHeader
         back={{ href: `/${property.code}/rates`, label: "Rates" }}
         icon={Tags}
@@ -154,9 +154,9 @@ export function RatePlanDetailView({ ratePlanId }: { ratePlanId: string }) {
         }
       />
 
-      <section className="rounded-lg border border-border-subtle bg-surface p-4">
+      <section className="rounded-lg border border-border-subtle bg-surface p-5 shadow-card sm:p-6">
         <div className="mb-2 flex flex-wrap items-center gap-2">
-          <h2 className="text-lg font-semibold">Seasons and prices</h2>
+          <h2 className="text-lg font-semibold tracking-[-0.01em]">Seasons and prices</h2>
           {manage && !plan.derivation ? (
             <Button
               size="sm"
@@ -230,9 +230,9 @@ export function RatePlanDetailView({ ratePlanId }: { ratePlanId: string }) {
         )}
       </section>
 
-      <section className="rounded-lg border border-border-subtle bg-surface p-4">
+      <section className="rounded-lg border border-border-subtle bg-surface p-5 shadow-card sm:p-6">
         <div className="mb-2 flex flex-wrap items-center gap-2">
-          <h2 className="text-lg font-semibold">Included packages</h2>
+          <h2 className="text-lg font-semibold tracking-[-0.01em]">Included packages</h2>
           {plan.actions.managePackages ? (
             <Button
               size="sm"
@@ -252,9 +252,9 @@ export function RatePlanDetailView({ ratePlanId }: { ratePlanId: string }) {
       </section>
 
       {plan.requiresNegotiation ? (
-        <section className="rounded-lg border border-border-subtle bg-surface p-4">
+        <section className="rounded-lg border border-border-subtle bg-surface p-5 shadow-card sm:p-6">
           <div className="mb-2 flex flex-wrap items-center gap-2">
-            <h2 className="text-lg font-semibold">Companies</h2>
+            <h2 className="text-lg font-semibold tracking-[-0.01em]">Companies</h2>
             <span className="text-xs text-fg-muted">
               Negotiated plan: quoted and sold only for these companies.
             </span>
@@ -294,7 +294,7 @@ export function RatePlanDetailView({ ratePlanId }: { ratePlanId: string }) {
       ) : null}
 
       <section className="flex flex-col gap-2">
-        <h2 className="text-lg font-semibold">Prices by night</h2>
+        <h2 className="text-lg font-semibold tracking-[-0.01em]">Prices by night</h2>
         <RateCalendarPanel initialPlanId={plan.id} />
       </section>
 

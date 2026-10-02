@@ -77,7 +77,7 @@ export function UsersPanel() {
         />
         <Button
           type="submit"
-          size="touch"
+
           className="md:h-control md:text-sm"
           pending={users.isFetching}
         >
@@ -122,7 +122,7 @@ export function UsersPanel() {
           />
         )
       ) : list ? (
-        <section className="rounded-lg border border-border-subtle bg-surface">
+        <section className="rounded-lg border border-border-subtle bg-surface shadow-card">
           <ul className="flex flex-col divide-y divide-border-subtle">
             {list.items.map((user) => (
               <li
@@ -258,7 +258,7 @@ export function UsersPanel() {
 
       <section
         aria-labelledby="roles-heading"
-        className="rounded-lg border border-border-subtle bg-surface"
+        className="rounded-lg border border-border-subtle bg-surface shadow-card"
       >
         <h2 id="roles-heading" className="border-b border-border-subtle px-4 py-2.5 font-semibold">
           Roles

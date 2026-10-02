@@ -236,11 +236,11 @@ Every list filter is applied by the server (property-scoped query, permission-ch
 | Width         | Frame                                                                                                                                                                                                                                                                                                                                             |
 | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | < 640 (`sm`)  | Top bar: menu, workspace switcher (truncates), business date (compact), avatar only. The navigation drawer opens from the start edge and closes when a link is followed. The page header stacks, and actions wrap.                                                                                                                                |
-| 640–1023      | Same frame. The user name is shown. Cards flow into 2 columns where the page allows.                                                                                                                                                                                                                                                              |
+| 640–1023      | Same frame. The property selector shows the property code only (the name and the `PROPERTY` micro-label appear from `lg`). Cards flow into 2 columns where the page allows.                                                                                                                                                                       |
 | ≥ 1024 (`lg`) | Sticky header: logo · property selector · reservation search (a field from `xl`, an icon below) · business date and audit state · account; under it a 48 px navigation row (Dashboard, Front office ▾, Guests ▾, Rooms ▾, Revenue & finance ▾, Night audit, Reports, More ▾). The `BUSINESS DATE` label and the account name appear from 1400 px. |
 | ≥ 1600        | Content is capped at 1600 px and centred.                                                                                                                                                                                                                                                                                                         |
 
-- **Tables** keep their columns and scroll inside `TableFrame`, whose `minWidth` is set per table. Dense operational tables (front desk) pin their identifying first column while scrolling.
+- **Tables** keep their columns and scroll inside `TableFrame`, whose `minWidth` is set per table. Dense operational tables (front desk) pin their identifying first column and their row action (Check in, Check out) while the columns between scroll, so the action is reachable at tablet width.
 - **Segmented filters** (`ToggleGroup`) scroll by touch on phones with no visible scrollbar and wrap onto more rows from `md`.
 - **Touch** (coarse pointer): controls grow to 44 px, and chips, tabs and nav items grow to 44 px.
 - **Horizontal overflow** of the page itself is a defect at 375, 768, 1024 and 1440 px.
@@ -286,3 +286,18 @@ Batch 0 changed tokens, primitives and the frame, which restyled every screen wi
    - the Room Board with `status-*` tokens;
    - dashboard key figures;
    - folio windows.
+
+Status (October 2026): items 1–4 are done except where noted in §12; the remaining hand-rolled tables are deliberate (front desk lists with a pinned first column, the rate calendar grid).
+
+## 12. Consistency rules from the final UI overhaul (October 2026)
+
+- **Record pages** (reservation, stay, folio, guest, company, group, maintenance request, rate plan, night audit run) use the full content width (`flex w-full flex-col gap-6`), like list pages; they are no longer capped at `max-w-6xl`. Two-column records put the working content first and a 24 rem side column (`xl:grid-cols-[minmax(0,1fr)_24rem]`) for summaries.
+- **Surfaces.** A page section is a `Card`, or a hand-built surface with the same recipe: `rounded-lg border border-border-subtle bg-surface shadow-card`, padding `p-5 sm:p-6`. Section titles are `text-lg font-semibold tracking-[-0.01em]`.
+- **History.** `components/audit/AuditHistory` renders audit entries as readable changes: humanised field names, `before → after` (the old value struck through, " changed to " for screen readers), enum values in words, amounts grouped, ids and internal references hidden. The organization audit trail is an auditor's tool and keeps the exact action codes and record ids (ids in monospace).
+- **Reports.** Report tables use `Table`; money, number and percent columns are `numeric` (end-aligned, tabular figures); 4-decimal money values from the wire are formatted with the property currency.
+- **Row actions.** In dense lists the row action is `size="sm" variant="secondary"`; the page's single primary action lives in the `PageHeader`.
+- **Touch sizing** comes from the coarse-pointer rule (§8), not from `size="touch"` on desktop. `size="touch"` is kept only for the sign-in, password reset and housekeeping task screens, which are used mainly on phones.
+- **List rows built as grids** (rate plans, guests, companies) give the trailing badge column a fixed width, so columns line up whatever badges a row carries.
+- `cn()` only joins class names; it does not resolve conflicts. Use primitive props (`numeric`, `captionHidden`, `minWidth`) instead of passing conflicting utility classes.
+- **Hydration.** A query the shell also uses (session, business date) can already be loading or loaded when a page hydrates. Hooks over such queries (`usePermissions`, `useBusinessDate`) report the server state (loading, no data) until `useHydrated()` is true, so the first client render matches the server HTML. New shared hooks follow the same rule.
+- **Charts** that are decorative next to a text alternative sit in an `aria-hidden` wrapper and turn off the Recharts keyboard layer (`accessibilityLayer={false}`, and `rootTabIndex={-1}` on a `Pie`), so no hidden element takes focus.

@@ -19,6 +19,10 @@ const LIMIT = 6;
  * Arrivals still to check in on the business date (the front desk's own
  * "pending" list, first page). Rows open the reservation; the card links to
  * the front desk, where check-in happens. Requires frontdesk:read.
+ *
+ * On the dashboard the card is as tall as the room-status card beside it, so
+ * it is laid out as a list panel: rows from the top, and a footer pinned to
+ * the bottom edge with the count and the way to the front desk.
  */
 export function ArrivalsCard({
   propertyId,
@@ -36,17 +40,15 @@ export function ArrivalsCard({
   const error = toClientApiError(query.error);
   const frontDesk = `/${propertyCode}/front-desk?view=arrivals&filter=pending` as Route;
   const items = query.data?.items ?? [];
+  const more = Boolean(query.data?.meta.nextCursor);
 
   return (
     <Card
       title="Arrivals to check in"
       description="Guests due today who have not arrived yet"
       flush
-      actions={
-        <Link href={frontDesk} className={textLinkClass}>
-          Open front desk
-        </Link>
-      }
+      className="flex flex-col"
+      bodyClassName="flex flex-1 flex-col"
     >
       {query.isLoading ? (
         <SkeletonRows rows={4} columns={4} label="Loading arrivals" />
@@ -73,7 +75,7 @@ export function ArrivalsCard({
           {items.map((row) => {
             const name = <span className="truncate font-medium text-fg">{row.guest.name}</span>;
             return (
-              <li key={row.reservationRoomId} className="flex items-center gap-3 px-5 py-3">
+              <li key={row.reservationRoomId} className="flex items-center gap-3 px-5 py-3 sm:px-6">
                 <Avatar name={row.guest.name} tone={row.guest.vip ? "accent" : "brand"} />
                 <div className="flex min-w-0 flex-1 flex-col gap-0.5">
                   <div className="flex min-w-0 items-center gap-2">
@@ -116,13 +118,18 @@ export function ArrivalsCard({
           })}
         </ul>
       )}
-      {items.length === LIMIT ? (
-        <div className="border-t border-border-subtle px-5 py-3 text-sm">
-          <Link href={frontDesk} className={textLinkClass}>
-            See all pending arrivals
-          </Link>
-        </div>
-      ) : null}
+      <div className="mt-auto flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t border-border-subtle px-5 py-3 text-sm sm:px-6">
+        <span className="text-fg-secondary">
+          {query.data && items.length > 0
+            ? more
+              ? `First ${items.length} waiting to check in`
+              : `${items.length} waiting to check in`
+            : null}
+        </span>
+        <Link href={frontDesk} className={textLinkClass}>
+          {more ? "See all pending arrivals" : "Open front desk"}
+        </Link>
+      </div>
     </Card>
   );
 }

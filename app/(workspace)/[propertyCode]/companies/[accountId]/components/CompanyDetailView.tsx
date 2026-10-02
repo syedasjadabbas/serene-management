@@ -25,6 +25,7 @@ import {
 import { toClientApiError } from "@/lib/api/errors";
 import { formatDate, formatDateTime, formatShortDate } from "@/lib/utils/format";
 import type { AccountContactView, AccountDetail } from "@/modules/accounts/accounts.types";
+import { Table, TBody, Td, Th, THead, Tr } from "@/components/ui/Table";
 
 const KIND_LABELS = { EMPLOYEE: "Employee", CONTACT: "Contact", ASSOCIATE: "Associate" } as const;
 
@@ -66,7 +67,7 @@ export function CompanyDetailView({ accountId }: { accountId: string }) {
   const c = query.data;
   const manage = c.actions.manage;
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-6">
+    <div className="flex w-full flex-col gap-6">
       <PageHeader
         back={{ href: `/${property.code}/guests?tab=companies`, label: "Companies" }}
         icon={Building2}
@@ -88,7 +89,7 @@ export function CompanyDetailView({ accountId }: { accountId: string }) {
           Restricted from booking{c.restrictionReason ? `: ${c.restrictionReason}` : ""}.
         </Alert>
       ) : null}
-      <section className="rounded-lg border border-border-subtle bg-surface">
+      <section className="rounded-lg border border-border-subtle bg-surface shadow-card">
         <dl className="grid grid-cols-1 gap-x-6 gap-y-2 p-4 sm:grid-cols-2 lg:grid-cols-4">
           {(
             [
@@ -118,9 +119,9 @@ export function CompanyDetailView({ accountId }: { accountId: string }) {
         ) : null}
       </section>
 
-      <section className="rounded-lg border border-border-subtle bg-surface p-4">
+      <section className="rounded-lg border border-border-subtle bg-surface p-5 shadow-card sm:p-6">
         <div className="mb-2 flex flex-wrap items-center gap-2">
-          <h2 className="font-semibold">Contacts and employees</h2>
+          <h2 className="text-lg font-semibold tracking-[-0.01em]">Contacts and employees</h2>
           {manage && c.contacts !== null ? (
             <Button
               size="sm"
@@ -188,34 +189,25 @@ export function CompanyDetailView({ accountId }: { accountId: string }) {
       </section>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <section className="min-w-0 rounded-lg border border-border-subtle bg-surface p-4">
-          <h2 className="mb-2 font-semibold">Recent reservations</h2>
+        <section className="min-w-0 rounded-lg border border-border-subtle bg-surface p-5 shadow-card sm:p-6">
+          <h2 className="mb-3 text-lg font-semibold tracking-[-0.01em]">Recent reservations</h2>
           {c.reservations.length === 0 ? (
             <p className="text-sm text-fg-secondary">No reservations at properties you can read.</p>
           ) : (
             <div className="relative overflow-x-auto">
-              <table className="w-full min-w-[440px] text-sm">
-                <caption className="sr-only">Reservations booked for the company</caption>
-                <thead className="text-left text-xs text-fg-muted">
+              <Table caption="Reservations booked for the company" minWidth="440px">
+                <THead>
                   <tr>
-                    <th scope="col" className="py-1.5 pr-3 font-medium">
-                      Confirmation
-                    </th>
-                    <th scope="col" className="py-1.5 pr-3 font-medium">
-                      Guest
-                    </th>
-                    <th scope="col" className="py-1.5 pr-3 font-medium">
-                      Stay
-                    </th>
-                    <th scope="col" className="py-1.5 font-medium">
-                      Status
-                    </th>
+                    <Th>Confirmation</Th>
+                    <Th>Guest</Th>
+                    <Th>Stay</Th>
+                    <Th>Status</Th>
                   </tr>
-                </thead>
-                <tbody className="divide-y divide-border-subtle">
+                </THead>
+                <TBody>
                   {c.reservations.map((r) => (
-                    <tr key={`${r.reservationId}-${r.confirmation}`}>
-                      <td className="py-1.5 pr-3">
+                    <Tr interactive key={`${r.reservationId}-${r.confirmation}`}>
+                      <Td>
                         {r.property.id === property.id ? (
                           <Link
                             href={`/${property.code}/reservations/${r.reservationId}` as Route}
@@ -228,21 +220,21 @@ export function CompanyDetailView({ accountId }: { accountId: string }) {
                             {r.property.code} {r.confirmation}
                           </span>
                         )}
-                      </td>
-                      <td className="py-1.5 pr-3">{r.guestName}</td>
-                      <td className="py-1.5 pr-3 whitespace-nowrap">
+                      </Td>
+                      <Td>{r.guestName}</Td>
+                      <Td className="whitespace-nowrap">
                         {formatShortDate(r.arrival)} → {formatShortDate(r.departure)} · {r.ratePlan}
-                      </td>
-                      <td className="py-1.5">{r.status.toLowerCase().replace("_", " ")}</td>
-                    </tr>
+                      </Td>
+                      <Td>{r.status.toLowerCase().replace("_", " ")}</Td>
+                    </Tr>
                   ))}
-                </tbody>
-              </table>
+                </TBody>
+              </Table>
             </div>
           )}
         </section>
-        <section className="min-w-0 rounded-lg border border-border-subtle bg-surface p-4">
-          <h2 className="mb-2 font-semibold">Negotiated rates</h2>
+        <section className="min-w-0 rounded-lg border border-border-subtle bg-surface p-5 shadow-card sm:p-6">
+          <h2 className="mb-3 text-lg font-semibold tracking-[-0.01em]">Negotiated rates</h2>
           {c.negotiatedRates.length === 0 ? (
             <p className="text-sm text-fg-secondary">
               None. Link the company from a negotiated rate plan (Rates → plan → Companies).
@@ -276,8 +268,8 @@ export function CompanyDetailView({ accountId }: { accountId: string }) {
       </div>
 
       {c.history ? (
-        <section className="rounded-lg border border-border-subtle bg-surface p-4">
-          <h2 className="mb-2 font-semibold">Audit history</h2>
+        <section className="rounded-lg border border-border-subtle bg-surface p-5 shadow-card sm:p-6">
+          <h2 className="mb-3 text-lg font-semibold tracking-[-0.01em]">Audit history</h2>
           <ul className="flex flex-col gap-1.5 text-sm">
             {c.history.map((h) => (
               <li key={h.id}>

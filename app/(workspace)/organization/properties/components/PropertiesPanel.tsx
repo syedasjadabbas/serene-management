@@ -17,6 +17,7 @@ import {
 import { toClientApiError } from "@/lib/api/errors";
 import type { PropertyView } from "@/modules/properties/properties.types";
 import { CopySetupDialog, CreatePropertyDialog } from "./PropertyDialogs";
+import { Table, TBody, Td, Th, THead, Tr } from "@/components/ui/Table";
 
 /**
  * The properties the user can access. Organization administrators create
@@ -69,7 +70,6 @@ export function PropertiesPanel() {
         actions={
           manage ? (
             <Button
-              size="touch"
               className="md:h-control md:text-sm"
               onClick={() => setDialog({ kind: "create" })}
             >
@@ -108,45 +108,34 @@ export function PropertiesPanel() {
           }
         />
       ) : (
-        <section className="rounded-lg border border-border-subtle bg-surface">
+        <section className="rounded-lg border border-border-subtle bg-surface shadow-card">
           <div className="relative overflow-x-auto">
-            <table className="w-full min-w-[640px] text-sm">
-              <caption className="sr-only">Properties you can access</caption>
-              <thead className="text-left text-xs text-fg-muted">
+            <Table caption="Properties you can access" minWidth="640px">
+              <THead>
                 <tr>
-                  <th scope="col" className="px-4 py-2 font-medium">
-                    Property
-                  </th>
-                  <th scope="col" className="py-2 pe-3 font-medium">
-                    Currency
-                  </th>
-                  <th scope="col" className="py-2 pe-3 font-medium">
-                    Time zone
-                  </th>
-                  <th scope="col" className="py-2 pe-3 font-medium">
-                    Prefix
-                  </th>
-                  <th scope="col" className="py-2 pe-3 font-medium">
-                    Business date
-                  </th>
-                  <th scope="col" className="py-2 pe-4">
+                  <Th>Property</Th>
+                  <Th className="pe-3">Currency</Th>
+                  <Th className="pe-3">Time zone</Th>
+                  <Th className="pe-3">Prefix</Th>
+                  <Th className="pe-3">Business date</Th>
+                  <Th className="pe-4">
                     <span className="sr-only">Actions</span>
-                  </th>
+                  </Th>
                 </tr>
-              </thead>
-              <tbody className="divide-y divide-border-subtle">
+              </THead>
+              <TBody>
                 {list.map((p) => {
                   const businessDate = dates.get(p.id) ?? null;
                   return (
-                    <tr key={p.id}>
-                      <th scope="row" className="px-4 py-2 text-left font-medium">
+                    <Tr interactive key={p.id}>
+                      <Th scope="row">
                         <span className="me-2 font-mono text-xs text-fg-muted">{p.code}</span>
                         {p.name}
-                      </th>
-                      <td className="py-2 pe-3">{p.currencyCode}</td>
-                      <td className="py-2 pe-3 text-fg-secondary">{p.timezone}</td>
-                      <td className="py-2 pe-3 font-mono text-xs">{p.confirmationPrefix}</td>
-                      <td className="py-2 pe-3">
+                      </Th>
+                      <Td className="pe-3">{p.currencyCode}</Td>
+                      <Td className="pe-3 text-fg-secondary">{p.timezone}</Td>
+                      <Td className="pe-3 font-mono text-xs">{p.confirmationPrefix}</Td>
+                      <Td className="pe-3">
                         {overviewFailed ? (
                           <span className="text-fg-muted">—</span>
                         ) : businessDate ? (
@@ -154,8 +143,8 @@ export function PropertiesPanel() {
                         ) : (
                           <Badge tone="warning">Not live</Badge>
                         )}
-                      </td>
-                      <td className="py-2 pe-4">
+                      </Td>
+                      <Td className="pe-4">
                         <span className="flex justify-end gap-1.5">
                           {manage && !businessDate && list.length > 1 ? (
                             <Button
@@ -174,12 +163,12 @@ export function PropertiesPanel() {
                             Open
                           </Link>
                         </span>
-                      </td>
-                    </tr>
+                      </Td>
+                    </Tr>
                   );
                 })}
-              </tbody>
-            </table>
+              </TBody>
+            </Table>
           </div>
         </section>
       )}

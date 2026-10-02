@@ -20,6 +20,7 @@ import {
 } from "@/lib/api/endpoints/reports.api";
 import { useBookingOptionsQuery } from "@/lib/api/endpoints/reservations.api";
 import { toClientApiError } from "@/lib/api/errors";
+import { Table, TableFrame, TBody, Td, Th, THead, Tr } from "@/components/ui/Table";
 import { formatCurrency, formatDate, formatDateTime } from "@/lib/utils/format";
 import { addDays, daysBetween } from "@/modules/business-date/business-date.policy";
 import type { ReportQuery } from "@/modules/reports/reports.schema";
@@ -199,7 +200,7 @@ export function ReportView({ reportKey }: { reportKey: string }) {
 
       {showForm ? (
         <form
-          className="flex flex-wrap items-end gap-2 rounded-lg border border-border-subtle bg-surface p-3 print:hidden"
+          className="flex flex-wrap items-end gap-2 rounded-lg border border-border-subtle bg-surface p-3 shadow-card print:hidden"
           noValidate
           onSubmit={(event) => {
             event.preventDefault();
@@ -328,68 +329,74 @@ function ReportBody({
 }) {
   const cell = (column: ReportColumn, value: ReportCell | undefined) =>
     formatCell(column, value ?? null, data.currencyCode, timezone);
+  // Mixed "figure" columns (Manager's flash: counts, percentages and money in one
+  // column) are typed text; they still read as numbers.
+  const numericColumns = new Set(
+    data.columns
+      .filter(
+        (column) =>
+          isNumericType(column) ||
+          (data.rows.length > 0 &&
+            data.rows.every((row) => row[column.key] === null || isNumericValue(row[column.key]))),
+      )
+      .map((column) => column.key),
+  );
+  const numeric = (column: ReportColumn) => numericColumns.has(column.key);
 
   return (
     <>
       {data.notes.length > 0 ? (
         <Alert tone="info">
-          <ul className="list-disc ps-4">
-            {data.notes.map((note) => (
-              <li key={note}>{note}</li>
-            ))}
-          </ul>
+          {data.notes.length === 1 ? (
+            data.notes[0]
+          ) : (
+            <ul className="list-disc ps-4">
+              {data.notes.map((note) => (
+                <li key={note}>{note}</li>
+              ))}
+            </ul>
+          )}
         </Alert>
       ) : null}
 
       {data.rows.length === 0 ? (
         <StatusPanel kind="empty" title="Nothing to report for this selection" />
       ) : (
-        <div className="overflow-x-auto rounded-lg border border-border-subtle">
-          <table className="w-full text-sm">
-            <caption className="sr-only">{data.title}</caption>
-            <thead className="bg-surface-sunken text-xs text-fg-muted">
+        <TableFrame label={data.title}>
+          <Table caption={data.title}>
+            <THead>
               <tr>
                 {data.columns.map((column) => (
-                  <th
-                    key={column.key}
-                    scope="col"
-                    className={`px-3 py-2 font-medium whitespace-nowrap ${alignOf(column)}`}
-                  >
+                  <Th key={column.key} numeric={numeric(column)}>
                     {column.label}
-                  </th>
+                  </Th>
                 ))}
               </tr>
-            </thead>
-            <tbody className="divide-y divide-border-subtle">
+            </THead>
+            <TBody>
               {data.rows.map((row, index) => (
-                <tr key={index} className="bg-surface">
+                <Tr key={index} interactive>
                   {data.columns.map((column) => (
-                    <td
-                      key={column.key}
-                      className={`px-3 py-1.5 whitespace-nowrap ${alignOf(column)}`}
-                    >
+                    <Td key={column.key} numeric={numeric(column)} className="whitespace-nowrap">
                       {cell(column, row[column.key])}
-                    </td>
+                    </Td>
                   ))}
-                </tr>
+                </Tr>
               ))}
-            </tbody>
+            </TBody>
             {data.totals ? (
-              <tfoot className="border-t-2 border-border bg-surface-sunken font-medium">
+              <tfoot className="border-t border-border bg-surface-sunken/60 font-semibold">
                 <tr>
                   {data.columns.map((column) => (
-                    <td
-                      key={column.key}
-                      className={`px-3 py-2 whitespace-nowrap ${alignOf(column)}`}
-                    >
+                    <Td key={column.key} numeric={numeric(column)} className="whitespace-nowrap">
                       {cell(column, data.totals![column.key])}
-                    </td>
+                    </Td>
                   ))}
                 </tr>
               </tfoot>
             ) : null}
-          </table>
-        </div>
+          </Table>
+        </TableFrame>
       )}
       {data.page.totalRows > data.page.limit ? (
         <nav
@@ -427,11 +434,16 @@ function ReportBody({
   );
 }
 
-function alignOf(column: ReportColumn): string {
-  return column.type === "money" || column.type === "number" || column.type === "percent"
-    ? "text-right tabular-nums"
-    : "text-left";
+function isNumericType(column: ReportColumn): boolean {
+  return column.type === "money" || column.type === "number" || column.type === "percent";
 }
+
+function isNumericValue(value: ReportCell | undefined): boolean {
+  return typeof value === "number" || (typeof value === "string" && /^-?\d+(\.\d+)?$/.test(value));
+}
+
+/** Money travels as a decimal string with four places (API_CONVENTIONS); counts are numbers. */
+const MONEY_WIRE = /^-?\d+\.\d{4}$/;
 
 function formatCell(
   column: ReportColumn,
@@ -454,6 +466,8 @@ function formatCell(
         ? formatDateTime(String(value), timezone)
         : String(value);
     default:
-      return String(value);
+      return typeof value === "string" && MONEY_WIRE.test(value)
+        ? formatCurrency(value, currency)
+        : String(value);
   }
 }

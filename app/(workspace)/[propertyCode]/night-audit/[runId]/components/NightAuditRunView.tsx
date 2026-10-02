@@ -109,7 +109,7 @@ export function NightAuditRunView({ runId }: { runId: string }) {
   const summary = run.summary;
 
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
+    <div className="flex w-full flex-col gap-6">
       <PageHeader
         back={{ href: `/${property.code}/night-audit`, label: "Night audit" }}
         icon={MoonStar}
@@ -235,7 +235,7 @@ function StepRow({ step, propertyCode }: { step: RunStepView; propertyCode: stri
     rolledBack?: boolean;
   } | null;
   return (
-    <li className="rounded-lg border border-border-subtle bg-surface px-3 py-2">
+    <li className="rounded-lg border border-border-subtle bg-surface px-3 py-2 shadow-card">
       <div className="flex flex-wrap items-center gap-2">
         <span className="w-6 font-mono text-xs text-fg-muted">{step.sequence}</span>
         <Badge tone={STEP_TONE[step.status]}>{step.status.toLowerCase()}</Badge>

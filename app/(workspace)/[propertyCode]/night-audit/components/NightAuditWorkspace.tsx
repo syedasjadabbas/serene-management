@@ -25,6 +25,7 @@ import { toClientApiError } from "@/lib/api/errors";
 import { formatDate, formatDateTime } from "@/lib/utils/format";
 import type { CheckOutcome } from "@/modules/night-audit/night-audit.policy";
 import type { CheckItem, CheckResult, RunListItem } from "@/modules/night-audit/night-audit.types";
+import { Table, Th, THead, Td, Tr } from "@/components/ui/Table";
 
 export const OUTCOME_TONE: Record<CheckOutcome, BadgeTone> = {
   PASSED: "success",
@@ -88,7 +89,7 @@ export function NightAuditWorkspace() {
   if (readiness.isLoading) {
     // The page keeps its heading while the checks are computed.
     return (
-      <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
+      <div className="flex w-full flex-col gap-6">
         <PageHeader
           icon={MoonStar}
           breadcrumbs={crumbs}
@@ -102,7 +103,7 @@ export function NightAuditWorkspace() {
             {[0, 1, 2, 3, 4].map((i) => (
               <li
                 key={i}
-                className="flex items-center gap-3 rounded-lg border border-border-subtle bg-surface px-3 py-3"
+                className="flex items-center gap-3 rounded-lg border border-border-subtle bg-surface px-3 py-3 shadow-card"
               >
                 <Skeleton className="h-5 w-16 rounded-sm" />
                 <Skeleton className="h-3.5 w-40" />
@@ -135,7 +136,7 @@ export function NightAuditWorkspace() {
   const warnings = view.checks.filter((c) => c.outcome === "WARNING").length;
 
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
+    <div className="flex w-full flex-col gap-6">
       <PageHeader
         icon={MoonStar}
         breadcrumbs={crumbs}
@@ -208,7 +209,7 @@ export function NightAuditWorkspace() {
 function CheckRow({ check, propertyCode }: { check: CheckResult; propertyCode: string }) {
   const [open, setOpen] = useState(check.outcome === "BLOCKING");
   return (
-    <li className="rounded-lg border border-border-subtle bg-surface">
+    <li className="rounded-lg border border-border-subtle bg-surface shadow-card">
       <div className="flex flex-wrap items-center gap-2 px-3 py-2">
         <Badge tone={OUTCOME_TONE[check.outcome]}>{OUTCOME_LABEL[check.outcome]}</Badge>
         <span className="text-sm font-medium">{check.label}</span>
@@ -326,30 +327,17 @@ export function RunHistory() {
         <StatusPanel kind="empty" title="No night audit has run yet" />
       ) : (
         <div className="overflow-x-auto rounded-lg border border-border-subtle">
-          <table className="w-full text-sm">
-            <caption className="sr-only">Night audit runs, newest first</caption>
-            <thead className="bg-surface-sunken text-left text-xs text-fg-muted">
+          <Table caption="Night audit runs, newest first">
+            <THead>
               <tr>
-                <th scope="col" className="px-3 py-2 font-medium">
-                  Business date
-                </th>
-                <th scope="col" className="px-3 py-2 font-medium">
-                  Attempt
-                </th>
-                <th scope="col" className="px-3 py-2 font-medium">
-                  Outcome
-                </th>
-                <th scope="col" className="px-3 py-2 font-medium">
-                  Started
-                </th>
-                <th scope="col" className="px-3 py-2 font-medium">
-                  By
-                </th>
-                <th scope="col" className="px-3 py-2 font-medium">
-                  Error
-                </th>
+                <Th>Business date</Th>
+                <Th>Attempt</Th>
+                <Th>Outcome</Th>
+                <Th>Started</Th>
+                <Th>By</Th>
+                <Th>Error</Th>
               </tr>
-            </thead>
+            </THead>
             <RunRows
               runs={data.items}
               nextCursor={cursors.length === 0 ? data.meta.nextCursor : null}
@@ -364,7 +352,7 @@ export function RunHistory() {
                 onMore={addPage}
               />
             ))}
-          </table>
+          </Table>
         </div>
       )}
     </section>
@@ -453,25 +441,23 @@ function RunRows({
       }
     >
       {runs.map((run) => (
-        <tr key={run.id} className="bg-surface">
-          <td className="px-3 py-2 font-mono">
+        <Tr key={run.id} interactive>
+          <Td className="font-mono">
             <Link
               className="text-brand hover:underline"
               href={`/${property.code}/night-audit/${run.id}` as Route}
             >
               {run.businessDate}
             </Link>
-          </td>
-          <td className="px-3 py-2">{run.attempt}</td>
-          <td className="px-3 py-2">
+          </Td>
+          <Td>{run.attempt}</Td>
+          <Td>
             <Badge tone={RUN_TONE[run.status]}>{run.status.toLowerCase()}</Badge>
-          </td>
-          <td className="px-3 py-2 whitespace-nowrap">
-            {formatDateTime(run.startedAt, property.timezone)}
-          </td>
-          <td className="px-3 py-2">{run.startedBy?.name ?? "—"}</td>
-          <td className="px-3 py-2 font-mono text-xs">{run.errorCode ?? ""}</td>
-        </tr>
+          </Td>
+          <Td className="whitespace-nowrap">{formatDateTime(run.startedAt, property.timezone)}</Td>
+          <Td>{run.startedBy?.name ?? "—"}</Td>
+          <Td className="font-mono text-xs">{run.errorCode ?? ""}</Td>
+        </Tr>
       ))}
       {nextCursor ? (
         <tr className="bg-surface">

@@ -21,6 +21,7 @@ import { toClientApiError } from "@/lib/api/errors";
 import { formatCurrency, formatDate } from "@/lib/utils/format";
 import { addDays, isDateOnly } from "@/modules/business-date/business-date.policy";
 import type { CentralAvailabilityResult } from "@/modules/organization/organization.types";
+import { Table, TBody, Td, Th, THead, Tr } from "@/components/ui/Table";
 
 const STATUS: Record<
   CentralAvailabilityResult["properties"][number]["status"],
@@ -125,7 +126,7 @@ export function CentralAvailability() {
         description="Search your properties at once, then book in one of them. Prices are in each property's own currency."
       />
       <form
-        className="grid grid-cols-2 items-end gap-2 rounded-lg border border-border-subtle bg-surface p-3 sm:flex sm:flex-wrap"
+        className="grid grid-cols-2 items-end gap-2 rounded-lg border border-border-subtle bg-surface p-3 shadow-card sm:flex sm:flex-wrap"
         onSubmit={(event) => {
           event.preventDefault();
           if (stayError) return;
@@ -174,7 +175,7 @@ export function CentralAvailability() {
         />
         <Button
           type="submit"
-          size="touch"
+
           className="col-span-2 md:h-control md:text-sm"
           pending={result.isFetching}
           disabled={!!stayError}
@@ -211,7 +212,7 @@ export function CentralAvailability() {
               return (
                 <li
                   key={row.property.id}
-                  className="rounded-lg border border-border-subtle bg-surface"
+                  className="rounded-lg border border-border-subtle bg-surface shadow-card"
                 >
                   <div className="flex flex-wrap items-center gap-2 border-b border-border-subtle px-4 py-2.5">
                     <h2 className="font-semibold">
@@ -242,48 +243,45 @@ export function CentralAvailability() {
                     <p className="px-4 py-3 text-sm text-fg-secondary">No sellable room types.</p>
                   ) : (
                     <div className="relative overflow-x-auto">
-                      <table className="w-full min-w-[480px] text-sm">
-                        <caption className="sr-only">Room types at {row.property.name}</caption>
-                        <thead className="text-left text-xs text-fg-muted">
+                      <Table caption={`Room types at ${row.property.name}`} minWidth="480px">
+                        <THead>
                           <tr>
-                            <th scope="col" className="px-4 py-2 font-medium">
-                              Room type
-                            </th>
-                            <th scope="col" className="py-2 pe-3 font-medium">
-                              Status
-                            </th>
-                            <th scope="col" className="py-2 pe-3 text-right font-medium">
+                            <Th>Room type</Th>
+                            <Th className="pe-3">Status</Th>
+                            <Th numeric className="pe-3">
                               Available
-                            </th>
-                            <th scope="col" className="py-2 pe-4 text-right font-medium">
+                            </Th>
+                            <Th numeric className="pe-4">
                               From (stay)
-                            </th>
+                            </Th>
                           </tr>
-                        </thead>
-                        <tbody className="divide-y divide-border-subtle">
+                        </THead>
+                        <TBody>
                           {row.roomTypes.map((rt) => (
-                            <tr key={rt.id}>
-                              <th scope="row" className="px-4 py-2 text-left font-medium">
+                            <Tr interactive key={rt.id}>
+                              <Th scope="row">
                                 <span className="me-2 font-mono text-xs text-fg-muted">
                                   {rt.code}
                                 </span>
                                 {rt.name}
-                              </th>
-                              <td className="py-2 pe-3">
+                              </Th>
+                              <Td className="pe-3">
                                 <Badge tone={ROOM_STATUS[rt.status] ?? "neutral"}>
                                   {rt.status.replace("_", " ").toLowerCase()}
                                 </Badge>
-                              </td>
-                              <td className="py-2 pe-3 text-right tabular-nums">{rt.available}</td>
-                              <td className="py-2 pe-4 text-right tabular-nums">
+                              </Td>
+                              <Td numeric className="pe-3">
+                                {rt.available}
+                              </Td>
+                              <Td numeric className="pe-4">
                                 {rt.lowestTotal
                                   ? formatCurrency(rt.lowestTotal, row.property.currencyCode)
                                   : "—"}
-                              </td>
-                            </tr>
+                              </Td>
+                            </Tr>
                           ))}
-                        </tbody>
-                      </table>
+                        </TBody>
+                      </Table>
                     </div>
                   )}
                 </li>

@@ -52,7 +52,7 @@ export function OrganizationOverviewPanel() {
             ({ property, businessDate, dateStatus, auditState, today, openBalance }) => (
               <li
                 key={property.id}
-                className="flex flex-col gap-3 rounded-lg border border-border-subtle bg-surface p-4"
+                className="flex flex-col gap-3 rounded-lg border border-border-subtle bg-surface p-4 shadow-card"
               >
                 <div className="flex flex-wrap items-start gap-2">
                   <div className="me-auto min-w-0">

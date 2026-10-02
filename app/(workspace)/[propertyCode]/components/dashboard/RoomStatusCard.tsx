@@ -51,7 +51,7 @@ export function RoomStatusCard({
         <figure className="relative size-36 shrink-0">
           <div aria-hidden="true" className="absolute inset-0">
             <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
+              <PieChart accessibilityLayer={false}>
                 <Pie
                   data={
                     total > 0 ? slices : [{ name: "None", value: 1, color: "var(--sm-chart-grid)" }]
@@ -63,6 +63,7 @@ export function RoomStatusCard({
                   endAngle={-270}
                   stroke="none"
                   isAnimationActive={false}
+                  rootTabIndex={-1}
                 >
                   {(total > 0 ? slices : [{ color: "var(--sm-chart-grid)" }]).map(
                     (slice, index) => (

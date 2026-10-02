@@ -15,6 +15,7 @@ import type {
   LedgerItemView,
 } from "@/modules/billing/billing.types";
 import { AdjustDialog, RefundDialog, ReverseDialog, VoidDialog } from "./FolioDialogs";
+import { Table, Th, THead, Td, Tr } from "@/components/ui/Table";
 
 type Correction = { kind: "reverse" | "adjust" | "void" | "refund"; item: LedgerItemView } | null;
 
@@ -38,33 +39,20 @@ export function LedgerView({ account, win }: { account: FolioAccountView; win: F
     <div className="mt-3 border-t border-border-subtle">
       {/* relative: keeps the sr-only header label inside the scroll container. */}
       <div className="relative overflow-x-auto">
-        <table className="hidden w-full text-sm md:table">
-          <caption className="sr-only">Ledger of window {win.window}</caption>
-          <thead className="bg-surface-sunken text-left text-xs text-fg-muted">
+        <Table caption={`Ledger of window ${win.window}`} className="hidden md:table">
+          <THead>
             <tr>
-              <th scope="col" className="px-4 py-2 font-medium">
-                Business date
-              </th>
-              <th scope="col" className="px-2 py-2 font-medium">
-                Description
-              </th>
-              <th scope="col" className="px-2 py-2 font-medium">
-                Code
-              </th>
-              <th scope="col" className="px-2 py-2 text-right font-medium">
-                Debit
-              </th>
-              <th scope="col" className="px-2 py-2 text-right font-medium">
-                Credit
-              </th>
-              <th scope="col" className="px-2 py-2 text-right font-medium">
-                Balance
-              </th>
-              <th scope="col" className="px-4 py-2 font-medium">
+              <Th>Business date</Th>
+              <Th>Description</Th>
+              <Th>Code</Th>
+              <Th numeric>Debit</Th>
+              <Th numeric>Credit</Th>
+              <Th numeric>Balance</Th>
+              <Th>
                 <span className="sr-only">Actions</span>
-              </th>
+              </Th>
             </tr>
-          </thead>
+          </THead>
           {cursors.map((cursor, index) => (
             <LedgerPageRows
               key={cursor ?? "first"}
@@ -78,7 +66,7 @@ export function LedgerView({ account, win }: { account: FolioAccountView; win: F
               onCorrect={setCorrection}
             />
           ))}
-        </table>
+        </Table>
         <div className="md:hidden">
           {cursors.map((cursor, index) => (
             <LedgerPageRows
@@ -191,28 +179,28 @@ function LedgerPageRows({
     return (
       <tbody className="divide-y divide-border-subtle border-t border-border-subtle">
         {items.map((item) => (
-          <tr key={item.id} className={cn(item.parentItemId && "text-fg-secondary")}>
-            <td className="px-4 py-2 align-top whitespace-nowrap">
+          <Tr key={item.id} interactive className={cn(item.parentItemId && "text-fg-secondary")}>
+            <Td className="align-top whitespace-nowrap">
               {formatDate(item.businessDate)}
               <span className="block text-xs text-fg-muted">
                 {formatDateTime(item.postedAt, property.timezone)}
               </span>
-            </td>
-            <td className={cn("px-2 py-2 align-top", item.parentItemId && "pl-6")}>
+            </Td>
+            <Td className={cn("align-top", item.parentItemId && "ps-8")}>
               <Description item={item} account={account} />
-            </td>
-            <td className="px-2 py-2 align-top whitespace-nowrap">
+            </Td>
+            <Td className="align-top whitespace-nowrap">
               {item.code.code}
               <span className="block text-xs text-fg-muted">
                 {KIND_LABELS[item.kind] ?? item.kind}
               </span>
-            </td>
-            <td className="px-2 py-2 text-right align-top tabular-nums">
+            </Td>
+            <Td numeric className="align-top">
               {item.amount.startsWith("-")
                 ? ""
                 : formatCurrency(item.amount, account.currencyCode, "en", account.minorUnits)}
-            </td>
-            <td className="px-2 py-2 text-right align-top tabular-nums">
+            </Td>
+            <Td numeric className="align-top">
               {item.amount.startsWith("-")
                 ? formatCurrency(
                     item.amount.slice(1),
@@ -221,14 +209,14 @@ function LedgerPageRows({
                     account.minorUnits,
                   )
                 : ""}
-            </td>
-            <td className="px-2 py-2 text-right align-top font-medium tabular-nums">
+            </Td>
+            <Td numeric className="align-top font-medium">
               {formatCurrency(item.runningBalance, account.currencyCode, "en", account.minorUnits)}
-            </td>
-            <td className="px-4 py-2 align-top">
+            </Td>
+            <Td className="align-top">
               <RowActions item={item} onCorrect={onCorrect} />
-            </td>
-          </tr>
+            </Td>
+          </Tr>
         ))}
         {more ? (
           <tr>

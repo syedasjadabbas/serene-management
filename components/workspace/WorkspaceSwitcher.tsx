@@ -31,12 +31,12 @@ export function WorkspaceSwitcher({
   // hairline divider, then the workspace.
   const label = (
     <span className="flex min-w-0 items-center gap-2.5 whitespace-nowrap">
-      <span className="hidden label-caps md:inline">{current ? "Property" : "Workspace"}</span>
-      <span aria-hidden="true" className="hidden h-4 w-px bg-border md:block" />
+      <span className="hidden label-caps lg:inline">{current ? "Property" : "Workspace"}</span>
+      <span aria-hidden="true" className="hidden h-4 w-px bg-border lg:block" />
       {current ? (
         <span className="flex min-w-0 items-baseline gap-2">
           <span className="font-mono text-xs font-medium text-fg-muted">{current.code}</span>
-          <span className="hidden truncate font-semibold text-fg sm:inline">{current.name}</span>
+          <span className="hidden truncate font-semibold text-fg lg:inline">{current.name}</span>
         </span>
       ) : (
         <span className="truncate font-semibold text-fg">
