@@ -120,6 +120,33 @@ const baseSchema = z.object({
     .refine((value) => /^postgres(ql)?:\/\//.test(value), "Must be a postgresql:// URL")
     .optional(),
   /**
+   * Optional read replica (lib/db/read-replica.ts, docs/SCALABILITY.md §35).
+   * Unset (the default): every query uses DATABASE_URL, as before. When set,
+   * only explicitly approved, staleness-tolerant reads (closed-date reports)
+   * may run there; everything else stays on the primary.
+   */
+  READ_DATABASE_URL: z
+    .url()
+    .refine((value) => /^postgres(ql)?:\/\//.test(value), "Must be a postgresql:// URL")
+    .optional(),
+  /**
+   * Graceful shutdown (lib/lifecycle/shutdown.ts, docs/OPERATIONS.md §10): how
+   * long readiness fails before the instance stops taking requests (keep it at
+   * least the load balancer's health-check interval × unhealthy threshold),
+   * and the bound on the whole shutdown (in-flight requests, running jobs).
+   */
+  SHUTDOWN_DRAIN_MS: z.coerce.number().int().min(0).max(60_000).default(5_000),
+  SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(120_000).default(25_000),
+  /** Names this process in observability output; default host-pid-random. No secrets. */
+  INSTANCE_ID: z
+    .string()
+    .regex(/^[A-Za-z0-9._:-]{1,64}$/, "Letters, digits, . _ : - only (≤ 64)")
+    .optional(),
+  /** Connections per process to the read replica (counts against its max_connections). */
+  READ_DATABASE_POOL_MAX: z.coerce.number().int().min(1).max(50).default(3),
+  /** A replica further behind the primary than this is not used (reads go to the primary). */
+  READ_REPLICA_MAX_LAG_MS: z.coerce.number().int().min(1_000).max(600_000).default(30_000),
+  /**
    * Heavy reports (modules/reports HEAVY_REPORT_KEYS, docs/SCALABILITY.md §33):
    * how many one application process computes at the same time. Further
    * requests wait up to REPORT_HEAVY_WAIT_MS, then answer 429 REPORTS_BUSY.

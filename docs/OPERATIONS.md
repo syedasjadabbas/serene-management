@@ -274,14 +274,23 @@ The application uses one connection pool per process (`lib/db/pool-config.ts`). 
 | `JOB_LEASE_MS`                            | 60000   | 10000–600000                | A claimed job's lease, renewed every third; a dead worker's job is re-claimed after it expires   |
 | `REPORT_HEAVY_CONCURRENCY`                | 1       | 1–16                        | Heavy reports (guest ledger, roll-forward, …) computed at once per process (SCALABILITY §33)     |
 | `REPORT_HEAVY_WAIT_MS`                    | 30000   | 0–120000                    | How long a heavy report waits for its slot before answering 429 `REPORTS_BUSY`                   |
+| `READ_DATABASE_URL`                       | —       | URL                         | Optional streaming standby for closed-date reports only (SCALABILITY §35); unset = primary only  |
+| `READ_DATABASE_POOL_MAX`                  | 3       | 1–50                        | Connections per process to the replica (counted on the replica, not the primary)                 |
+| `READ_REPLICA_MAX_LAG_MS`                 | 30000   | 1000–600000                 | A replica further behind than this is skipped; reads go to the primary                           |
 | (fixed)                                   | UTC     | —                           | Session `TimeZone` (D29); `application_name=serene-management` identifies the connections        |
 
 **Connection topology (SCALABILITY §32, ARCHITECTURE D64).**
 
-- Each instance opens up to `DATABASE_POOL_MAX` connections, plus one LISTEN connection for live updates
-  and one for its job worker (`JOB_WORKER=inline`; the worker shares the pool). A separate `npm run
-worker` process counts as an instance. Keep instances × (max + 2) + 10 (migrations, backups,
-  monitoring, administrators) within `max_connections`. `npm run ops:db-check` prints how many fit.
+- Each instance opens up to `DATABASE_POOL_MAX` connections for requests, plus one LISTEN connection for
+  live updates. With the inline job worker (`JOB_WORKER=inline`) it may open as many again plus one
+  LISTEN: the worker runs in the server's instrumentation bundle, which has its own Prisma client and
+  pool (deliberately not shared, see `lib/db/prisma.ts`). A separate `npm run worker` process holds
+  `DATABASE_POOL_MAX` + 1. Keep the worst case, instances × (2 × max + 2) with inline workers or
+  instances × (max + 1) + workers × (max + 1) without, plus one instance of rolling-update surge and 10
+  (migrations, backups, monitoring, administrators), within `max_connections` − superuser reserve
+  (`connectionBudget`, `lib/db/pool-config.ts`; table in SCALABILITY §37.10). `npm run ops:db-check`
+  prints how many instances fit. The steady state is lower (idle connections close after 2 min;
+  measured 13 per instance under load), but the budget is for the peak.
 - Up to about 6 instances, connect directly and lower `DATABASE_POOL_MAX` as instances grow (e.g. 4 × 5).
   Beyond that, or with autoscaling, use PgBouncer in transaction mode:
   1. Point `DATABASE_URL` at PgBouncer and set `DATABASE_POOLER=pgbouncer-transaction`. The session
@@ -294,6 +303,20 @@ worker` process counts as an instance. Keep instances × (max + 2) + 10 (migrati
      `max_client_conn` ≥ instances × `DATABASE_POOL_MAX`. Named prepared statements are not used, so
      `max_prepared_statements` is not needed.
   4. Run `npm run ops:db-check`: it fails when the zone is not UTC or a timeout is off.
+- **Read replica (optional, not enabled by default; SCALABILITY §35).** The measured workload does not need one.
+  - **Enable it** only when the primary's CPU is regularly above ≈ 60–70 % with instances not the limit, or when
+    closed-date reporting measurably slows operations.
+  - **Prerequisites:**
+    - a streaming standby on its own host, with the same schema (it follows the primary);
+    - a read-only login (`ALTER ROLE … SET default_transaction_read_only = on`, `SELECT` grants);
+    - `hot_standby_feedback = on`, or a `max_standby_streaming_delay` above the report statement timeout;
+    - `max_connections` on the standby ≥ instances × `READ_DATABASE_POOL_MAX` + monitoring;
+    - replay-lag monitoring.
+  - **Configure it.** Set `READ_DATABASE_URL` to the standby (direct, not through a transaction pooler) and run
+    `npm run ops:db-check`. It reports the replica's state and lag, never its address, and warns when the URL is
+    not a standby or is unreachable.
+  - **Failure handling.** If the replica is down, lagging or erroring, those reports run on the primary (Server-Timing
+    `db-read;desc="fallback=1"`). The primary is always required: a replica is never a failover target.
 
 Notes:
 
@@ -318,13 +341,13 @@ Work too long for a request (today: the night audit) is queued in the `backgroun
 
 **What happens when things fail.**
 
-| Event                                      | Result                                                                                                                                        |
-| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| Worker process killed, host lost           | Its lease (`JOB_LEASE_MS`, 60 s) expires; any worker reclaims the job and retries it after 5 s · 2^(n−1) (at most 5 min).                     |
-| Database restarts or the connection drops  | The attempt fails (or its lease expires) and is retried with backoff; the night audit commit rolled back as a whole, so nothing is half-done. |
-| Every attempt fails (night audit: 3)       | The job is FAILED; the run is marked FAILED (`JOB_FAILED`) and the business date reopened. Nothing was posted.                                |
-| A worker comes back after losing its lease | Every write it tries matches nothing (fencing); it stops.                                                                                     |
-| Shutdown (SIGTERM/SIGINT)                  | Stops claiming, waits up to 60 s (inline: 10 s) for running jobs; anything still running is re-claimed elsewhere when its lease expires.      |
+| Event                                      | Result                                                                                                                                                          |
+| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Worker process killed, host lost           | Its lease (`JOB_LEASE_MS`, 60 s) expires; any worker reclaims the job and retries it after 5 s · 2^(n−1) (at most 5 min).                                       |
+| Database restarts or the connection drops  | The attempt fails (or its lease expires) and is retried with backoff; the night audit commit rolled back as a whole, so nothing is half-done.                   |
+| Every attempt fails (night audit: 3)       | The job is FAILED; the run is marked FAILED (`JOB_FAILED`) and the business date reopened. Nothing was posted.                                                  |
+| A worker comes back after losing its lease | Every write it tries matches nothing (fencing); it stops.                                                                                                       |
+| Shutdown (SIGTERM/SIGINT)                  | Stops claiming, waits up to 60 s (inline: `SHUTDOWN_TIMEOUT_MS` − 2 s) for running jobs; anything still running is re-claimed elsewhere when its lease expires. |
 
 **Monitoring.** `npm run worker -- --stats` prints the queue's health as JSON: queued, due, running, expired leases, failed in the last 24 h, and the oldest due job's age in seconds. Alert when `oldestDueSeconds` grows past a few minutes (no worker is running) or `failedLast24h` is not 0. Workers print one JSON line per job event (no payloads). A run whose job no worker holds can be recovered from its page (Recover / Cancel audit).
 
@@ -365,3 +388,49 @@ Schedule the backup before the maintenance run, and both away from the hotel's n
 4. Checks the role split. It runs `db:deploy` and `ops:seed`, creates `serene_app` with `scripts/db/runtime-role.sql`, then runs `ops:db-check -- --strict` as the runtime role and `ops:maintenance -- --dry-run`.
 
 `tests/unit/ci-workflow.test.ts` keeps the workflow honest: it must reference only existing npm scripts, use a supported Node version, and contain no Docker, secrets or deploy steps.
+
+## 10. Several instances and graceful shutdown
+
+The application is stateless per process: sessions, rate limits, jobs, live-update fan-out and audit
+data live in PostgreSQL, so any instance can serve any request and no sticky sessions are needed
+(state audit and measurements: SCALABILITY §37, ARCHITECTURE D69).
+
+**Load balancer contract.**
+
+| Item                     | Requirement                                                                                                                                         |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Health check             | `GET /api/health/ready`, unauthenticated, every 1–5 s; remove a target after 2 failures (503 `unavailable` or `draining`), re-add after 2 successes |
+| Liveness (orchestrators) | `GET /api/health/live`: never touches PostgreSQL; restart only when it fails                                                                        |
+| Affinity                 | None. Round-robin or least-connections                                                                                                              |
+| Event streams            | `/api/v1/properties/{id}/events`: no buffering, idle/read timeout > 25 s (heartbeat), abort upstream when the client disconnects                    |
+| Request timeout          | ≥ 60 s for normal requests (statement timeout 30 s; heavy reports may wait 30 s for a slot); streams end by themselves within 15 min                |
+| Retries                  | Only idempotent requests (GET/HEAD) on connection errors; never retry POST/PUT/PATCH/DELETE automatically                                           |
+| Forwarded headers        | Append to `X-Forwarded-For`; `TRUSTED_PROXY_HOPS` = number of appending proxies; `X-Real-IP` and `Forwarded` are ignored                            |
+| Instances unreachable    | The Node port must be reachable only through the proxy chain when `TRUSTED_PROXY_HOPS` > 0                                                          |
+
+**Graceful shutdown** (`npm start`, which sets `NEXT_MANUAL_SIG_HANDLE=true`; `lib/lifecycle`). On SIGTERM
+or SIGINT (and Ctrl+Break, SIGBREAK, on Windows):
+
+1. Readiness answers 503 `draining` at once; liveness stays 200; new event streams get 503 with
+   `retry-after: 1` (the client retries and lands on another instance).
+2. The inline job worker stops claiming; open event streams receive `reauth` (reason `shutdown`) and end.
+3. For `SHUTDOWN_DRAIN_MS` (default 5 s) requests are still served while the load balancer notices.
+   Set it ≥ health-check interval × unhealthy threshold.
+4. In-flight API requests are awaited; running jobs get the remaining time.
+5. The LISTEN connection and every database pool close; the process exits 0. The whole sequence is
+   bounded by `SHUTDOWN_TIMEOUT_MS` (default 25 s); a hard exit follows 5 s later whatever happens.
+   Give systemd `TimeoutStopSec` / NSSM `AppStopMethodConsole` at least `SHUTDOWN_TIMEOUT_MS` + 5 s.
+
+Jobs still running at the end keep their lease and are re-claimed by another instance after
+`JOB_LEASE_MS` (60 s). A crash (kill -9, power loss) skips all of this: the load balancer removes the
+target on connection errors or failed readiness, clients reconnect, and leases expire as above.
+
+**Rolling update.** Run `npm run db:deploy` once (DEPLOYMENT §4), then replace instances one at a
+time: start the new one, wait for readiness 200, add it, then stop an old one with SIGTERM. Keep
+one instance of surge headroom in the connection budget. Old and new releases may serve side by side,
+so a rolling release's migration must be backwards compatible (expand now, contract in a later release).
+
+**Observability.** `INSTANCE_ID` (default host-pid-random) prefixes shutdown logs. With `SERVER_TIMING=1`
+responses carry `x-instance-id` and the readiness body adds the instance's state (uptime, draining,
+in-flight requests, open event streams, LISTEN state, worker activity). None of these carry secrets,
+addresses or connection strings.

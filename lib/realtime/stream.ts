@@ -15,8 +15,8 @@ import type { RealtimeTopic } from "./topics";
  * - `change`  {t: topics, x: transaction id}: data of these topics changed.
  * - `degraded` / `live`: notifications stopped / resumed on this instance.
  * - `reauth`: the stream ends (session, user, role or property access
- *              changed, or the access token expires); the client reconnects
- *              and is authenticated again.
+ *              changed, the access token expires, or this instance shuts
+ *              down); the client reconnects and is authenticated again.
  */
 
 export interface StreamScope {
@@ -98,6 +98,11 @@ export function openEventStream(
             return;
           case "live":
             event("live", {});
+            return;
+          case "shutdown":
+            // Reconnect now: the load balancer sends the new stream elsewhere.
+            event("reauth", { reason: "shutdown" });
+            close();
             return;
         }
       });

@@ -1,5 +1,6 @@
 import "server-only";
-import { prisma } from "@/lib/db/prisma";
+import { type Db, prisma } from "@/lib/db/prisma";
+import { readFromReplica } from "@/lib/db/read-replica";
 import type { PropertyContext } from "@/lib/http/context";
 import { AppError, forbidden } from "@/lib/http/errors";
 import type { Permission } from "@/lib/permissions/catalog";
@@ -17,6 +18,7 @@ import {
 import { currencyMinorUnits } from "@/modules/rates/rates.service";
 import {
   HEAVY_REPORT_KEYS,
+  LIVE_REPORT_KEYS,
   REPORT_PAGE_SIZE,
   REPORT_ROW_LIMIT,
   type RoomNightFacts,
@@ -74,6 +76,11 @@ import type {
 
 interface ReportEnv {
   ctx: PropertyContext;
+  /**
+   * Where the report reads: the primary, or the read replica for a closed
+   * date range (`readFromReplica`, docs/SCALABILITY.md §35).
+   */
+  db: Db;
   businessDate: string;
   from: string;
   to: string;
@@ -176,9 +183,9 @@ function factsFromSnapshot(row: StatisticsRow): NightFacts {
 
 /** The open date, live: tonight's rooms as they stand, the day's ledger so far. */
 async function liveFacts(env: ReportEnv): Promise<NightFacts> {
-  const rooms = await countRoomsForNight(prisma, env.ctx.propertyId, env.businessDate);
+  const rooms = await countRoomsForNight(env.db, env.ctx.propertyId, env.businessDate);
   const cash = await sumMoneyForDate(
-    prisma,
+    env.db,
     env.ctx.propertyId,
     env.businessDate,
     env.noShowCodeId,
@@ -213,7 +220,7 @@ async function liveFacts(env: ReportEnv): Promise<NightFacts> {
 
 async function nightFacts(env: ReportEnv, from: string, to: string): Promise<NightFacts[]> {
   const snapshots = (
-    await findStatistics(prisma, { propertyId: env.ctx.propertyId, from, to })
+    await findStatistics(env.db, { propertyId: env.ctx.propertyId, from, to })
   ).map(factsFromSnapshot);
   if (from <= env.businessDate && env.businessDate <= to) snapshots.push(await liveFacts(env));
   return snapshots;
@@ -479,7 +486,7 @@ const REPORTS: ReportDefinition[] = [
         to < env.from
           ? []
           : (
-              await findRoomTypeStatistics(prisma, {
+              await findRoomTypeStatistics(env.db, {
                 propertyId: env.ctx.propertyId,
                 from: env.from,
                 to,
@@ -558,7 +565,7 @@ const REPORTS: ReportDefinition[] = [
     run: async (env) => {
       const rows = (
         await findArrivalsBetween(
-          prisma,
+          env.db,
           { propertyId: env.ctx.propertyId, from: env.from, to: env.to },
           env.roomTypeId,
           env.rowLimit,
@@ -579,7 +586,7 @@ const REPORTS: ReportDefinition[] = [
     run: async (env) => {
       const rows = (
         await findDeparturesBetween(
-          prisma,
+          env.db,
           { propertyId: env.ctx.propertyId, from: env.from, to: env.to },
           env.roomTypeId,
           env.rowLimit,
@@ -598,7 +605,7 @@ const REPORTS: ReportDefinition[] = [
     roomTypeFilter: true,
     riskFilter: false,
     run: async (env) => {
-      const rows = (await findInHouse(prisma, env.ctx.propertyId, env.roomTypeId)).map(stayRow);
+      const rows = (await findInHouse(env.db, env.ctx.propertyId, env.roomTypeId)).map(stayRow);
       return { columns: stayColumns, rows, totals: stayTotals(rows), notes: [] };
     },
   },
@@ -614,7 +621,7 @@ const REPORTS: ReportDefinition[] = [
     run: async (env) => {
       const rows = (
         await findNoShowsBetween(
-          prisma,
+          env.db,
           { propertyId: env.ctx.propertyId, from: env.from, to: env.to },
           env.rowLimit,
         )
@@ -647,7 +654,7 @@ const REPORTS: ReportDefinition[] = [
     run: async (env) => {
       const rows = (
         await findCancellationsBetween(
-          prisma,
+          env.db,
           { propertyId: env.ctx.propertyId, from: env.from, to: env.to },
           env.rowLimit,
         )
@@ -680,7 +687,7 @@ const REPORTS: ReportDefinition[] = [
     roomTypeFilter: false,
     riskFilter: false,
     run: async (env) => {
-      const rows = (await findRoomStatus(prisma, env.ctx.propertyId, env.businessDate)).map(
+      const rows = (await findRoomStatus(env.db, env.ctx.propertyId, env.businessDate)).map(
         (row) => ({
           room: row.number,
           roomType: row.room_type,
@@ -723,7 +730,7 @@ const REPORTS: ReportDefinition[] = [
     run: async (env) => {
       const rows = (
         await findHousekeepingTasks(
-          prisma,
+          env.db,
           { propertyId: env.ctx.propertyId, from: env.from, to: env.to },
           env.rowLimit,
         )
@@ -763,7 +770,7 @@ const REPORTS: ReportDefinition[] = [
     riskFilter: false,
     run: async (env) => {
       const rows = (
-        await sumByTransactionCode(prisma, {
+        await sumByTransactionCode(env.db, {
           propertyId: env.ctx.propertyId,
           from: env.from,
           to: env.to,
@@ -819,7 +826,7 @@ const REPORTS: ReportDefinition[] = [
     riskFilter: false,
     run: async (env) => {
       const rows = (
-        await sumTaxes(prisma, { propertyId: env.ctx.propertyId, from: env.from, to: env.to })
+        await sumTaxes(env.db, { propertyId: env.ctx.propertyId, from: env.from, to: env.to })
       ).map((row) => ({
         code: row.code,
         name: row.name,
@@ -863,7 +870,7 @@ const REPORTS: ReportDefinition[] = [
     riskFilter: false,
     run: async (env) => {
       const rows = (
-        await sumPaymentsByMethod(prisma, {
+        await sumPaymentsByMethod(env.db, {
           propertyId: env.ctx.propertyId,
           from: env.from,
           to: env.to,
@@ -913,7 +920,7 @@ const REPORTS: ReportDefinition[] = [
     run: async (env) => {
       const rows = (
         await findVoidsAndRefunds(
-          prisma,
+          env.db,
           { propertyId: env.ctx.propertyId, from: env.from, to: env.to },
           env.rowLimit,
         )
@@ -954,7 +961,7 @@ const REPORTS: ReportDefinition[] = [
     run: async (env) => {
       const rows = (
         await findAdjustments(
-          prisma,
+          env.db,
           { propertyId: env.ctx.propertyId, from: env.from, to: env.to },
           env.rowLimit,
         )
@@ -998,7 +1005,7 @@ const REPORTS: ReportDefinition[] = [
     riskFilter: false,
     run: async (env) => {
       const asOf = coveredTo(env);
-      const rows = (await findBalancesAsOf(prisma, env.ctx.propertyId, asOf, env.rowLimit)).map(
+      const rows = (await findBalancesAsOf(env.db, env.ctx.propertyId, asOf, env.rowLimit)).map(
         (row) => ({
           confirmation: row.confirmation ? `${row.confirmation}-${row.line_number}` : null,
           guest: row.guest_name,
@@ -1037,9 +1044,9 @@ const REPORTS: ReportDefinition[] = [
     run: async (env) => {
       const range = { propertyId: env.ctx.propertyId, from: env.from, to: coveredTo(env) };
       if (range.to < range.from) return { columns: [], rows: [], totals: null, notes: [] };
-      const movement = await findLedgerMovement(prisma, range);
+      const movement = await findLedgerMovement(env.db, range);
       const snapshots = new Map(
-        (await findStatistics(prisma, range)).map((s) => [s.business_date, s]),
+        (await findStatistics(env.db, range)).map((s) => [s.business_date, s]),
       );
       const rows = movement.map((row) => {
         const snapshot = snapshots.get(row.business_date);
@@ -1110,7 +1117,7 @@ const REPORTS: ReportDefinition[] = [
         run: async (env) => {
           const rows = (
             await sumRoomProduction(
-              prisma,
+              env.db,
               { propertyId: env.ctx.propertyId, from: env.from, to: env.to },
               by,
             )
@@ -1152,7 +1159,7 @@ const REPORTS: ReportDefinition[] = [
     riskFilter: false,
     run: async (env) => {
       const rows = (
-        await sumPackageRevenue(prisma, {
+        await sumPackageRevenue(env.db, {
           propertyId: env.ctx.propertyId,
           from: env.from,
           to: env.to,
@@ -1197,7 +1204,7 @@ const REPORTS: ReportDefinition[] = [
     riskFilter: false,
     run: async (env) => {
       const rows = (
-        await findAuditRuns(prisma, { propertyId: env.ctx.propertyId, from: env.from, to: env.to })
+        await findAuditRuns(env.db, { propertyId: env.ctx.propertyId, from: env.from, to: env.to })
       ).map((row) => {
         const summary = (row.summary ?? {}) as Record<string, unknown>;
         return {
@@ -1244,7 +1251,7 @@ const REPORTS: ReportDefinition[] = [
     run: async (env) => {
       const rows = (
         await findAuditTrail(
-          prisma,
+          env.db,
           { propertyId: env.ctx.propertyId, from: env.from, to: env.to },
           env.risk,
         )
@@ -1371,6 +1378,7 @@ async function computeReport(
   const config = await findAuditConfiguration(prisma, ctx.propertyId);
   const env: ReportEnv = {
     ctx,
+    db: prisma,
     businessDate,
     from,
     to,
@@ -1380,9 +1388,16 @@ async function computeReport(
     noShowCodeId: config.noShowTransactionCodeId,
     rowLimit: REPORT_ROW_LIMIT + 1,
   };
-  const output = HEAVY_REPORT_KEYS.has(key)
-    ? await runHeavy(() => report.run(env))
-    : await report.run(env);
+  // Closed dates only (finalized by night audit; seconds of replica lag are
+  // harmless there). The open business date and live-state reports stay on
+  // the primary, so a posting is in the next report at once.
+  const { value: output } = await readFromReplica(
+    to < businessDate && !LIVE_REPORT_KEYS.has(key),
+    (db) => {
+      const routed = { ...env, db };
+      return HEAVY_REPORT_KEYS.has(key) ? runHeavy(() => report.run(routed)) : report.run(routed);
+    },
+  );
   if (output.rows.length > REPORT_ROW_LIMIT) {
     throw new AppError(
       "BUSINESS_RULE_VIOLATION",
@@ -1496,6 +1511,7 @@ export async function propertyPerformance(
   const config = await findAuditConfiguration(prisma, ctx.propertyId);
   const env: ReportEnv = {
     ctx,
+    db: prisma,
     businessDate: ctx.businessDate,
     from,
     to,
@@ -1506,7 +1522,10 @@ export async function propertyPerformance(
     rowLimit: REPORT_ROW_LIMIT + 1,
   };
   const last = coveredTo(env);
-  const list = await nightFacts(env, from, last);
+  // Closed dates only (see computeReport); a range reaching today stays on the primary.
+  const { value: list } = await readFromReplica(to < ctx.businessDate, (db) =>
+    nightFacts({ ...env, db }, from, last),
+  );
   const total = totalFacts(list);
   return {
     businessDate: ctx.businessDate,
@@ -1596,6 +1615,8 @@ export async function getDashboard(ctx: PropertyContext): Promise<DashboardView>
   const config = await findAuditConfiguration(prisma, ctx.propertyId);
   const env: ReportEnv = {
     ctx,
+    // Includes today: always the primary.
+    db: prisma,
     businessDate,
     from: addDays(businessDate, -30),
     to: businessDate,

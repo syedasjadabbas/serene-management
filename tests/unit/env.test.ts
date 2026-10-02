@@ -28,6 +28,21 @@ describe("server environment (M6)", () => {
     }
   });
 
+  it("has no read replica unless READ_DATABASE_URL is set, and validates it", () => {
+    const result = parseServerEnv(production);
+    expect(result.success && result.data.READ_DATABASE_URL).toBeUndefined();
+    if (result.success) {
+      expect(result.data.READ_DATABASE_POOL_MAX).toBe(3);
+      expect(result.data.READ_REPLICA_MAX_LAG_MS).toBe(30_000);
+    }
+    expect(problems({ READ_DATABASE_URL: "postgresql://ro:S7rong@replica.internal:5432/db" })).toBe(
+      "",
+    );
+    expect(problems({ READ_DATABASE_URL: "mysql://replica/db" })).toContain("READ_DATABASE_URL");
+    expect(problems({ READ_REPLICA_MAX_LAG_MS: "10" })).toContain("READ_REPLICA_MAX_LAG_MS");
+    expect(problems({ READ_DATABASE_POOL_MAX: "0" })).toContain("READ_DATABASE_POOL_MAX");
+  });
+
   it("keeps development and test convenient", () => {
     for (const NODE_ENV of ["development", "test"]) {
       const result = parseServerEnv({

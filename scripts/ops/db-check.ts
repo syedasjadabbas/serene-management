@@ -35,6 +35,7 @@ async function main(): Promise<number> {
   const { serverEnv } = await import("../../lib/env");
   serverEnv();
   const { prisma } = await import("../../lib/db/prisma");
+  const { connectionBudget } = await import("../../lib/db/pool-config");
   const failures: string[] = [];
   const warnings: string[] = [];
   const ok: string[] = [];
@@ -97,18 +98,16 @@ async function main(): Promise<number> {
     // Behind a transaction-mode PgBouncer these come from the runtime role, not the app.
     if (settings!.idle_tx === "0") failures.push("idle_in_transaction_session_timeout is disabled");
 
-    // Connection budget (docs/OPERATIONS.md §6): each instance holds up to
-    // DATABASE_POOL_MAX pooled connections plus one LISTEN connection for live
-    // updates and one for its job worker (JOB_WORKER=inline). The inline worker
-    // shares the pool. Separate `npm run worker` processes count as instances.
+    // Connection budget (docs/OPERATIONS.md §6, docs/SCALABILITY.md §37.10):
+    // lib/db/pool-config.ts connectionBudget. Per instance: the route bundle's
+    // pool, the realtime LISTEN connection and, with JOB_WORKER=inline, the
+    // worker bundle's own pool and LISTEN connection. One instance of surge is
+    // kept free for rolling updates. Separate `npm run worker` processes are
+    // not known here; subtract DATABASE_POOL_MAX + 1 for each.
     const [limits] = await prisma.$queryRaw<{ max: number; reserved: number }[]>`
       SELECT current_setting('max_connections')::int AS max,
              current_setting('superuser_reserved_connections')::int AS reserved`;
     const env = serverEnv();
-    const listens = (env.REALTIME_ENABLED === "1" ? 1 : 0) + (env.JOB_WORKER === "inline" ? 1 : 0);
-    const perInstance = env.DATABASE_POOL_MAX + listens;
-    // Keep 10 connections for migrations, backups, monitoring and administrators.
-    const fits = Math.floor((limits!.max - limits!.reserved - 10) / perInstance);
     if (env.DATABASE_POOLER === "pgbouncer-transaction") {
       // PgBouncer, not the instances, decides the server connections.
       ok.push(
@@ -116,11 +115,20 @@ async function main(): Promise<number> {
           `default_pool_size + LISTEN connections (up to 2 per instance) + 10 below it`,
       );
     } else {
+      const inlineWorker = env.JOB_WORKER === "inline";
+      const plan = connectionBudget({
+        maxConnections: limits!.max,
+        superuserReserved: limits!.reserved,
+        poolMax: env.DATABASE_POOL_MAX,
+        realtime: env.REALTIME_ENABLED === "1",
+        inlineWorker,
+      });
       const budget =
-        `connection budget: max_connections=${limits!.max}, ${perInstance} per instance ` +
-        `(DATABASE_POOL_MAX=${env.DATABASE_POOL_MAX}` +
-        `${listens > 0 ? ` + ${listens} LISTEN` : ""}) → at most ${fits} instances`;
-      if (fits < 2) warnings.push(`${budget}: fewer than 2 instances fit`);
+        `connection budget: max_connections=${limits!.max} (${plan.usable} usable after reserves), ` +
+        `up to ${plan.perInstance} per instance (DATABASE_POOL_MAX=${env.DATABASE_POOL_MAX}` +
+        `${inlineWorker ? " ×2 with the inline worker" : ""} + LISTEN) → at most ` +
+        `${plan.instances} instances plus 1 during a rolling update`;
+      if (plan.instances < 2) warnings.push(`${budget}: fewer than 2 instances fit`);
       else ok.push(budget);
     }
     if (settings!.timezone === "UTC" && settings!.statement_timeout !== "0") {
@@ -140,6 +148,27 @@ async function main(): Promise<number> {
       );
     } else {
       ok.push(`${migrations!.applied} migrations applied, none failed`);
+    }
+
+    // Optional read replica (docs/SCALABILITY.md §35): its state, never its address.
+    const { readReplicaStatus, configureReadReplica } = await import("../../lib/db/read-replica");
+    const replica = await readReplicaStatus();
+    if (!replica.configured) {
+      ok.push("read replica: not configured (every query uses the primary)");
+    } else {
+      const pool = `READ_DATABASE_POOL_MAX=${serverEnv().READ_DATABASE_POOL_MAX} per instance on the replica`;
+      if (!replica.healthy) {
+        warnings.push(
+          `read replica: ${replica.reason ?? "unhealthy"}; approved reads fall back to the primary (${pool})`,
+        );
+      } else if (replica.standby === false) {
+        warnings.push(
+          `read replica: READ_DATABASE_URL is not a standby (pg_is_in_recovery() = false); nothing is offloaded to a separate server (${pool})`,
+        );
+      } else {
+        ok.push(`read replica: standby, lag ${replica.lagMs ?? "?"} ms (${pool})`);
+      }
+      await configureReadReplica(null);
     }
   } finally {
     await prisma.$disconnect();

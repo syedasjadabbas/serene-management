@@ -2,7 +2,7 @@
 
 Status: **phases 1–6 done**: audit, baseline and fixes; authentication and shared rate limiting
 (§25–26); search (§28–30); live updates (§31); connection pooling (§32); background jobs (§33);
-the night-audit balance check (§34).
+the night-audit balance check (§34); read scaling and replica readiness (§35); guest search (§36).
 SERENE MANAGEMENT has
 **not** been shown to handle 100 000 requests per second, and nothing in this document claims
 it. What it does contain:
@@ -1757,7 +1757,7 @@ figures are averages over 4 waves, each wave after idling.
   - Session settings on the runtime role.
   - `REALTIME_DATABASE_URL` and `MIGRATION_DATABASE_URL` direct: one LISTEN connection per instance
     counts against `max_connections`.
-- **Beyond one database server:** read replicas for reports, measured first.
+- **Beyond one database server:** read replicas for reports, measured first. Readiness was prepared in phase 7 (§35); it is not enabled.
 
 ### 32.7 Remaining
 
@@ -2028,3 +2028,626 @@ No rule, schema, index, migration, error or API changed.
   - a narrower rule: candidates changed since the last closed date, or SETTLED folios closed after a retention period. That is a business decision (B4), not made here.
 - **32 concurrent readiness views** still exceed a 10-connection pool. Readiness is opened by a few night auditors, not by every user, but heavy GETs share one pool with everything else.
 - **The other checks** (unposted nights, due arrivals) are 0.1–0.3 s each and were not changed.
+
+## 35. Read scaling and read-replica readiness
+
+**Decision: B. Replica readiness is prepared, not enabled.** Replicas are not justified by the measured workload. The primary runs at about a quarter of its CPU, and almost every read must see the latest write. The only workload that tolerates staleness and costs real database time is analytical reports over closed dates. Phase 6 measured those slowing everyone else down (§33.6). For them, an optional replica route now exists, off unless `READ_DATABASE_URL` is set. **No physical replica was measured:** the environment has one native PostgreSQL, and the runtime role has no `REPLICATION` privilege. Every replica performance number below is **NOT MEASURED** or **ESTIMATED**.
+
+### 35.1 Workload (MEASURED; clone `serene_bench_na3`, one `next start`, pool max 10, default k6 mix, 45 s per level)
+
+| Users | req/s | p50 / p95 / p99 ms | Pool wait p95 / avg ms | PG CPU (8 cores) | Active conns avg / max | Rows read/s | Rows written/s | Transactions/s |
+| ----- | ----- | ------------------ | ---------------------- | ---------------- | ---------------------- | ----------- | -------------- | -------------- |
+| 1     | 50.2  | 14 / 36 / 215      | 1 / 0.2                | 38 %             | 0.75 / 3               | 0.91 M      | 2.3            | 279            |
+| 8     | 133.9 | 49 / 105 / 422     | 6 / 1.4                | 196 %            | 3.24 / 8               | 2.41 M      | 6.0            | 708            |
+| 16    | 132.7 | 103 / 238 / 461    | 121 / 34.7             | 209 %            | 3.48 / 9               | 2.35 M      | 5.7            | 685            |
+| 32    | 136.5 | 191 / 491 / 613    | 547 / 178.9            | 206 %            | 3.51 / 9               | 2.39 M      | 5.9            | 705            |
+
+- **What the database does.** Active-session sampling (application backends, every 50 ms) found 98–99 % of busy time in reads: 70–79 % autocommit reads, 20–28 % reads inside transactions. Write statements took ≤ 0.2 %; idle-in-transaction waits took 1–2 %. About 2.4 M rows are read per second, against 6 written.
+- **Where the limit is.** Throughput stops at ≈ 135 req/s from 8 users on. Pool wait grows (p95 547 ms at 32 users), while PostgreSQL stays at ≈ 2 of 8 cores, with 3.5 of 10 connections active on average. The single-threaded application instance is the bottleneck, as in §32. A replica takes load off the primary's CPU, which is not the constraint here.
+- **Request mix.** The default k6 mix is 99 % GET by count. GET does not mean read-only: six rate-limited GET routes write `rate_limit_windows`, and every authenticated request reads the session, which must reflect revocation at once.
+
+### 35.2 Where the database time goes (MEASURED per class, 8 users × 20 s each, weighted by the mix)
+
+| Class              | PG CPU ms / req | Rows read / req | Share of PG CPU | Share of rows | Replica?                                      |
+| ------------------ | --------------- | --------------- | --------------- | ------------- | --------------------------------------------- |
+| guestSearch        | 235.9           | 284,400         | **40.9 %**      | **73.1 %**    | primary: a profile just created must be found |
+| roomBoard          | 39.9            | 6,565           | 12.1 %          | 3.0 %         | primary: room state                           |
+| arrivals           | 27.1            | 1,860           | 9.4 %           | 1.0 %         | primary: front desk                           |
+| reservationSearch  | 40.7            | 41,221          | 8.8 %           | 13.2 %        | primary: a booking just made must be found    |
+| frontDeskSummary   | 28.4            | 6,884           | 7.4 %           | 2.7 %         | primary                                       |
+| inHouse            | 15.2            | 3,236           | 3.9 %           | 1.2 %         | primary                                       |
+| dashboard          | 19.8            | 4,761           | 3.4 %           | 1.2 %         | primary (today)                               |
+| departures         | 17.7            | 2,124           | 3.1 %           | 0.5 %         | primary                                       |
+| reservationList    | 7.4             | 3,839           | 2.2 %           | 1.7 %         | primary                                       |
+| folioList          | 16.0            | 1,814           | 2.1 %           | 0.3 %         | primary: folio/payment state                  |
+| housekeepingTasks  | 6.7             | 531             | 1.7 %           | 0.2 %         | primary                                       |
+| availability       | 7.1             | 3,072           | 1.2 %           | 0.8 %         | primary: inventory                            |
+| businessDate       | 1.0             | 316             | 0.9 %           | 0.4 %         | primary: business date                        |
+| others (8 classes) | 0.8–11.8        | 297–3,170       | 3.4 % together  | 0.9 %         | primary (report = manager flash for today)    |
+
+- **Replica-eligible share of the default mix:** 0 %. Its only report covers the open business date.
+- **Upper bound:** even if every report and dashboard view tolerated staleness, about 4 % of the database's CPU could move (**ESTIMATED** from the table).
+- **The real cost is guest search:** 41 % of PostgreSQL CPU and 73 % of the rows read, which is a query to fix, not to replicate (§35.9).
+
+### 35.3 Consistency classification (from the audit of all 158 route files)
+
+| Path                                                                                                                      | Class                          | Where                    | Why                                                                                                                                        |
+| ------------------------------------------------------------------------------------------------------------------------- | ------------------------------ | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| Authentication (`resolveSession` on every request), login, refresh, sessions, users and roles                             | read / transactional           | **primary**              | logout, disabling and role changes apply on the next request                                                                               |
+| Rate limits (`rate_limit_windows`, UNLOGGED)                                                                              | write on the hot path          | **primary**              | written on every mutating and rate-limited request; not replicated                                                                         |
+| Every command (reservations, check-in/out, folios, payments, housekeeping, maintenance, groups, loyalty, rates, profiles) | read-then-write, transactional | **primary**              | interactive transactions, `FOR UPDATE`/`FOR SHARE`, one advisory lock (restrictions), idempotency keys                                     |
+| Read-back after a command (`getReservation`, `getStay`, `getFolioAccount`, `getRoom`, `getRun`, …)                        | read-your-writes               | **primary**              | the response must show what was just committed                                                                                             |
+| Front desk, room board, housekeeping, maintenance, availability, folios, billing, business date                           | operational reads              | **primary**              | room, inventory, folio and date state must be current; these are also 85 % of database time (§35.2)                                        |
+| Global search, reservation and guest search, companies, groups, loyalty lists                                             | read-heavy                     | **primary**              | a record just created must be findable; the cost is a query problem (§35.9)                                                                |
+| Night audit (readiness, commit, worker), background jobs                                                                  | transactional / background job | **primary**              | business-date and ledger checks must be exact; the queue needs `SKIP LOCKED` and leases                                                    |
+| Realtime (LISTEN), job wake-up (LISTEN)                                                                                   | realtime                       | **primary (direct)**     | notifications come from the primary's commits                                                                                              |
+| Dashboard, manager flash and any report whose range includes the open business date; in-house and room-status reports     | report reading live data       | **primary**              | a posting must appear in the next report                                                                                                   |
+| **Reports and CSV exports whose whole range is before the business date; organization performance of closed dates**       | **report / analytical read**   | **replica when enabled** | closed dates are finalized by night audit (postings into them are refused), so seconds of lag cannot hide a business change; heavy (§33.6) |
+
+A query that only selects is not therefore replica-safe. Many repository functions (rates, properties, billing headers, night-audit configuration) are shared between plain reads and write transactions. That is why routing is explicit per call site, and never global.
+
+### 35.4 Design (`lib/db/read-replica.ts`, ARCHITECTURE D67)
+
+- **Settings.** `READ_DATABASE_URL` (optional), `READ_DATABASE_POOL_MAX` (default 3), `READ_REPLICA_MAX_LAG_MS` (default 30 000).
+- **Unset (the default).** Nothing changes: one Prisma client, one pool, every query on the primary.
+- **`readFromReplica(eligible, work)`.** This is the only way to the replica: the caller states eligibility and passes a read-only function. It runs on the replica only when all of these hold:
+  - a replica is configured;
+  - the call is eligible;
+  - the replica answered its health probe within 2 s;
+  - its lag is within the limit.
+    Otherwise the read runs on the primary.
+- **Health probe** (at most every 10 s). `pg_is_in_recovery()`; lag 0 when the WAL receive and replay positions are equal, else `now() − pg_last_xact_replay_timestamp()`.
+- **Failure.** A connection error, a recovery conflict (`40001`) or `53300` during the read marks the replica unhealthy and re-runs the same read on the primary. A dead replica costs one failed attempt per 10 s, not one per request. Other errors propagate unchanged.
+- **Wired today:** `computeReport` (JSON and CSV) and `propertyPerformance` (organization performance). Eligible when `to < business date` and the report is not live (`LIVE_REPORT_KEYS`: in-house, room-status).
+- **Authorization** happens before routing, on the primary: session, property access, report permission, `reports:financial`. The replica runs the same property-scoped statements.
+- **Observability.** With `SERVER_TIMING=1`: `db-read;desc="replica=1"`, `"primary=1"` or `"fallback=1"`. No host, user or database name. `npm run ops:db-check` reports "not configured", "standby, lag N ms", "unreachable" or "not a standby".
+
+### 35.5 Tests (MEASURED; `tests/integration/read-replica.test.ts` 13 tests, `tests/unit/env.test.ts`)
+
+The "replica" in tests is a second pool to the same test database, with a stubbed health probe. This validates routing, fallback and isolation code paths. It is **not** a measurement of replication.
+
+| Requirement                            | Result                                                                                                                                                                                                                                        |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No replica configured                  | primary                                                                                                                                                                                                                                       |
+| Safe read → replica                    | runs on the replica pool (`application_name = serene-management-read`); a non-eligible read stays on the primary                                                                                                                              |
+| Writes, transactions, read-your-writes | Create a reservation then read it, check in, post a charge, then read the folio, room board, business date, availability, arrivals, dashboard, an open-date report, in-house and room-status: **0 replica checkouts**, all showing the writes |
+| Closed-date reports                    | five reports, the CSV export and organization performance used the replica, and their results equal the primary's (JSON deep-equal, CSV byte-equal)                                                                                           |
+| Replica lag                            | lag 120 s > 30 s limit → primary (`fallback`)                                                                                                                                                                                                 |
+| Replica unavailable / timeout          | unreachable host → fallback; the second read does not wait again (< 500 ms); a probe that never answers → fallback in < 3.5 s; a database that does not exist → fallback                                                                      |
+| Replica error during the read          | a lost connection mid-read → the same read on the primary; any other error propagates                                                                                                                                                         |
+| Replica down for a report              | same report as the primary's, 200                                                                                                                                                                                                             |
+| Permissions and isolation              | a front desk agent (no access to the financial report), another property's manager, another organization's user: 403 with **0 replica checkouts**; property B's report never contains A's data                                                |
+| Primary unavailable                    | **NOT TESTED**: nothing works without the primary, by design (sessions, rate limits). The replica is never used for failover                                                                                                                  |
+
+### 35.6 Load after the change (MEASURED; same harness, `READ_DATABASE_URL` unset)
+
+| Users | req/s (before → after) | p50 / p95 / p99 ms after | PG CPU after |
+| ----- | ---------------------- | ------------------------ | ------------ |
+| 1     | 50.2 → 50.8            | 13 / 35 / 235            | 34 %         |
+| 8     | 133.9 → 143.2          | 46 / 96 / 401            | 194 %        |
+| 16    | 132.7 → 147.5          | 94 / 206 / 426           | 192 %        |
+| 32    | 136.5 → 147.4          | 178 / 449 / 574          | 189 %        |
+
+- **No regression.** The differences are within this host's run-to-run noise (§33.6); the routing call costs nothing measurable when no replica is set.
+- **Routing check** with `READ_DATABASE_URL` pointed at the same clone (a code path, not a replica):
+  - a closed-range revenue report answered with `db-read;desc="replica=1"`, and one including today with `primary=1`;
+  - with an unreachable `READ_DATABASE_URL`, the closed-range report answered `fallback=1` (200) and `ops:db-check` warned "unreachable".
+
+### 35.7 Browser QA (production build, local TLS proxy, headless Chrome; `READ_DATABASE_URL` set to the same clone, so routing is active)
+
+- **Reservations:** a new booking was visible at once on its page and in front-desk arrivals.
+- **Availability:** the room type went from 56 to 55 available.
+- **Check-in:** the room board showed the room OCCUPIED at once.
+- **Charge:** the folio went from 0.0000 to 29.0000 (25.00 + tax). The billing page showed it, and today's revenue report went from 0 to 2 lines, 29.0000 (`primary=1`).
+- **Guest note:** visible at once.
+- **Reports:** a closed-range report loaded through the replica (`replica=1`).
+- **Night audit:** the readiness page loaded.
+- **Console:** no page exceptions; no visible difference from the primary-only setup.
+
+### 35.8 Connection budget
+
+| Connection                         | Where            | Count                                                                                                      |
+| ---------------------------------- | ---------------- | ---------------------------------------------------------------------------------------------------------- |
+| Application pool                   | primary          | instances × `DATABASE_POOL_MAX` (10)                                                                       |
+| LISTEN (live updates, job wake-up) | primary, direct  | up to 2 per instance                                                                                       |
+| Worker processes                   | primary          | as instances                                                                                               |
+| Read pool                          | **replica only** | instances × `READ_DATABASE_POOL_MAX` (3), only when `READ_DATABASE_URL` is set; opened lazily, idle-closed |
+| Operations, backups, migrations    | primary          | ≈ 10 reserved                                                                                              |
+
+The replica pool never adds to the primary's budget, unless `READ_DATABASE_URL` points at the primary by mistake. `ops:db-check` then warns "not a standby".
+
+### 35.9 When to enable a replica, and what remains (PROPOSED)
+
+- **Enable it when:**
+  - PostgreSQL CPU on the primary is regularly above ≈ 60–70 %, while instances are not the limit;
+  - **or** closed-date reporting or exports measurably slow operations, beyond the per-process slot of §33.6.
+- **Prerequisites:**
+  - a streaming standby on its own host;
+  - a read-only role (`default_transaction_read_only`, `SELECT` grants);
+  - `hot_standby_feedback` or a `max_standby_streaming_delay` long enough for report statements;
+  - the replica's `max_connections` sized for instances × 3;
+  - monitoring of replay lag.
+- **Remaining bottlenecks** (**MEASURED** above):
+  - **Guest search:** 41 % of PostgreSQL CPU and 284 k rows read per request. It must stay on the primary, and needs a query or index fix. **Done in phase 8 (§36):** −72 to −90 % CPU per search.
+  - **The single-threaded application instance:** throughput plateaus at ≈ 135–147 req/s per instance, with PostgreSQL at a quarter of its CPU.
+  - **Room board, arrivals and reservation search:** together ≈ 30 % of database CPU.
+- **Not claimed:** 100 000 requests per second.
+
+## 36. Guest search
+
+### 36.1 The path and the root cause (MEASURED; clone `serene_bench_na4`: 300,000 guests in one organization, 45 surnames × 34 first names)
+
+**The path:**
+
+1. The guest list or the global search palette calls `GET /api/v1/guests?q=&status=&limit=&cursor=` (a session route, organization-wide).
+2. `searchGuests` (guests.service) checks `guests:read`. A confirmation-number lookup is limited to properties with `reservations:read`.
+3. The repository's `searchGuests` runs one Prisma `findMany` (plus a second statement for VIP levels):
+   - **filter:** `organization_id AND status AND deleted_at IS NULL AND (every name word in search_name OR e-mail = OR listed e-mail EXISTS OR phone digits contain OR profile number = OR confirmation guest ids)`;
+   - **order:** `ORDER BY last_name, first_name, id`, keyset cursor, `LIMIT n+1`.
+4. Global search calls the same function with limit 5.
+
+**Root cause, from `EXPLAIN (ANALYZE, BUFFERS)`:**
+
+- PostgreSQL chose the name index (`organization_id, last_name, first_name`) to avoid a sort, and tested every guest in name order against the OR until it had `n+1` matches.
+- `search_name` is "last first", so the guests matching a surname sit together in that order. Everything alphabetically before them was read and discarded: "khan" removed 135,003 rows (135 k buffers, 89 ms); "smith" read 248 k buffers; "zhang" 293 k.
+- A full name, or an e-mail (one match), walked the entire table: 300 k buffers, 0.25 s and 2.5 s.
+- Page 2 repeated the walk: the cursor's OR form cannot start an index range.
+- Rare and no-match terms were cheap: the planner then picked the trigram bitmap.
+- This was ≈ 41 % of PostgreSQL CPU in the default mix (§35.2).
+
+### 36.2 Change (`modules/guests/guests.repository.ts`, one raw statement; no index, migration, rule or API change)
+
+With search terms, one statement takes the cheapest of three exact paths, each gated by a one-time filter:
+
+1. **Few matches.** Each OR branch runs on its own index (trigram name and phone, e-mail, listed e-mail, profile number, ids), `UNION ALL`, capped at 1,001 rows. If 1,000 or fewer exist, the page is sorted from them, deduplicated.
+2. **Many matches, early in name order.** The first 3,000 guests of the organization after the cursor, in page order, filtered by status, deletion and the same OR. If at least `n+1` match, they are the page. This is exact: every guest beyond the window sorts after all of them. The window starts at the cursor with a row comparison `(last_name, first_name, id) > (…)`, equivalent to the OR form because the columns are NOT NULL.
+3. **Otherwise.** Every match by branch, `UNION`-deduplicated, then sorted.
+
+- The VIP level is joined in the same statement, so a search takes 1 statement instead of 2. The list without a term keeps the Prisma query unchanged.
+- **Sizes.** 1,000 and 3,000 come from the measurements below. A window-only variant (§36.3) made rare terms pay for the window; candidate-first-only made broad early terms sort tens of thousands of rows.
+- **Indexes.** Every branch already had one: `guests_search_name_trgm_idx`, `guests_phone_digits_trgm_idx`, `guests_organization_id_primary_email_idx`, `guest_contacts_type_value_idx`, `guests_organization_id_profile_number_key`, and `guests_organization_id_last_name_first_name_idx` for the window and the cursor. No new index was needed.
+
+### 36.3 Candidates compared (MEASURED, `EXPLAIN ANALYZE`, best of 3, limit 11, 22 terms)
+
+| Statement                          | Sum over the 22 terms | Weak spot                                                                                                                                                               |
+| ---------------------------------- | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| previous (ordered walk with OR)    | 4,960 ms              | late-alphabet surnames, full names, e-mail (up to 2.4 s)                                                                                                                |
+| candidate-first, join back by id   | —                     | hash-joined all 300 k guests (≈ 500 ms per common term)                                                                                                                 |
+| candidate-first, full rows         | —                     | broad early terms sort every match ("ma" 2.5 → 409 ms)                                                                                                                  |
+| window 3,000, then candidates      | 875 ms                | rare / no-match / profile / phone pay the window (0.1 → 8 ms). Status INACTIVE walked the whole index (1.6 → 43 ms CPU/request in load), fixed by windowing by position |
+| **cap 1,000 → window 3,000 → all** | —                     | broad early terms ("ava", 2-letter "ma") pay the capped pass (below)                                                                                                    |
+
+### 36.4 Before / after (MEASURED; one `next start`, pool max 10, `SERVER_TIMING=1`; users loop for 45 s (mix) or 15–20 s (single term))
+
+**Guest-search mix** (the k6 terms khan, ahmed, smith, malik, zhang, fatima, omar, wilson, haddad, rahman; limit 10):
+
+| Users | req/s        | p50 / p95 / p99 ms                  | PG CPU (8 cores) | PG CPU ms / req | Buffers / req | Rows read / req | Pool wait p95 ms | Statements / req |
+| ----- | ------------ | ----------------------------------- | ---------------- | --------------- | ------------- | --------------- | ---------------- | ---------------- |
+| 1     | 5.2 → 25.4   | 179 / 396 / 462 → 36 / 70 / 91      | 81 → 41 %        | 155.8 → 16.1    | 143 k → 4.0 k | 287 k → 28 k    | 0.2 → 0.1        | 2 → 1            |
+| 8     | 25.2 → 97.6  | 311 / 638 / 802 → 78 / 142 / 164    | 653 → 464 %      | 259.1 → 47.5    | 143 k → 3.9 k | 285 k → 28 k    | 0.2 → 0.1        | 2 → 1            |
+| 16    | 31.0 → 99.7  | 513 / 949 / 1165 → 142 / 284 / 363  | 636 → 544 %      | 205.2 → 54.6    | 143 k → 3.9 k | 285 k → 28 k    | 327 → 72         | 2 → 1            |
+| 32    | 33.6 → 103.8 | 924 / 1438 / 1625 → 296 / 442 / 514 | 646 → 555 %      | 192.3 → 53.5    | 143 k → 3.9 k | 285 k → 28 k    | 867 → 248        | 2 → 1            |
+
+- Throughput ×3–5; p95 and p99 −65 to −82 %; PostgreSQL CPU per search −72 to −90 %; buffers per search ÷ 37.
+- Connections stay at the pool's 10 under saturation (avg 9.7 → 9.2); no spikes.
+
+**Single terms** (1 user / 8 users; PG CPU ms per request):
+
+| Search                            | req/s at 8 users | p95 ms at 8 users | PG CPU ms / req (1 user) | Buffers / req   |
+| --------------------------------- | ---------------- | ----------------- | ------------------------ | --------------- |
+| exact name "Ava Haddad"           | 18.4 → 193.6     | 529 → 57          | 200 → 1.6                | 302,771 → 518   |
+| e-mail                            | 2.3 → 318.1      | 3,605 → 35        | 1,800 → 3.1              | 319,557 → 338   |
+| surname "haddad"                  | 59.8 → 125.2     | 191 → 85          | 47.9 → 16.8              | 91,145 → 3,870  |
+| common "khan"                     | 40.8 → 133.6     | 303 → 84          | 82.1 → 15.4              | 136,539 → 3,945 |
+| rare "rossi"                      | 389 → 399        | 29 → 27           | 1.4 → 1.6                | 237 → 240       |
+| no match                          | 430 → 378        | 25 → 37           | 0.8 → 1.9                | 232 → 235       |
+| profile number                    | 426 → 353        | 26 → 31           | 1.4 → 1.8                | 281 → 287       |
+| phone digits                      | 339 → 335        | 32 → 33           | 0.8 → 1.4                | 329 → 331       |
+| multi-word "noor al mansouri"     | 359 → 326        | 29 → 36           | 2.1 → 2.2                | 546 → 547       |
+| status INACTIVE                   | 301 → 285        | 43 → 42           | 3.1 → 4.3                | 686 → 685       |
+| list, no term (Prisma, unchanged) | 404 → 381        | 27 → 29           | 1.1 → 1.3                | 478 → 482       |
+| first name "ava" (broad, early)   | 245 → 178        | 48 → 59           | 2.6 → 3.8                | 8,758 → 2,220   |
+| 2 letters "ma" (broad, early)     | 373 → 274        | 29 → 44           | 1.7 → 1.8                | 2,237 → 2,329   |
+
+- **What got cheaper.** Terms whose matches are late in name order, full names and e-mail are the ones that used to read the table. Full names and e-mail now cost 125–580× less database time; common surnames 3–5× less.
+- **What did not change.** Selective terms stay within ≈ 1 ms of their former database time. Their 8-user throughput differs by −17 % to +3 %, within the run-to-run noise of this host (§33.6).
+- **The measured cost.** Broad terms that match early in name order ("ava", "ma") pay the capped candidate pass. They were already cheap, and remain so in absolute terms (p95 ≤ 59 ms at 8 users), but their 8-user throughput is 25–27 % lower.
+
+### 36.5 Global search (MEASURED; `search-guests` Server-Timing entry)
+
+| Request                               | Users | req/s         | p95 ms    | PG CPU ms / req | Guest share of server time | Guest source p50 ms |
+| ------------------------------------- | ----- | ------------- | --------- | --------------- | -------------------------- | ------------------- |
+| organization search, common terms     | 1     | 8.4 → 25.8    | 254 → 70  | 82.1 → 15.1     | 95 % → 87 %                | 95.7 → 22.1         |
+| organization search, common terms     | 8     | 35.6 → 105.8  | 510 → 132 | 173.6 → 42.6    | 96 % → 86 %                | 202.3 → 55.8        |
+| organization search, rare term        | 8     | 297.8 → 306.0 | 39 → 36   | 1.2 → 1.9       | 46 % → 40 %                | 8.2 → 7.1           |
+| organization search, no match         | 8     | 340.9 → 324.1 | 32 → 34   | 1.2 → 1.4       | 45 % → 41 %                | 7.1 → 6.8           |
+| property search (all sources), common | 1     | 5.9 → 8.3     | 277 → 252 | 115.3 → 67.5    | 73 % → 35 %                | 116.8 → 36.9        |
+| property search (all sources), common | 8     | 14.8 → 20.9   | 856 → 798 | 317.6 → 165.1   | 60 % → 28 %                | 317.5 → 76.7        |
+
+Guest search was 95 % of the organization search's time for common names, and is now 4× faster. The property search is now dominated by its other sources (§36.9).
+
+### 36.6 Result equivalence (MEASURED)
+
+- **Benchmark clone.** 149 searches compared page by page against the previous implementation (kept verbatim as the oracle), along cursor chains of up to 25 pages: 7,162 pages, 148,150 rows, **0 differences**. The searches covered every surname and first name, 2-letter prefixes, full names, profile numbers in both cases, e-mails, phone digits, no-match, digit strings, accents, apostrophes and confirmation ids; both statuses; page sizes 5, 10 and 50.
+- **`tests/integration/guest-search.test.ts`.** The same oracle over more than 1,000 pages:
+  - **searches:** 30 searches incl. overlapping branches, × 2 statuses × 3 page sizes × 7 (window, cap) pairs, which force each of the three paths on small data;
+  - **response contract:** fields, values, VIP object, `fullName`, the cursor (14 distinct guests over 4-per-page pages, no duplicate) and the empty `nextCursor`;
+  - **list without a term:** unchanged.
+- **Mutation check.** Each of these deliberate faults makes the tests fail:
+  - the cursor dropped from the branches;
+  - `>` turned to `>=` in the row-comparison cursor;
+  - the window without the cursor;
+  - the deleted-guest filter dropped;
+  - the window threshold `>=` turned to `>`;
+  - the cap off by one;
+  - the deduplication of the capped path removed (caught after a guest matching two branches was added).
+
+### 36.7 Isolation and permissions (MEASURED; integration tests)
+
+- Guests are organization data: the organization filter is part of every branch, the window and the final rows.
+- **Excluded from results:** another organization's guest with the same name, another organization's guest whose e-mail equals a listed contact here, confirmation ids of another organization's guest, inactive and deleted guests.
+- **Access:** an organization-wide manager, a single-property front desk agent and a user with `guests:read` at another property only all search the organization's guests, as before. A user without `guests:read` gets 403.
+- **Confirmation numbers** still resolve only in properties where the caller may read reservations (service unchanged; `profiles.test.ts`).
+- **Inactive properties:** their reservations are not readable, so they are not searchable by confirmation (unchanged).
+- **Personal data.** The response still carries e-mail and phone: the guest list shows them in each row (`GuestsPanel`). The contract is unchanged. Global search maps its own minimal result.
+
+### 36.8 Browser QA (production build, local TLS proxy, headless Chrome, clone)
+
+- **Searching:** the guest list loaded; "khan" showed 20 rows. Next to page 2, page 3, and back with Previous gave the same pages. "aisha khan" (multi-word) and "zzqx" ("No guest matches") behaved as before.
+- **Rapid typing:** "haddad" typed at 60 ms per key sent one request (debounced) with the right results.
+- **Property switching:** SMR → SDX shows the same organization-wide results.
+- **Global palette:** "khan" shows its Guests group (5) beside Reservations and Folios.
+- **Permissions:** a single-property front desk agent searches normally; a housekeeper sees "Access denied — You need the guests:read permission" (API 403).
+- **Console:** no page exceptions; the only console error is that deliberate 403.
+
+### 36.9 Remaining (MEASURED unless marked)
+
+- **Broad terms early in name order** ("ava", 2-letter prefixes) pay the capped candidate pass (up to ≈ 2 k buffers). 2-letter terms cannot use the trigram index at all; the worst case is a late 2-letter prefix (≈ 130 ms, against ≈ 300 ms before).
+- **Guest search remains the costliest guest-facing query per request** (≈ 16 ms of PostgreSQL CPU in the mix at 1 user). A cache is not proposed: profiles change at the desk and must be found at once (read-your-writes), and query work removed 70–90 % of the cost.
+- **The property global search** is now dominated by its other sources: reservations, folios, companies, groups and maintenance (≈ 23 transactions per request). Next candidates, with the room board, arrivals and reservation search (§35.2).
+- **Not claimed:** 100,000 requests per second.
+
+## 37. Horizontal scaling: several stateless instances behind a load balancer
+
+Phase 9 prepares the application to run as several identical Next.js processes behind a health-aware load balancer, without sticky sessions. Everything here was measured on one development machine:
+
+- Intel i5-8365U, 4 cores / 8 threads, Windows 11;
+- native PostgreSQL 18;
+- clone `serene_bench_na5`.
+
+App instances, PostgreSQL, the load generator and the test load balancer **share the same 8 threads**. Throughput numbers therefore show same-host CPU contention, not what separate hosts would deliver.
+
+No cloud deployment was made, and no Docker. **Not claimed:** 100,000 requests per second.
+
+### 37.1 State audit
+
+| State                                                             | Where                                                                       | Class                                    | Multi-instance consequence                                                                          |
+| ----------------------------------------------------------------- | --------------------------------------------------------------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| Sessions, refresh-token rotation, revocation                      | `sessions`, resolved on every request and never cached                      | DATABASE-BACKED                          | Login on A, request on B, logout anywhere: effective everywhere at once (§37.5)                     |
+| Access tokens                                                     | Signed cookie (`__Host-sm_at`) with a shared secret                         | CLIENT-LOCAL (verified by every process) | Every instance needs the same `AUTH_*` secrets; the session row is still checked per request        |
+| Permissions, role grants                                          | `user_role_assignments`, loaded per request                                 | DATABASE-BACKED                          | No authorization decision depends on the instance                                                   |
+| Rate limits                                                       | `rate_limit_windows` (`RATE_LIMIT_STORE=postgres`, the default)             | DATABASE-BACKED                          | Budgets are shared (§37.6). `memory` would be PROCESS-LOCAL: never use it with more than 1 instance |
+| Background jobs                                                   | `background_jobs`, with leases and fencing                                  | DATABASE-BACKED                          | Any number of workers, no duplicates (§37.7)                                                        |
+| Live-update fan-out                                               | `pg_notify` → one LISTEN per instance                                       | SHARED (PostgreSQL)                      | An event made on A reaches streams on B (§37.4)                                                     |
+| Open event streams and their subscribers                          | Process memory (`RealtimeHub`)                                              | PROCESS-LOCAL                            | Lost with the process; the client reconnects anywhere                                               |
+| In-flight request count, draining flag, instance id               | `globalThis.__sereneLifecycle`                                              | PROCESS-LOCAL                            | Observability and shutdown only                                                                     |
+| Heavy-report slots (`REPORT_HEAVY_CONCURRENCY`), search semaphore | Process memory                                                              | PROCESS-LOCAL                            | Per-process protection; the cluster-wide limit is instances × slots                                 |
+| Read-replica health                                               | Process memory, 10 s probe                                                  | PROCESS-LOCAL                            | Each instance decides on its own; reads fall back to the primary                                    |
+| Database pools                                                    | Process memory: two per process with the inline worker (§37.10)             | PROCESS-LOCAL                            | Counted in the connection budget                                                                    |
+| Next.js build output, static assets                               | `.next/` on each host                                                       | PROCESS-LOCAL (identical per release)    | Every instance must run the same build; hashed asset names make mixed releases safe (§37.12)        |
+| Uploads / file storage                                            | None: the application stores no files, and exports stream from the database | —                                        | Nothing to share                                                                                    |
+| Offline snapshots, UI state                                       | IndexedDB, Cache Storage, Zustand                                           | CLIENT-LOCAL                             | Independent of the instance                                                                         |
+| Audit logs, ledgers                                               | Append-only tables                                                          | DATABASE-BACKED                          | —                                                                                                   |
+| Mail (password reset)                                             | SMTP provider                                                               | EXTERNAL                                 | Same configuration on every instance                                                                |
+
+**Statelessness proof (MEASURED).** Requests were spread round-robin, without affinity, over 2, 4 and 8 instances. This covered sessions, rate limits, event streams, jobs and the whole browser workflow (§37.5–§37.7, §37.14). No result depended on which instance served a request.
+
+### 37.2 Health and the load-balancer contract
+
+- **`/api/health/live`** never touches PostgreSQL.
+- **`/api/health/ready`** runs `SELECT 1` (2 s timeout) and answers 503 `draining` during shutdown.
+- Both are unauthenticated and `no-store`.
+- **With `SERVER_TIMING=1`:**
+  - the readiness body adds `instance`, uptime, draining, in-flight requests, open streams, LISTEN state and worker activity;
+  - every API response carries `x-instance-id`;
+  - none of this includes secrets or addresses.
+- **Full contract** (health checks, no affinity, unbuffered streams, timeouts, retries, forwarded headers): OPERATIONS §10.
+
+### 37.3 Graceful shutdown (`lib/lifecycle`, `scripts/start.mjs`)
+
+By default, Next.js 16 `next start` closes its HTTP server immediately on SIGTERM/SIGINT. It does not when `NEXT_MANUAL_SIG_HANDLE=true`, which must be set before Next.js starts. `npm start` therefore now runs `scripts/start.mjs`, which sets it and then starts `next start`.
+
+The application then owns the shutdown sequence (OPERATIONS §10):
+
+1. Readiness answers 503.
+2. The job worker stops claiming; open streams receive `reauth {reason:"shutdown"}` and end.
+3. The instance keeps serving for `SHUTDOWN_DRAIN_MS`.
+4. It waits for in-flight API requests.
+5. It closes LISTEN and every pool, then exits 0.
+
+The whole sequence is bounded by `SHUTDOWN_TIMEOUT_MS`, plus a hard exit 5 s later. On Windows, Ctrl+Break (SIGBREAK) is handled too, because Next.js never handles it.
+
+Each Prisma client registers its own pool close (`lib/db/prisma.ts`). This phase found that the job worker's bundle has its own pool, which the first version of the shutdown hook did not reach.
+
+**MEASURED (one instance, 3 s drain, real signal):**
+
+- Readiness returned 503 within 847 ms of the signal; this includes launching the signal sender.
+- Liveness stayed 200 throughout.
+- The open stream received `reauth {"reason":"shutdown"}` and ended.
+- A 2–3 s report started before the signal finished with 200.
+- All 8 requests sent during the drain answered 200.
+- The process exited 4.5 s after the signal; its log reads "in-flight requests finished … closed after 3045 ms".
+
+Under load behind the load balancer: §37.9.
+
+### 37.4 Live updates across instances (MEASURED)
+
+Each instance holds one LISTEN connection, and commands on any instance call `pg_notify`. Room commands were sent round-robin, with one stream open per instance:
+
+| Instances | Deliveries | Cross-instance | Missing | p50    | p95    |
+| --------- | ---------- | -------------- | ------- | ------ | ------ |
+| 2         | 32 / 32    | 16             | 0       | 208 ms | 213 ms |
+| 4         | 64 / 64    | 48             | 0       | 206 ms | 214 ms |
+| 8         | 128 / 128  | 112            | 0       | 211 ms | 221 ms |
+
+About 200 ms of that latency is the stream's deliberate 200 ms merge window.
+
+A first 2-instance attempt had 1 command answer 422 and delivered 30 of 32 events. It ran with stale test sessions, after the rate-limit run had used up the login budget. Its cause was not investigated further; the row above is the re-run with fresh sessions.
+
+**When a relay becomes necessary (ESTIMATED).** PostgreSQL delivers each notification to every listener. The cost is one LISTEN connection per instance, and one delivery per instance per commit. That stays negligible into dozens of instances.
+
+A separate relay (Redis pub/sub, NATS) becomes worth it in either case:
+
+- there are more instances than the connection budget can give LISTEN connections (they stay direct even behind PgBouncer);
+- notification volume reaches thousands per second.
+
+Neither applies to the measured workload.
+
+### 37.5 Sessions across instances (MEASURED, 8 instances)
+
+**Steps that must succeed:** login on A, `/me` on B, refresh on C, then `/me` with the refreshed token on B. All returned 200.
+
+**After logout on A, all returned 401:**
+
+- the revoked access token on B;
+- the pre-refresh token on B;
+- the old refresh token on C.
+
+A foreign `Origin` is refused with 403 on every instance.
+
+During the rolling update (§37.11), the same sequence passed across versions, both old→new→old and new→old→old. Nothing caches session validity, so revocation has no window.
+
+### 37.6 Rate limits across instances (MEASURED)
+
+Requests were sent round-robin over 1, 2, 4 and 8 instances, and the counts were identical every time:
+
+| Limit                                                                                                       | Allowed before 429 (1 / 2 / 4 / 8 instances) |
+| ----------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| Login, one account, changing IPs                                                                            | 10 / 10 / 10 / 10                            |
+| Login, one IP, changing accounts                                                                            | 20 / 20 / 20 / 20                            |
+| Password reset completion, one IP                                                                           | 10 / 10 / 10 / 10                            |
+| Forged `X-Forwarded-For`/`X-Real-IP`/`Forwarded` on every request, through an appending proxy (3 instances) | 20: the real peer is limited                 |
+
+### 37.7 Job workers across instances (MEASURED)
+
+Each instance ran its inline worker with concurrency 1. The crash-recovery test started from 200 jobs left RUNNING under a dead worker, with their leases expired.
+
+| Instances | 1,000 short jobs (2 runs) | Workers claiming | Re-executed | Crash recovery: all reclaimed and finished exactly once more |
+| --------- | ------------------------- | ---------------- | ----------- | ------------------------------------------------------------ |
+| 1         | 75.0, 73.6 jobs/s         | 1                | 0           | 28.1 s                                                       |
+| 2         | 135.3, 114.3 jobs/s       | 2                | 0           | 17.5 s                                                       |
+| 4         | 155.0, 171.3 jobs/s       | 4                | 0           | 10.5 s                                                       |
+
+With old and new releases mixed (300 jobs), 3 workers were claiming and 0 jobs were re-executed.
+
+Crash recovery time is bounded by the reclaim batch (50 per pass) and the retry backoff, not by how many jobs were lost.
+
+### 37.8 Throughput at 1, 2 and 4 instances (MEASURED, same host)
+
+Setup:
+
+- k6 closed model, default mix, 45 s per point, round-robin over the instances;
+- 40 event streams held open throughout;
+- `DATABASE_POOL_MAX` 10.
+
+| Instances | Users | req/s | p50    | p95      | p99      | Errors | Pool wait p95 | PostgreSQL CPU | App CPU (all node) | DB active avg | DB connections max |
+| --------- | ----- | ----- | ------ | -------- | -------- | ------ | ------------- | -------------- | ------------------ | ------------- | ------------------ |
+| 1         | 16    | 95.0  | 148 ms | 325 ms   | 473 ms   | 0 %    | 162 ms        | 130 %          | 44 %               | 2.3           | 13                 |
+| 1         | 64    | 113.9 | 442 ms | 1,192 ms | 1,383 ms | 0 %    | 1,732 ms      | 111 %          | 45 %               | 2.4           | 13                 |
+| 2         | 16    | 119.4 | 115 ms | 289 ms   | 412 ms   | 0 %    | 47 ms         | 291 %          | 108 %              | 3.6           | 26                 |
+| 2         | 64    | 132.9 | 374 ms | 1,417 ms | 1,709 ms | 0 %    | 1,587 ms      | 278 %          | 103 %              | 3.8           | 26                 |
+| 4         | 16    | 126.0 | 99 ms  | 282 ms   | 599 ms   | 0 %    | 8 ms          | 384 %          | 169 %              | 5.3           | 52                 |
+| 4         | 64    | 132.2 | 362 ms | 1,263 ms | 1,804 ms | 0 %    | 833 ms        | 382 %          | 167 %              | 8.3           | 52                 |
+
+CPU is a percentage of one thread, so 800 % is the whole machine.
+
+**Reading the table:**
+
+- **A second instance** removes most of the single-process pool wait at 16 users (162 → 47 ms) and adds 26 % throughput.
+- **A fourth instance** adds only another 6 %.
+- **At 64 users** all three configurations plateau at 114–133 req/s, while PostgreSQL rises to about 3.8 threads and the instances to about 1.7. The machine has 8 threads and also runs k6, so the plateau comes from the shared host.
+- **On separate hosts (ESTIMATED from the table)** more instances would be limited by PostgreSQL CPU, about 30 ms per request at this mix, not by the instances.
+
+Worker throughput is in §37.7. All 40 event streams stayed open throughout.
+
+### 37.9 Failover under load (MEASURED)
+
+Setup:
+
+- 2 instances behind the test load balancer;
+- k6 with 16 users;
+- 10 reconnecting event streams;
+- one job inserted every 100 ms;
+- probes every 50 ms.
+
+| Event                 | Load-balancer removal                                 | Probe errors | k6 failures | Streams reconnected        | Jobs                             |
+| --------------------- | ----------------------------------------------------- | ------------ | ----------- | -------------------------- | -------------------------------- |
+| Hard kill (forced)    | First connection error, ≈ 0.5 s after the kill landed | 0 / 136      | 0 / 2,654   | 5 of 5 dropped, 250–290 ms | 252 / 252 finished, 0 duplicates |
+| Graceful (Ctrl+Break) | Readiness 503 after 2 checks, ≈ 2 s into the drain    | 0 / 136      | 0 / 2,698   | 5 of 5, 209–1,114 ms       | 247 / 247 finished, 0 duplicates |
+
+- **Sessions** stayed valid: the probes were authenticated. Rate limits are shared by construction (§37.6).
+- **Retries:** the load balancer retried GET probes that hit the dead target once. It did not retry writes, and no write failed in these runs.
+- **Writes in flight during a hard kill (NOT MEASURED as a separate case):** they would fail with 502, and must not be retried automatically.
+- **Jobs:** the killed instance happened to hold no job at the moment of the kill, since jobs take about 5 ms. A job held by a dead worker is recovered through lease expiry (§37.7): at most `JOB_LEASE_MS` (60 s) plus backoff late, never lost and never doubled.
+
+### 37.10 Connection budget (`connectionBudget`, `lib/db/pool-config.ts`; `npm run ops:db-check`)
+
+**Per web instance, worst case:**
+
+- `DATABASE_POOL_MAX` for the route bundle's pool;
+- 1 for the realtime LISTEN;
+- with `JOB_WORKER=inline`, another `DATABASE_POOL_MAX` + 1: the instrumentation bundle's own pool and the worker's LISTEN.
+
+**Separate worker processes:** `DATABASE_POOL_MAX` + 1 each.
+
+**Usable connections:** `max_connections` − superuser reserve (3) − 10 for migrations, backups, monitoring and administrators. One instance of surge headroom is kept free for rolling updates.
+
+Instances that fit:
+
+| `max_connections` | inline, pool 10 | inline, pool 5 | `JOB_WORKER=off` + 1 worker, pool 10 | off + 1 worker, pool 5 | off + 2 workers, pool 5 |
+| ----------------- | --------------- | -------------- | ------------------------------------ | ---------------------- | ----------------------- |
+| 100 (default)     | 2               | 6              | 5                                    | 12                     | 11                      |
+| 200               | 7               | 14             | 15                                   | 29                     | 28                      |
+| 400               | 16              | 31             | 33                                   | 62                     | 61                      |
+
+- **`ops:db-check` on the development server (MEASURED):** "max_connections=100 (87 usable after reserves), up to 22 per instance … → at most 2 instances plus 1 during a rolling update".
+- **Steady state is far below the worst case (MEASURED):** 13 connections per instance under 64 users, 52 for 4 instances.
+- **The 8-instance tests** stayed under `max_connections` only because the pools were mostly idle. Eight instances is not a supported configuration at the defaults.
+- **Recommendation (PROPOSED):**
+  - **Beyond 2 instances:** set `JOB_WORKER=off` on the web instances and run 1–2 `npm run worker` processes. Lower `DATABASE_POOL_MAX` to 5; the measured active average is 2–3 per instance.
+  - **Beyond about 10–12 instances:** use PgBouncer in transaction mode (OPERATIONS §6).
+  - **`max_connections`:** raise it only deliberately, accounting for memory, and never to improve a benchmark.
+
+### 37.11 Rolling update and rollback (MEASURED)
+
+The previous release (`7023cf5`, which has no lifecycle code) and the current tree ran side by side behind the load balancer for 170 s. Load during the whole run:
+
+- k6 with 8 users;
+- probes;
+- 10 reconnecting streams;
+- a job feed.
+
+**Sequence:**
+
+1. Start with old 1 and old 2.
+2. Add new 3.
+3. Retire old 1: deregister, wait 3 s, stop.
+4. Add new 4.
+5. Retire old 2.
+6. Roll back: add old 1b, gracefully stop new 3, add old 2b, gracefully stop new 4.
+
+**Results:**
+
+- **Load:** k6 failed 0 of 13,042 requests (p95 216 ms); probes had 0 errors out of 1,488; streams reconnected in 150–400 ms; 1,399 jobs ran with 0 duplicates.
+- **Mixed releases:** sessions worked old↔new in both directions; live updates crossed old↔new (16/16); jobs on old and new workers had 0 duplicates.
+- **Migrations:** 27 applied before and after, and no instance log mentions a migration. Migrations are a separate, single step (DEPLOYMENT §4); this release has no migration.
+
+### 37.12 Static assets, storage
+
+`next build` content-hashes `/_next/static/*`, so a page already open in a browser keeps loading its own assets from any instance of the same release.
+
+During a mixed rollout, a page from the new release can request a new chunk from an old instance and get 404 for the seconds both run. This was NOT MEASURED as a failure in §37.11, because the browser QA navigated only after the rollout. To avoid it, serve `/_next/static` for both releases from every instance, or from a CDN or shared directory that keeps the previous release's files.
+
+No user files are stored.
+
+### 37.13 Forwarded headers, timeouts, observability, security
+
+- **Forwarded headers.**
+  - Only `X-Forwarded-For` is read, using `TRUSTED_PROXY_HOPS` entries from the right; `X-Real-IP` and `Forwarded` are ignored.
+  - MEASURED through an appending proxy: forged values on every request did not change the identity being limited (§37.6).
+  - Instances must not be reachable except through the proxy.
+- **Application timeouts:**
+  - database connect 5 s;
+  - statement 30 s;
+  - interactive transaction 15 s (night audit 300 s, inside a job);
+  - heavy-report slot wait 30 s;
+  - stream heartbeat 25 s, and stream lifetime at most 15 min;
+  - shutdown drain 5 s, bounded at 25 s;
+  - job lease 60 s.
+- **Load-balancer timeouts must fit these:**
+  - request timeout above 60 s;
+  - stream idle timeout above 25 s;
+  - upstream keep-alive idle timeout **shorter** than Node's. `next start` defaults to 5 s; behind a balancer with a 60 s idle timeout, raise it with `npm start -- --keepAliveTimeout 65000`. Otherwise reused connections race with Node closing them.
+- **Observability:**
+  - `INSTANCE_ID`, `x-instance-id` (with `SERVER_TIMING=1`), the readiness body and `[shutdown <id>]` log lines;
+  - PostgreSQL connections are named by `application_name`: `serene-management`, `-realtime` and `-jobs`;
+  - none of it includes secrets, connection strings or addresses.
+- **Security across instances (MEASURED, 3 instances).** A user scoped to one property signed in on A:
+  - the other property's event stream on B: 403;
+  - the other property's business date on C: 403;
+  - their own property: 200;
+  - someone else's job: 404;
+  - their own job at the inaccessible property: 404;
+  - their own job at their property: 200;
+  - a role change made in the database ended the user's stream on C with `reauth {"reason":"access"}` within 21 ms, and the next request on B returned 403;
+  - a logout on A ended the session's stream on B within 67 ms.
+
+### 37.14 Browser QA (MEASURED)
+
+Setup: production build, headless Chrome → local TLS proxy → appending load balancer → 2 instances, `TRUSTED_PROXY_HOPS=2`.
+
+**Covered:**
+
+- login;
+- front desk, reservations, housekeeping, billing, reports, night audit, guests, availability, and the room board (front desk rooms);
+- property switch SMR → SDX;
+- global search: "khan" returned Reservations 5, Guests 5, Folios 5;
+- sign-out, after which `/me` returns 401.
+
+**Results:**
+
+- **Load spread:** 198 API responses, 88 from one instance and 110 from the other.
+- **Errors:** no page exceptions and no console errors.
+- **Instance stop:** the instance holding the page's event stream was stopped. The stream's 2 reconnect attempts got 503 while that instance drained, the third opened on the other instance, and navigation continued there.
+- **Offline:** "Offline mode" was shown and the data kept. Back online, the stream reopened with no errors.
+- **Streams:** one stream per tab was confirmed on the instance. A stream leak seen at first was in the test TLS proxy, which did not abort the upstream connection when the client disconnected. That is why OPERATIONS §10 requires the load balancer to do so.
+
+### 37.15 Production topology (PROPOSED)
+
+```
+clients ── HTTPS ──> reverse proxy / load balancer
+                       (TLS; appends X-Forwarded-For; health-checks /api/health/ready; no affinity;
+                        unbuffered /events; aborts upstream on client disconnect)
+                       └──> web instances 1..N  (npm start; INSTANCE_ID set; JOB_WORKER=off beyond 2 instances)
+
+web instances, worker processes 1..2 (npm run worker)
+  ── pools (direct, or PgBouncer in transaction mode) ──> PostgreSQL primary
+web instances ── 1 LISTEN each (always direct) ─────────> PostgreSQL primary
+optional: closed-date reports ──────────────────────────> streaming standby (§35)
+once per release: npm run db:deploy (schema owner), never from the instances
+```
+
+### 37.16 Autoscaling signals (PROPOSED, not implemented)
+
+- **Scale out web instances** when one of these holds for 5 min:
+  - instance CPU above 70 %;
+  - p95 above the latency target while PostgreSQL CPU is below 60 %;
+  - pool wait p95 (Server-Timing `db-wait`) above 50 ms while PostgreSQL CPU is below 60 %.
+- **Do not scale out** when PostgreSQL CPU is the limit (above 70 %): more instances only add connections and contention (§37.8).
+- **Upper bound:** the connection budget (§37.10), not CPU.
+- **Scale in:** send SIGTERM to one instance at a time, and readiness drains it (§37.3). Streams reconnect, and there is no stickiness to preserve.
+- **Workers:** scale on `oldestDueSeconds` above 60 s (from `npm run worker -- --stats`), not on CPU.
+- **Streams:** open streams per instance (in the readiness body) is a capacity signal, not a scaling trigger. Each stream costs memory only, not a database connection.
+
+### 37.17 Failure modes
+
+| Failure                                                 | Effect                                                                          | Recovery                                                                                                                         |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| Instance crash                                          | Its in-flight requests fail (the balancer retries GETs); its streams drop       | The balancer removes it on connection errors, clients reconnect (≈ 0.3 s, §37.9), and its jobs are re-claimed after lease expiry |
+| Instance stopped gracefully                             | Nothing visible (§37.9)                                                         | —                                                                                                                                |
+| Instance alive, database unreachable                    | Readiness 503 `unavailable`, liveness 200                                       | The balancer stops routing to it; do not restart it (DEPLOYMENT §6)                                                              |
+| LISTEN connection lost on one instance                  | Its streams get `degraded`, and clients fall back to polling                    | The hub reconnects and `live` resumes                                                                                            |
+| PostgreSQL restart                                      | No instance is ready; jobs fail and retry with backoff                          | Automatic once connections return                                                                                                |
+| Load-balancer health checks too slow                    | Requests reach a draining instance                                              | They are still served during `SHUTDOWN_DRAIN_MS`; keep the drain ≥ check interval × unhealthy threshold                          |
+| Connection budget exceeded                              | New connections fail (`53300`); requests answer 500/503                         | Lower pool sizes, use separate workers, or add PgBouncer (§37.10)                                                                |
+| Mixed releases with an incompatible migration           | Old instances fail on the new schema                                            | Ship only expand/contract migrations in rolling releases (DEPLOYMENT §4)                                                         |
+| Proxy that does not abort upstream on client disconnect | Event streams stay open on the instances until their next heartbeat write fails | Configure the proxy (OPERATIONS §10)                                                                                             |
+
+### 37.18 Remaining (NOT MEASURED)
+
+- Separate hosts: the ≈ 130 req/s plateau belongs to this machine.
+- A real nginx, HAProxy or cloud load balancer: a 90-line test balancer was used.
+- Network partitions.
+- PgBouncer with several instances.
+- 404s for static chunks during a mixed-release rollout.
+- A write in flight during a hard kill.

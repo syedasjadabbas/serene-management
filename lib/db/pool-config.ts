@@ -67,3 +67,46 @@ export function pgPoolConfig(settings: DatabaseSettings): PoolConfig {
         }),
   };
 }
+
+export interface BudgetInput {
+  /** PostgreSQL max_connections and superuser_reserved_connections. */
+  maxConnections: number;
+  superuserReserved: number;
+  /** Kept free for migrations, backups, monitoring and administrators. */
+  adminReserve?: number;
+  poolMax: number;
+  realtime: boolean;
+  /** JOB_WORKER=inline: the worker's bundle has its own pool (lib/db/prisma.ts) and a LISTEN connection. */
+  inlineWorker: boolean;
+  /** Separate `npm run worker` processes (one pool + one LISTEN each). */
+  workerProcesses?: number;
+  /** Extra instances alive at once during a rolling update. */
+  surge?: number;
+}
+
+export interface ConnectionBudget {
+  usable: number;
+  perInstance: number;
+  perWorkerProcess: number;
+  workers: number;
+  /** Application instances that fit, with the surge headroom kept free. */
+  instances: number;
+}
+
+/**
+ * Worst-case PostgreSQL connections of a deployment without PgBouncer
+ * (docs/SCALABILITY.md §37.10). Per application instance: the route bundle's
+ * pool, plus with the inline worker a second pool and its LISTEN connection,
+ * plus the realtime LISTEN connection. Idle pooled connections close after
+ * DATABASE_POOL_IDLE_TIMEOUT_MS, so the steady state is lower; the budget is
+ * for the peak.
+ */
+export function connectionBudget(input: BudgetInput): ConnectionBudget {
+  const usable = input.maxConnections - input.superuserReserved - (input.adminReserve ?? 10);
+  const perInstance =
+    input.poolMax + (input.realtime ? 1 : 0) + (input.inlineWorker ? input.poolMax + 1 : 0);
+  const perWorkerProcess = input.poolMax + 1;
+  const workers = (input.workerProcesses ?? 0) * perWorkerProcess;
+  const instances = Math.max(0, Math.floor((usable - workers) / perInstance) - (input.surge ?? 1));
+  return { usable, perInstance, perWorkerProcess, workers, instances };
+}

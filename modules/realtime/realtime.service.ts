@@ -8,6 +8,7 @@ import { hasPermission } from "@/lib/permissions/evaluate";
 import { realtimeHub } from "@/lib/realtime/hub";
 import { STREAM_MAX_MS, openEventStream } from "@/lib/realtime/stream";
 import { topicsFor } from "@/lib/realtime/topics";
+import { isDraining } from "@/lib/lifecycle/shutdown";
 
 /**
  * Live updates of one property for the signed-in user (docs/SCALABILITY.md
@@ -20,6 +21,9 @@ export function openPropertyEvents(ctx: PropertyContext, request: NextRequest): 
   // Switched off: 204 tells an event-stream client not to reconnect; the
   // screens keep polling.
   if (serverEnv().REALTIME_ENABLED === "0") return new Response(null, { status: 204 });
+  // Shutting down: no new streams here; the client retries with backoff and
+  // the load balancer sends it to another instance.
+  if (isDraining()) return new Response(null, { status: 503, headers: { "retry-after": "1" } });
 
   const topics = topicsFor((permission) => hasPermission(ctx.access, ctx.propertyId, permission));
   // The token was verified by the route; only its expiry is read here.

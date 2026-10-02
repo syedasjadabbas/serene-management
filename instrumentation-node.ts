@@ -15,6 +15,17 @@ try {
   process.exit(1);
 }
 
+// Graceful shutdown for multi-instance deployment (docs/SCALABILITY.md §37):
+// drains readiness, ends event streams, stops job claims, closes the pools.
+void import("./lib/lifecycle/register")
+  .then(({ registerShutdown }) => registerShutdown())
+  .catch((error: unknown) => {
+    console.error(
+      "Shutdown handler failed to install",
+      error instanceof Error ? error.name : error,
+    );
+  });
+
 // Background job worker inside this process (JOB_WORKER=inline, the default;
 // docs/SCALABILITY.md §33). Started after the environment check passed.
 if (serverEnv().JOB_WORKER === "inline") {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { POOL_IDLE_TIMEOUT_MS, pgPoolConfig } from "@/lib/db/pool-config";
+import { POOL_IDLE_TIMEOUT_MS, connectionBudget, pgPoolConfig } from "@/lib/db/pool-config";
 import { parseServerEnv } from "@/lib/env";
 
 const base = {
@@ -115,5 +115,36 @@ describe("database pool configuration (M19)", () => {
   it("never leaks the connection password into the session options", () => {
     const config = pgPoolConfig(env({ DATABASE_URL: "postgresql://serene:S3cret-Pw@db:5432/x" }));
     expect(config.options).not.toContain("S3cret-Pw");
+  });
+});
+
+describe("connection budget (scalability phase 9)", () => {
+  const pg100 = { maxConnections: 100, superuserReserved: 3 };
+
+  it("counts the inline worker's own pool and both LISTEN connections", () => {
+    // 100 − 3 − 10 = 87 usable; 10 + 1 realtime + (10 + 1) worker = 22 per instance.
+    expect(connectionBudget({ ...pg100, poolMax: 10, realtime: true, inlineWorker: true })).toEqual(
+      { usable: 87, perInstance: 22, perWorkerProcess: 11, workers: 0, instances: 2 },
+    );
+  });
+
+  it("fits more web instances when jobs run in separate worker processes", () => {
+    const budget = connectionBudget({
+      ...pg100,
+      poolMax: 10,
+      realtime: true,
+      inlineWorker: false,
+      workerProcesses: 1,
+    });
+    // (87 − 11) / 11 = 6, minus one surge instance for rolling updates.
+    expect(budget).toMatchObject({ perInstance: 11, workers: 11, instances: 5 });
+  });
+
+  it("keeps the rolling-update surge and never goes negative", () => {
+    const tight = { ...pg100, maxConnections: 30, poolMax: 10, realtime: true, inlineWorker: true };
+    expect(connectionBudget(tight).instances).toBe(0);
+    expect(
+      connectionBudget({ ...pg100, poolMax: 5, realtime: true, inlineWorker: false, surge: 0 }),
+    ).toMatchObject({ perInstance: 6, instances: 14 });
   });
 });

@@ -11,6 +11,7 @@ import { GET as liveRoute } from "@/app/api/health/live/route";
 import { GET as readyRoute } from "@/app/api/health/ready/route";
 import { PrismaClient } from "@/generated/prisma/client";
 import { prisma } from "@/lib/db/prisma";
+import { resetLifecycleForTests, shutdown } from "@/lib/lifecycle/shutdown";
 import { loadGrantedPermissions } from "@/modules/access/access.service";
 import { BootstrapRefused, bootstrapFirstOrganization } from "@/modules/access/bootstrap.service";
 import { createProperty } from "@/modules/properties/properties.service";
@@ -111,6 +112,27 @@ describe("L28 health checks", () => {
       const ready = await call(route, { path: "/api/health/ready" });
       expect(ready.status).toBe(200);
       expect(ready.body).toEqual({ data: { status: "ready" } });
+    }
+  });
+
+  it("fails readiness while draining for shutdown, without touching liveness (phase 9)", async () => {
+    // A fresh lifecycle without hooks: draining must not close this test process's pools.
+    resetLifecycleForTests();
+    const query = vi.spyOn(prisma, "$queryRaw");
+    try {
+      await shutdown("SIGTERM", { drainMs: 0, timeoutMs: 1_000, owner: false, log: () => {} });
+      for (const route of [readyRoute, healthRoute]) {
+        const ready = await call(route, { path: "/api/health/ready" });
+        expect(ready.status).toBe(503);
+        expect(ready.body).toEqual({ status: "draining" });
+      }
+      // Draining answers without asking the database.
+      expect(query).not.toHaveBeenCalled();
+      const live = await call(liveRoute, { path: "/api/health/live" });
+      expect(live.status).toBe(200);
+    } finally {
+      query.mockRestore();
+      resetLifecycleForTests();
     }
   });
 

@@ -27,6 +27,7 @@ Set these in the process environment (systemd unit, Windows service, process man
 | `FIELD_ENCRYPTION_KEY`                    | optional    | When set, 32 random bytes in base64 (`openssl rand -base64 32`). Reserved for encrypting sensitive guest fields.                                                                                                     |
 | `APP_URL`                                 | required    | The public URL users open, `https://…`. Must not be `localhost`, `127.0.0.1`, `0.0.0.0` or `::1`. Used for the same-origin check on writes and for links in operator output.                                         |
 | `MIGRATION_DATABASE_URL`                  | recommended | The schema owner's connection, used only by `db:deploy`, `migrate status` and `ops:backup`. When unset, `DATABASE_URL` is used for everything; `ops:db-check` then warns, because the application runs as the owner. |
+| `READ_DATABASE_URL`                       | optional    | A streaming standby for closed-date reports only; unset (the default) keeps every query on the primary. Prerequisites: OPERATIONS.md §6, SCALABILITY.md §35.                                                         |
 | `DATABASE_POOL_MAX`                       | optional    | Connections per process, 1–50, default 10. Do not raise it to fix slowness (OPERATIONS.md §6).                                                                                                                       |
 | `DATABASE_CONNECT_TIMEOUT_MS`             | optional    | 500–60000, default 5000.                                                                                                                                                                                             |
 | `DATABASE_STATEMENT_TIMEOUT_MS`           | optional    | 1000–600000, default 30000. The night audit commit raises its own limit.                                                                                                                                             |
@@ -73,7 +74,7 @@ What each step does:
 
 - **`npm ci --omit=dev`** installs only runtime dependencies. `postinstall` generates the Prisma client and needs no database credentials. The `prisma` CLI is a runtime dependency on purpose, because it provides client generation and `migrate deploy`. `typescript` still appears in `node_modules` because it is a peer dependency of Prisma, not because of the application.
 - **`npm run build`** runs `next build` and then `build:ops`, which compiles `scripts/ops/*.ts` to `dist/ops/*.mjs` so the operational commands run on plain `node`, without tsx.
-- **`npm start`** runs `next start` on port 3000 (`-p` changes it). Put the reverse proxy in front of it.
+- **`npm start`** runs `scripts/start.mjs`, which starts `next start` on port 3000 (`-p` changes it) with `NEXT_MANUAL_SIG_HANDLE=true`. That hands SIGTERM / SIGINT to the application's graceful shutdown (readiness 503, streams and job claims stop, in-flight requests finish, pools close; [OPERATIONS.md §10](OPERATIONS.md#10-several-instances-and-graceful-shutdown)). Plain `next start` still works, but closes the server at once on a signal. Give the service manager a stop timeout of at least `SHUTDOWN_TIMEOUT_MS` + 5 s (default 30 s). Put the reverse proxy in front of it.
 
 The production path never runs `tsx`, `vitest`, `dotenv` or the development seed, and nothing seeds on startup.
 
@@ -92,6 +93,8 @@ node node_modules/prisma/build/index.js migrate status
 ```
 
 `db:migrate` (`migrate dev`) and `db:reset` are development-only and must never point at production.
+
+**Several instances.** Run `db:deploy` once per release, as its own step, never from each instance; no instance runs migrations at startup. In a rolling update the old release keeps serving while the new one starts, so a migration shipped with a rolling release must be compatible with the previous release (add columns, tables and indexes; drop or rename only in a later release). A migration that is not must be deployed with every instance stopped. Applied migrations are never edited.
 
 Migrations connect as the schema owner (`MIGRATION_DATABASE_URL`). They are **not** transactional per file, and they are never rolled back automatically: the policy is to back up first and fix forward. For the safety checklist (explicit `BEGIN`/`COMMIT`, `CREATE INDEX CONCURRENTLY`, batched backfills, `lock_timeout`) and for what to do when a migration fails, see [OPERATIONS.md §3](OPERATIONS.md#3-migrations).
 
@@ -173,11 +176,11 @@ The demo organization, with its properties, rooms and sample users, comes only f
 
 All three endpoints are public, uncached (`cache-control: no-store`) and carry `x-request-id`.
 
-| Endpoint            | Checks                      | Success                           | Failure                        | Use for                                  |
-| ------------------- | --------------------------- | --------------------------------- | ------------------------------ | ---------------------------------------- |
-| `/api/health/live`  | The process answers. No DB. | 200 `{"data":{"status":"ok"}}`    | No response / 5xx              | Liveness: restart the process if failing |
-| `/api/health/ready` | `SELECT 1`, 2 s timeout     | 200 `{"data":{"status":"ready"}}` | 503 `{"status":"unavailable"}` | Readiness: route traffic only when 200   |
-| `/api/health`       | Same as `/ready`            | Same as `/ready`                  | Same as `/ready`               | Kept for existing monitors (alias)       |
+| Endpoint            | Checks                      | Success                           | Failure                                                                        | Use for                                  |
+| ------------------- | --------------------------- | --------------------------------- | ------------------------------------------------------------------------------ | ---------------------------------------- |
+| `/api/health/live`  | The process answers. No DB. | 200 `{"data":{"status":"ok"}}`    | No response / 5xx                                                              | Liveness: restart the process if failing |
+| `/api/health/ready` | `SELECT 1`, 2 s timeout     | 200 `{"data":{"status":"ready"}}` | 503 `{"status":"unavailable"}`, or `{"status":"draining"}` while shutting down | Readiness: route traffic only when 200   |
+| `/api/health`       | Same as `/ready`            | Same as `/ready`                  | Same as `/ready`                                                               | Kept for existing monitors (alias)       |
 
 A failed readiness check never returns database error details. The server log records the error name and code only, with no connection string or credentials, for example `Readiness check failed { name: 'PrismaClientKnownRequestError', code: '3D000' }`. Do not restart the app when readiness fails and liveness passes, because the database is the problem.
 
@@ -197,6 +200,8 @@ The value must match the real topology:
 Do not expose the Node port directly when `TRUSTED_PROXY_HOPS` > 0.
 
 Also forward `Host` and `X-Forwarded-Proto`. Serve only HTTPS, because cookies are `Secure` in production.
+
+**Load balancer in front of several instances** ([OPERATIONS.md §10](OPERATIONS.md#10-several-instances-and-graceful-shutdown)): no sticky sessions are needed; health-check `/api/health/ready` (unauthenticated) and remove a target on 503; do not buffer `/api/v1/properties/*/events` (server-sent events: `proxy_buffering off`, read timeout above 25 s, the heartbeat interval); abort the upstream request when the client disconnects (the nginx and HAProxy default) so closed event streams do not stay open on the instance; and count every proxy that appends to `X-Forwarded-For` in `TRUSTED_PROXY_HOPS`.
 
 ## 8. Warnings
 

@@ -12,9 +12,16 @@ export interface PoolUsage {
   waitMs: number;
   acquisitions: number;
   opened: number;
+  /** Approved replica-eligible reads by where they ran (lib/db/read-replica.ts). */
+  reads: Partial<Record<"primary" | "replica" | "fallback", number>>;
 }
 
 const current = new AsyncLocalStorage<PoolUsage>();
+
+/** The current request's usage record, when Server-Timing is on. */
+export function currentPoolUsage(): PoolUsage | undefined {
+  return current.getStore();
+}
 
 /** Runs `work` with its pool usage recorded into `usage`. */
 export function withPoolUsage<T>(usage: PoolUsage, work: () => Promise<T>): Promise<T> {

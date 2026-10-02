@@ -3,12 +3,20 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import pg from "pg";
 import { PrismaClient, type Prisma } from "@/generated/prisma/client";
 import { serverEnv } from "@/lib/env";
+import { onShutdown } from "@/lib/lifecycle/shutdown";
 import { pgPoolConfig } from "./pool-config";
 import { instrumentPool } from "./pool-metrics";
 
 /**
- * Single PrismaClient per server process. In development the instance is
- * cached on globalThis so hot reload does not exhaust database connections.
+ * One PrismaClient per server bundle. In development the instance is cached on
+ * globalThis so hot reload does not exhaust database connections.
+ *
+ * In production the instrumentation bundle (inline job worker) and the route
+ * bundles each load this module, so a process can hold two pools of up to
+ * DATABASE_POOL_MAX connections (connectionBudget in ./pool-config). They are
+ * deliberately not shared: each bundle checks errors with `instanceof` against
+ * its own copy of the Prisma error classes. Every client closes its own pool
+ * on shutdown (lib/lifecycle/shutdown.ts).
  */
 function createPrismaClient() {
   const env = serverEnv();
@@ -18,7 +26,11 @@ function createPrismaClient() {
   const pool = new pg.Pool(pgPoolConfig(env));
   if (env.SERVER_TIMING === "1") instrumentPool(pool);
   const adapter = new PrismaPg(pool, { disposeExternalPool: true });
-  return new PrismaClient({ adapter });
+  const client = new PrismaClient({ adapter });
+  const count = globalThis as unknown as { __serenePrismaClients?: number };
+  count.__serenePrismaClients = (count.__serenePrismaClients ?? 0) + 1;
+  onShutdown(`database pool ${count.__serenePrismaClients}`, "close", () => client.$disconnect());
+  return client;
 }
 
 const globalForPrisma = globalThis as unknown as { prisma?: ReturnType<typeof createPrismaClient> };

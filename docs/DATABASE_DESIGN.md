@@ -321,6 +321,31 @@ Nine indexes, each built with `CREATE INDEX CONCURRENTLY` in its own migration (
 
 - `20261220090000_background_jobs`: the durable job queue (ARCHITECTURE D65). Claims are `FOR UPDATE SKIP LOCKED` on the partial index of QUEUED rows; every worker write is fenced on `(locked_by, attempts)`; a handler that commits work locks its job row in the same transaction (lock order business date → run → job for the night audit). The hand-written checks keep the state machine honest even if a statement is wrong: a RUNNING job always carries a lease and no other state does, and `finished_at` marks exactly the terminal states. `payload` and `last_error` are internal; the API exposes `result`, `progress` (stage and counts) and `error_code`/`error_message` only. Finished jobs are pruned after 30 days (`backgroundJobs` retention target). `organization_id` and `property_id` reference their tables (`ON DELETE RESTRICT`); `created_by_id` is a plain actor UUID, like every `*_by_id`.
 
+### Scalability phase 7 notes (read replica)
+
+No schema change. With `READ_DATABASE_URL` set, closed-date reports may read from a streaming standby (ARCHITECTURE D67, SCALABILITY §35). Everything else needs the primary:
+
+- **Writes and sessions.** Every write, transaction, row lock, advisory lock and idempotency key, and every session check.
+- **UNLOGGED tables.** `rate_limit_windows` is not replicated at all (UNLOGGED tables are not written to the WAL).
+- **Data that must be current.** Room, inventory, folio, payment and business-date state, and anything read back after a write.
+
+Closed business dates are safe to read from a replica within the lag limit: postings into them are refused (SM002, the business-date guard), and their statistics are frozen by night audit. A replica needs `hot_standby_feedback = on`, or a `max_standby_streaming_delay` longer than the report statement timeout, so that long report queries are not cancelled by recovery conflicts. Those conflicts surface as `40001` and fall back to the primary.
+
+### Scalability phase 8 notes (guest search)
+
+No schema or index change. Guest search (ARCHITECTURE D68, SCALABILITY §36) uses each existing index for its own branch:
+
+| Branch                                               | Index                                          |
+| ---------------------------------------------------- | ---------------------------------------------- |
+| Name words (`LIKE '%word%'`, 3+ characters)          | `guests_search_name_trgm_idx` (GIN trigram)    |
+| Phone digits                                         | `guests_phone_digits_trgm_idx` (GIN trigram)   |
+| Primary e-mail                                       | `(organization_id, primary_email)`             |
+| Listed e-mail                                        | `guest_contacts (type, value)`                 |
+| Profile number                                       | the unique `(organization_id, profile_number)` |
+| Name order, the bounded window and the keyset cursor | `(organization_id, last_name, first_name)`     |
+
+The cursor is a row comparison `(last_name, first_name, id) > (…)`, equivalent to the former OR form because the three columns are NOT NULL, and it starts the index range. Words shorter than 3 characters cannot use a trigram index; they are served by the window or a scan.
+
 ### Scalability phase notes (index)
 
 `20261130090000_idx_housekeeping_tasks_live` adds `housekeeping_tasks_live_idx` on `(property_id, room_id)`, partial on `status IN ('PENDING', 'IN_PROGRESS', 'PAUSED', 'FAILED_INSPECTION', 'COMPLETED')`, built `CONCURRENTLY` in its own migration. It serves the room board's per-room current-task lookup and the awaiting-inspection count. Without it, each room walked its whole task history: 34 000 of the board's 38 000 buffer reads on a 300-room benchmark property. Evidence is in docs/SCALABILITY.md §7.

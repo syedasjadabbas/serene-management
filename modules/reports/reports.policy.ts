@@ -81,6 +81,12 @@ export const HEAVY_REPORT_KEYS: ReadonlySet<string> = new Set([
   "revenue-by-code",
 ]);
 
+/**
+ * Reports that show the property's current state whatever range is asked
+ * (in-house guests, room status): never read from a replica.
+ */
+export const LIVE_REPORT_KEYS: ReadonlySet<string> = new Set(["in-house", "room-status"]);
+
 /** Rows per JSON page (the CSV export always carries every row). */
 export const REPORT_PAGE_SIZE = 500;
 export const REPORT_PAGE_MAX = 1_000;

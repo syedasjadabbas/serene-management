@@ -29,7 +29,9 @@ export type HubEvent =
       all?: boolean;
     }
   | { kind: "degraded" }
-  | { kind: "live" };
+  | { kind: "live" }
+  /** This instance is shutting down: streams end so clients reconnect elsewhere. */
+  | { kind: "shutdown" };
 
 type Listener = (event: HubEvent) => void;
 
@@ -99,6 +101,11 @@ export class RealtimeHub {
     return () => {
       this.listeners.delete(listener);
     };
+  }
+
+  /** Ends every open stream with `reauth` (graceful shutdown, before stop()). */
+  endStreams(): void {
+    this.emit({ kind: "shutdown" });
   }
 
   /** Closes the connection for good (tests, shutdown). */
@@ -190,6 +197,11 @@ export class RealtimeHub {
 }
 
 const holder = globalThis as unknown as { __sereneRealtimeHub?: RealtimeHub };
+
+/** The hub if this process created one (shutdown must not open a connection). */
+export function existingRealtimeHub(): RealtimeHub | undefined {
+  return holder.__sereneRealtimeHub;
+}
 
 /** The process-wide hub (one LISTEN connection per application instance). */
 export function realtimeHub(): RealtimeHub {

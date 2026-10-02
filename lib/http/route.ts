@@ -4,6 +4,7 @@ import type { NextRequest } from "next/server";
 import { z } from "zod";
 import { ACCESS_COOKIE } from "@/lib/auth/cookies";
 import { type PoolUsage, withPoolUsage } from "@/lib/db/pool-metrics";
+import { instanceId, trackRequest } from "@/lib/lifecycle/shutdown";
 import { verifyAccessToken } from "@/lib/auth/tokens";
 import { serverEnv } from "@/lib/env";
 import { type Permission, isHighRisk } from "@/lib/permissions/catalog";
@@ -224,6 +225,15 @@ function serverTiming(
     ...(pool
       ? [`db-acquire;dur=${pool.waitMs.toFixed(1)};desc="${pool.acquisitions}/${pool.opened}"`]
       : []),
+    // Where replica-eligible reads ran: primary (no replica or not eligible),
+    // replica, or fallback (replica unhealthy, lagging or failed). No hosts.
+    ...(pool && Object.keys(pool.reads).length > 0
+      ? [
+          `db-read;desc="${Object.entries(pool.reads)
+            .map(([route, count]) => `${route}=${count}`)
+            .join(" ")}"`,
+        ]
+      : []),
     `total;dur=${total.toFixed(1)}`,
   ].join(", ");
 }
@@ -236,7 +246,7 @@ async function run(
   const started = performance.now();
   const meta = requestMeta(request);
   const pool: PoolUsage | null = serverTimingEnabled()
-    ? { waitMs: 0, acquisitions: 0, opened: 0 }
+    ? { waitMs: 0, acquisitions: 0, opened: 0, reads: {} }
     : null;
   const handle = async () => {
     if (MUTATING.has(request.method)) {
@@ -246,7 +256,8 @@ async function run(
     return execute(meta);
   };
   try {
-    const result = pool ? await withPoolUsage(pool, handle) : await handle();
+    // Counted for the graceful shutdown (lib/lifecycle/shutdown.ts).
+    const result = await trackRequest(() => (pool ? withPoolUsage(pool, handle) : handle()));
     const response =
       result instanceof Response
         ? result
@@ -258,10 +269,13 @@ async function run(
     const eventStream = response.headers.get("content-type")?.startsWith("text/event-stream");
     response.headers.set("cache-control", eventStream ? "no-store, no-transform" : "no-store");
     const timing = serverTiming(request, started, pool);
+    // Which instance answered (load tests, multi-instance QA); never in normal operation.
+    if (timing) response.headers.set("x-instance-id", instanceId());
     if (timing) response.headers.set("server-timing", timing);
     return response;
   } catch (error) {
     const headers: Record<string, string> = { "cache-control": "no-store" };
+    if (serverTimingEnabled()) headers["x-instance-id"] = instanceId();
     if (
       error instanceof AppError &&
       error.code === "RATE_LIMITED" &&

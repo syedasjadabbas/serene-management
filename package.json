@@ -6,7 +6,7 @@
     "dev": "node node_modules/next/dist/bin/next dev",
     "build": "node node_modules/next/dist/bin/next build && npm run build:ops",
     "build:ops": "node scripts/ops/build.mjs",
-    "start": "node node_modules/next/dist/bin/next start",
+    "start": "node scripts/start.mjs",
     "lint": "node node_modules/eslint/bin/eslint.js .",
     "typecheck": "node node_modules/next/dist/bin/next typegen && node node_modules/typescript/bin/tsc --noEmit",
     "format": "node node_modules/prettier/bin/prettier.cjs --write .",

@@ -32,31 +32,184 @@ export interface GuestSearchTerms {
  * (last name, first name, id). Name words use the trigram index on
  * search_name (every word must appear, any order); e-mail is exact (primary
  * or any listed e-mail); phone digits use the trigram index on phone_digits.
+ *
+ * With search terms the page comes from one statement that picks the
+ * cheapest of three exact ways (scalability phase 8, docs/SCALABILITY.md §36):
+ *
+ * 1. Few matches: at most SEARCH_CANDIDATE_CAP matching guests, found one
+ *    branch of the OR at a time on its own index. If that is all of them,
+ *    the page is sorted from them (rare names, e-mail, profile, phone).
+ * 2. Many matches early in name order: the first SEARCH_WINDOW guests of the
+ *    organization after the cursor, filtered by status and terms. If at
+ *    least `limit` match, they are the page: every guest beyond the window
+ *    sorts after all of them.
+ * 3. Otherwise: every match by branch, deduplicated, sorted.
+ *
+ * Each step runs only when the previous one could not answer (one-time
+ * filters). The former single statement with the OR made PostgreSQL walk the
+ * name index from the start and test each guest. Names cluster by last name
+ * (search_name starts with it), so a common surname late in the alphabet,
+ * a full name or an e-mail read up to the whole table: 135,000–300,000
+ * buffers and 0.1–2.6 s per page on 300,000 guests.
  */
-export function searchGuests(
+export async function searchGuests(
   tx: Tx,
   organizationId: string,
   status: "ACTIVE" | "INACTIVE",
   terms: GuestSearchTerms | null,
   after: { lastName: string; firstName: string; id: string } | null,
   limit: number,
+  /** Tests lower these to exercise every step on small data. */
+  sizes: { window?: number; cap?: number } = {},
+): Promise<GuestSummaryRow[]> {
+  if (!terms) return listGuests(tx, organizationId, status, after, limit);
+  const window = sizes.window ?? SEARCH_WINDOW;
+  const cap = sizes.cap ?? SEARCH_CANDIDATE_CAP;
+  const eligible = Prisma.sql`g."organization_id" = ${organizationId}::uuid
+    AND g."status" = ${status}::"profile_status" AND g."deleted_at" IS NULL`;
+  const afterCursor = after
+    ? Prisma.sql`AND (g."last_name" > ${after.lastName}
+        OR (g."last_name" = ${after.lastName} AND g."first_name" > ${after.firstName})
+        OR (g."last_name" = ${after.lastName} AND g."first_name" = ${after.firstName}
+            AND g."id" > ${after.id}::uuid))`
+    : Prisma.empty;
+  // The same condition as a row comparison (the columns are NOT NULL), which
+  // lets the window start at the cursor in the name index instead of walking
+  // to it from the beginning.
+  const windowCursor = after
+    ? Prisma.sql`AND (g."last_name", g."first_name", g."id")
+        > (${after.lastName}::varchar, ${after.firstName}::varchar, ${after.id}::uuid)`
+    : Prisma.empty;
+  // The OR of the terms (as before): name words, e-mail, phone digits,
+  // profile number, guests of a matching confirmation number.
+  const or: Prisma.Sql[] = [];
+  const branches: Prisma.Sql[] = [];
+  const cols = Prisma.sql`g."id", g."profile_number", g."title", g."first_name", g."last_name",
+    g."primary_email", g."primary_phone", g."nationality_code", g."is_restricted", g."vip_level_id"`;
+  const branch = (from: Prisma.Sql, condition: Prisma.Sql) =>
+    Prisma.sql`SELECT ${cols} FROM ${from} WHERE ${eligible} ${afterCursor} AND ${condition}`;
+  const guests = Prisma.sql`"guests" g`;
+  if (terms.nameTokens.length > 0) {
+    const words = Prisma.join(
+      terms.nameTokens.map((token) => Prisma.sql`g."search_name" LIKE ${`%${token}%`}`),
+      " AND ",
+    );
+    or.push(Prisma.sql`(${words})`);
+    branches.push(branch(guests, words));
+  }
+  if (terms.raw.includes("@")) {
+    const email = terms.raw.toLowerCase();
+    or.push(Prisma.sql`g."primary_email" = ${email}`);
+    branches.push(branch(guests, Prisma.sql`g."primary_email" = ${email}`));
+    const listed = Prisma.sql`EXISTS (SELECT 1 FROM "guest_contacts" c
+      WHERE c."guest_id" = g."id" AND c."type" = 'EMAIL' AND c."value" = ${email})`;
+    or.push(listed);
+    branches.push(
+      branch(
+        Prisma.sql`"guest_contacts" c JOIN "guests" g ON g."id" = c."guest_id"`,
+        Prisma.sql`c."type" = 'EMAIL' AND c."value" = ${email}`,
+      ),
+    );
+  }
+  if (terms.digits.length >= 4) {
+    const phone = Prisma.sql`g."phone_digits" LIKE ${`%${terms.digits}%`}`;
+    or.push(phone);
+    branches.push(branch(guests, phone));
+  }
+  const profile = Prisma.sql`g."profile_number" = ${terms.raw.toUpperCase()}`;
+  or.push(profile);
+  branches.push(branch(guests, profile));
+  if (terms.confirmationGuestIds.length > 0) {
+    const ids = Prisma.sql`g."id" = ANY(${terms.confirmationGuestIds}::uuid[])`;
+    or.push(ids);
+    branches.push(branch(guests, ids));
+  }
+  const order = Prisma.sql`"last_name", "first_name", "id"`;
+  const rows = await tx.$queryRaw<SearchRow[]>`
+    WITH "capped" AS MATERIALIZED (
+      SELECT * FROM (${Prisma.join(branches, " UNION ALL ")}) m LIMIT ${cap + 1}
+    ), "few" AS MATERIALIZED (
+      SELECT count(*) <= ${cap} AS "yes" FROM "capped"
+    ), "windowed" AS MATERIALIZED (
+      SELECT g."id", g."profile_number", g."title", g."first_name", g."last_name",
+             g."primary_email", g."primary_phone", g."nationality_code", g."is_restricted",
+             g."vip_level_id"
+      FROM (
+        SELECT g.* FROM "guests" g
+        WHERE g."organization_id" = ${organizationId}::uuid ${windowCursor}
+        ORDER BY g."last_name", g."first_name", g."id"
+        LIMIT ${window}
+      ) g
+      WHERE NOT (SELECT "yes" FROM "few")
+        AND g."status" = ${status}::"profile_status" AND g."deleted_at" IS NULL
+        AND (${Prisma.join(or, " OR ")})
+      ORDER BY ${order}
+      LIMIT ${limit}
+    ), "page" AS (
+      SELECT * FROM (SELECT DISTINCT * FROM "capped" ORDER BY ${order} LIMIT ${limit}) m
+      WHERE (SELECT "yes" FROM "few")
+      UNION ALL
+      SELECT * FROM "windowed"
+      WHERE NOT (SELECT "yes" FROM "few") AND (SELECT count(*) FROM "windowed") >= ${limit}
+      UNION ALL
+      SELECT * FROM (
+        SELECT * FROM (${Prisma.join(branches, " UNION ")}) m
+        ORDER BY ${order}
+        LIMIT ${limit}
+      ) m
+      WHERE NOT (SELECT "yes" FROM "few") AND (SELECT count(*) FROM "windowed") < ${limit}
+    )
+    SELECT p."id", p."profile_number", p."title", p."first_name", p."last_name",
+           p."primary_email", p."primary_phone", p."nationality_code", p."is_restricted",
+           v."code" AS "vip_code", v."name" AS "vip_name"
+    FROM "page" p
+    LEFT JOIN "vip_levels" v ON v."id" = p."vip_level_id"
+    ORDER BY p."last_name", p."first_name", p."id"`;
+  return rows.map((row) => ({
+    id: row.id,
+    profileNumber: row.profile_number,
+    title: row.title,
+    firstName: row.first_name,
+    lastName: row.last_name,
+    primaryEmail: row.primary_email,
+    primaryPhone: row.primary_phone,
+    nationalityCode: row.nationality_code,
+    isRestricted: row.is_restricted,
+    vipLevel: row.vip_code === null ? null : { code: row.vip_code, name: row.vip_name! },
+  }));
+}
+
+/**
+ * Step 1 (few matches): up to this many candidates are collected; more means
+ * "many matches". Step 2 (early in name order): this many guests are looked
+ * at in page order. Measured on 300,000 guests (docs/SCALABILITY.md §36).
+ */
+export const SEARCH_CANDIDATE_CAP = 1_000;
+export const SEARCH_WINDOW = 3_000;
+
+interface SearchRow {
+  id: string;
+  profile_number: string;
+  title: string | null;
+  first_name: string;
+  last_name: string;
+  primary_email: string | null;
+  primary_phone: string | null;
+  nationality_code: string | null;
+  is_restricted: boolean;
+  vip_code: string | null;
+  vip_name: string | null;
+}
+
+/** The guest list without search terms (name order from the index). */
+function listGuests(
+  tx: Tx,
+  organizationId: string,
+  status: "ACTIVE" | "INACTIVE",
+  after: { lastName: string; firstName: string; id: string } | null,
+  limit: number,
 ) {
   const and: Prisma.GuestWhereInput[] = [{ organizationId, status, deletedAt: null }];
-  if (terms) {
-    const or: Prisma.GuestWhereInput[] = [];
-    if (terms.nameTokens.length > 0) {
-      or.push({ AND: terms.nameTokens.map((token) => ({ searchName: { contains: token } })) });
-    }
-    if (terms.raw.includes("@")) {
-      const email = terms.raw.toLowerCase();
-      or.push({ primaryEmail: email });
-      or.push({ contacts: { some: { type: "EMAIL", value: email } } });
-    }
-    if (terms.digits.length >= 4) or.push({ phoneDigits: { contains: terms.digits } });
-    or.push({ profileNumber: terms.raw.toUpperCase() });
-    if (terms.confirmationGuestIds.length > 0) or.push({ id: { in: terms.confirmationGuestIds } });
-    and.push({ OR: or });
-  }
   if (after) {
     and.push({
       OR: [
