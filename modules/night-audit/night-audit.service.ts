@@ -1234,7 +1234,7 @@ export async function listRuns(
 ): Promise<{ items: RunListItem[]; meta: CursorPageMeta }> {
   let cursor: { c: string; i: string } | null = null;
   if (query.cursor) {
-    cursor = decodeCursor(query.cursor, ["c", "i"]) as { c: string; i: string } | null;
+    cursor = decodeCursor(query.cursor, ["c", "i"], { c: "timestamp" }) as { c: string; i: string } | null;
     if (!cursor) {
       throw new AppError("VALIDATION_FAILED", "Invalid cursor", {
         fields: { cursor: ["Invalid cursor"] },

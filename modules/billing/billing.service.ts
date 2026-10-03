@@ -1833,7 +1833,7 @@ export async function listLedger(
   if (!ref) throw notFound("Folio");
   let after: { postedAt: Date; id: string } | null = null;
   if (query.cursor) {
-    const decoded = decodeCursor(query.cursor, ["t", "i"] as const);
+    const decoded = decodeCursor(query.cursor, ["t", "i"] as const, { t: "timestamp" });
     const postedAt = decoded ? new Date(decoded.t) : null;
     if (!decoded || !postedAt || Number.isNaN(postedAt.getTime())) {
       throw new AppError("VALIDATION_FAILED", "Invalid cursor", {

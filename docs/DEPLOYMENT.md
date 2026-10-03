@@ -1,6 +1,11 @@
 # Deployment
 
-How to install, configure, start and verify SERENE MANAGEMENT on a server. The target is a single Node.js process behind a reverse proxy (for example nginx) with a **native PostgreSQL** installation. **Docker is not used.** There is no Redis, no background worker and no SSE. Everything runs in the one Next.js process and the database.
+How to install, configure, start and verify SERENE MANAGEMENT on servers. **Docker is not used** and PostgreSQL runs natively. Two layouts are supported:
+
+- **Single server:** one Node.js process (web and background jobs, `JOB_WORKER=inline`) behind a TLS reverse proxy, with PostgreSQL on the same or another host.
+- **Production topology (§11):** a TLS reverse proxy / load balancer in front of two or more stateless web instances (`JOB_WORKER=off`), separate worker processes (`npm run worker`), one shared PostgreSQL. Sessions, rate limits, jobs and live-update fan-out live in PostgreSQL, so no sticky sessions, Redis or broker are needed. Live updates use server-sent events, which the proxy must not buffer.
+
+PgBouncer and a read replica are optional and enabled only when provisioned (OPERATIONS.md §6). The full variable checklist is §10, the reference proxy and service configuration §11, and the release rehearsal of v1.0.0-rc1 §12.
 
 Related: [OPERATIONS.md](OPERATIONS.md) (backups, restore drill, migration policy, database roles, retention, pool settings, scheduling, CI), [ARCHITECTURE.md](ARCHITECTURE.md) (D44 client IP, D48 deployment, D50–D53 operations), [DATABASE_DESIGN.md](DATABASE_DESIGN.md), [RBAC.md](RBAC.md).
 
@@ -42,7 +47,9 @@ Invalid server environment:
   → at APP_URL
 ```
 
-Messages never contain the values. `next build` only applies the basic format rules, so the build host does not need production secrets. Development and test keep convenient defaults: `APP_URL` falls back to `http://localhost:3000` and `TRUSTED_PROXY_HOPS` to `0`.
+Messages never contain the values. `next build` only applies the basic format rules, so the build host does not need production secrets, **but it needs format-valid placeholders**: page-data collection loads the database module, and the build fails with `Invalid server environment … DATABASE_URL / AUTH_ACCESS_TOKEN_SECRET / AUTH_REFRESH_TOKEN_SECRET` when they are absent. On a clean build host set throwaway values for the build only, for example `DATABASE_URL=postgresql://build:build@127.0.0.1:5432/build` and two different random 32+ character strings for the auth secrets (CI writes a throwaway `.env` for the same reason). They are not used at run time and must not be the production values. Development and test keep convenient defaults: `APP_URL` falls back to `http://localhost:3000` and `TRUSTED_PROXY_HOPS` to `0`.
+
+**What validation cannot catch.** It refuses placeholders, weak or identical secrets, `http`/localhost `APP_URL` and a missing `TRUSTED_PROXY_HOPS` (all verified against the release, §12). It cannot know where a random secret came from: secrets copied from a developer's `.env` pass. Generate every production secret on the production side (§10) and never copy a development `.env` to a server.
 
 ## 3. Install, build, start
 
@@ -61,7 +68,7 @@ npm start
 
 **B. Build elsewhere, ship the artifacts**
 
-On the build host run `npm ci` and `npm run build`. Then copy these to the server: `package.json`, `package-lock.json`, `prisma.config.ts`, `next.config.ts`, `prisma/`, `.next/` (without `.next/cache` and `.next/dev`), `dist/ops/` and `public/` (if present). On the server run:
+On the build host check out the release tag (or `git archive <tag>`; on Windows use `git -c core.autocrlf=false archive …`, otherwise text files are exported with CRLF and the CI-workflow test fails), set the build placeholders (§2), and run `npm ci` and `npm run build`. Then copy these to the server: `package.json`, `package-lock.json`, `prisma.config.ts`, `next.config.ts`, `prisma/`, `.next/` (without `.next/cache` and `.next/dev`), `dist/ops/` and `public/` (if present). On the server run:
 
 ```bash
 npm ci --omit=dev
@@ -261,3 +268,201 @@ Use this for every release; the first installation follows the same steps plus s
     - Confirm the next scheduled backup and maintenance runs succeed.
     - After the next night audit, check that the business date rolled and that `ops:db-check` is still clean.
     - Record the release, the backup file name and any issues.
+
+## 10. Production configuration checklist
+
+Every variable the release reads (`lib/env.ts`), with the production rule. **W** = web instances, **K** = worker processes. Keep the file that holds them (`EnvironmentFile=` in systemd, or the service manager's secret store) readable only by the service account (mode 600). Never print the values; generate secrets on the production side with `openssl rand -base64 48`.
+
+| Variable                                                                                                  | W   | K   | Production value / rule                                                                                                                                            | Enforced at start                          |
+| --------------------------------------------------------------------------------------------------------- | --- | --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------ |
+| `NODE_ENV`                                                                                                | ✓   | ✓   | `production`                                                                                                                                                       | —                                          |
+| `APP_URL`                                                                                                 | ✓   | ✓   | The canonical public `https://` origin. Writes are refused unless `Origin` equals it; cookies are `__Host-` and `Secure`                                           | https, not localhost                       |
+| `DATABASE_URL`                                                                                            | ✓   | ✓   | **Runtime role** (not the schema owner) on the production database. Add `?sslmode=verify-full&sslrootcert=…` when PostgreSQL is on another host                    | real password                              |
+| `MIGRATION_DATABASE_URL`                                                                                  | —   | —   | Schema owner, only where `db:deploy` and `ops:backup` run; never in the web or worker environment                                                                  | URL format                                 |
+| `AUTH_ACCESS_TOKEN_SECRET`                                                                                | ✓   | ✓   | 48 random bytes, base64; the same value on every instance                                                                                                          | ≥ 32 characters, random, not a placeholder |
+| `AUTH_REFRESH_TOKEN_SECRET`                                                                               | ✓   | ✓   | Different 48 random bytes; the same on every instance. Rotating it signs everyone out                                                                              | differs from the access secret             |
+| `AUTH_ACCESS_TOKEN_TTL_SECONDS`                                                                           | ✓   | ✓   | Default 900                                                                                                                                                        | 60–3600                                    |
+| `AUTH_REFRESH_TOKEN_TTL_SECONDS`                                                                          | ✓   | ✓   | Default 1209600 (14 days)                                                                                                                                          | longer than the access TTL                 |
+| `FIELD_ENCRYPTION_KEY`                                                                                    | ✓   | ✓   | 32 random bytes, base64 (`openssl rand -base64 32`). Reserved for encrypted guest fields: set it now and keep it with the secrets, never with the database backups | 32 bytes when set                          |
+| `TRUSTED_PROXY_HOPS`                                                                                      | ✓   | ✓   | Proxies that append to `X-Forwarded-For` (one TLS load balancer: `1`; CDN + load balancer: `2`). Instances must be reachable only through that chain               | must be set                                |
+| `METRICS_TOKEN`                                                                                           | ✓   | ✓   | 36+ random bytes: the scraper's bearer token. Unset = `/api/metrics` answers 404                                                                                   | random when set                            |
+| `INSTANCE_ID`                                                                                             | ✓   | ✓   | Unique per process, e.g. `web-1`, `worker-1` (logs and metrics; no secrets)                                                                                        | pattern                                    |
+| `JOB_WORKER`                                                                                              | ✓   | ✓   | `off` on web instances when separate workers run; `inline` in worker processes and on a single server                                                              | enum                                       |
+| `JOB_WORKER_CONCURRENCY`, `JOB_LEASE_MS`, `JOB_POLL_INTERVAL_MS`                                          | —   | ✓   | Defaults 1 / 60000 / 5000                                                                                                                                          | ranges                                     |
+| `RATE_LIMIT_STORE`                                                                                        | ✓   | —   | `postgres` (default). `memory` only with a single instance: the application cannot detect other instances, so this is an operator check                            | enum only                                  |
+| `REALTIME_ENABLED`                                                                                        | ✓   | —   | `1` (default); `0` makes every screen poll                                                                                                                         | enum                                       |
+| `REALTIME_DATABASE_URL`                                                                                   | ✓   | —   | Only with PgBouncer in transaction mode: a direct (session) URL for LISTEN                                                                                         | required in that mode                      |
+| `DATABASE_POOLER`                                                                                         | ✓   | ✓   | `none`, or `pgbouncer-transaction` when `DATABASE_URL` points at PgBouncer (OPERATIONS §6)                                                                         | enum                                       |
+| `DATABASE_POOL_MAX`                                                                                       | ✓   | ✓   | Web 10, workers 4 in the reference topology (budget in §11)                                                                                                        | 1–50                                       |
+| `DATABASE_POOL_MIN`, `DATABASE_POOL_IDLE_TIMEOUT_MS`, `DATABASE_POOL_MAX_LIFETIME_S`                      | ✓   | ✓   | Defaults 0 / 120000 / 0                                                                                                                                            | ranges                                     |
+| `DATABASE_CONNECT_TIMEOUT_MS`, `DATABASE_STATEMENT_TIMEOUT_MS`, `DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_MS` | ✓   | ✓   | Defaults 5000 / 30000 / 60000                                                                                                                                      | ranges                                     |
+| `READ_DATABASE_URL`, `READ_DATABASE_POOL_MAX`, `READ_REPLICA_MAX_LAG_MS`                                  | ✓   | —   | Only when a streaming standby is provisioned (OPERATIONS §6); unset otherwise                                                                                      | URL format                                 |
+| `SEARCH_CONCURRENCY`                                                                                      | ✓   | —   | Default 3                                                                                                                                                          | 1–8                                        |
+| `REPORT_HEAVY_CONCURRENCY`, `REPORT_HEAVY_WAIT_MS`                                                        | ✓   | —   | Defaults 1 / 30000                                                                                                                                                 | ranges                                     |
+| `SHUTDOWN_DRAIN_MS`, `SHUTDOWN_TIMEOUT_MS`                                                                | ✓   | ✓   | 5000 / 25000; `SHUTDOWN_DRAIN_MS` ≥ health-check interval × unhealthy threshold                                                                                    | ranges                                     |
+| `SLOW_REQUEST_MS`                                                                                         | ✓   | —   | Default 2000                                                                                                                                                       | range                                      |
+| `SERVER_TIMING`                                                                                           | ✓   | —   | **`0` (the default) in production.** `1` sends per-request timings and the instance id to clients: load tests only                                                 | enum                                       |
+| `NEXT_MANUAL_SIG_HANDLE`                                                                                  | ✓   | —   | Set by `npm start` (`scripts/start.mjs`): start web instances through it, not plain `next start`                                                                   | —                                          |
+| `BOOTSTRAP_*`                                                                                             | —   | —   | Only for the single `ops:bootstrap` run (§5.2); never in a service environment                                                                                     | —                                          |
+| `SEED_DEMO`, `SEED_DEMO_PASSWORD`                                                                         | —   | —   | Never in production (the demo seed refuses `NODE_ENV=production`)                                                                                                  | refused                                    |
+
+Offline mode needs no server variable: the read-only offline copy lives in the browser (OFFLINE_ARCHITECTURE.md).
+
+## 11. Reference production topology
+
+```
+Internet ──▶ DNS pms.<hotel-domain> ──▶ TLS load balancer (nginx / HAProxy / cloud LB; 80 → 301 https)
+                                         │  X-Forwarded-For (append), X-Forwarded-Proto, X-Request-Id
+                          ┌──────────────┴──────────────┐
+                    web-1 :3000 (JOB_WORKER=off)   web-2 :3000 (JOB_WORKER=off)      ← private network only
+                          └──────────────┬──────────────┘
+                     PostgreSQL 17/18 (runtime role) ◀── worker-1, worker-2 (npm run worker, metrics :9101)
+                                         ▲
+                     backups: ops:backup (schema owner) → gpg → off-host storage
+Monitoring: Prometheus scrapes /api/metrics on each web instance and /metrics on each worker directly (bearer token)
+```
+
+**Connection budget** (OPERATIONS §6; `ops:db-check` prints it): 2 web × (10 + 1 LISTEN) + 2 workers × (4 + 1) + one web instance of rolling-update surge (11) + 10 for migrations, backups, monitoring and administrators = 53, inside `max_connections` 100 − 3 reserved. Give the runtime role a `CONNECTION LIMIT` (for example 60) so a runaway pool cannot exhaust the server.
+
+**Database roles.** The schema owner and the runtime role are separate (OPERATIONS §4). Only role creation needs a superuser. After that, the owner runs the migrations and the grants in `scripts/db/runtime-grants.sql`, except its final `ALTER ROLE … SET` lines: those need `CREATEROLE` and belong in the superuser step. When PostgreSQL is on another host, enable `ssl = on`, allow only `hostssl … scram-sha-256` in `pg_hba.conf` for both roles, and use `sslmode=verify-full` in the URLs.
+
+**nginx.** Open-source nginx has passive health checks only. To drain an instance, remove it from `upstream` and reload before stopping it, or use HAProxy or a cloud load balancer with active readiness checks.
+
+```nginx
+upstream serene_web {
+    server 10.0.0.11:3000 max_fails=2 fail_timeout=10s;
+    server 10.0.0.12:3000 max_fails=2 fail_timeout=10s;
+    keepalive 32;
+}
+server {
+    listen 80;
+    server_name pms.example-hotel.com;
+    location /.well-known/acme-challenge/ { root /var/www/acme; }
+    location / { return 301 https://$host$request_uri; }
+}
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name pms.example-hotel.com;
+    ssl_certificate     /etc/letsencrypt/live/pms.example-hotel.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/pms.example-hotel.com/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_cache shared:SSL:10m;
+    client_max_body_size 1m;                 # the application also refuses larger JSON bodies with 413
+    keepalive_timeout 75s;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;   # TRUSTED_PROXY_HOPS=1
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Request-Id $request_id;
+    proxy_connect_timeout 5s;
+    proxy_read_timeout 75s;
+    proxy_next_upstream error timeout;        # nginx never retries non-idempotent requests by default
+    # Security headers (HSTS, CSP, X-Frame-Options, nosniff, COOP, Referrer/Permissions-Policy) come from the application.
+
+    location ~ ^/api/v1/properties/[^/]+/events$ {      # server-sent events
+        proxy_pass http://serene_web;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 120s;              # longer than the 25 s heartbeat
+    }
+    location = /api/metrics { return 404; }   # scrape instances directly, never through the public proxy
+    location / { proxy_pass http://serene_web; }
+}
+```
+
+**HAProxy** (active readiness checks; it drains an instance automatically when it answers 503 `draining`):
+
+```haproxy
+backend serene_web
+    option httpchk GET /api/health/ready
+    http-check expect status 200
+    default-server inter 1s fall 2 rise 2
+    timeout server 120s                       # covers the SSE heartbeat (25 s)
+    http-request set-header X-Forwarded-Proto https
+    option forwardfor                          # appends X-Forwarded-For; TRUSTED_PROXY_HOPS=1
+    server web1 10.0.0.11:3000 check
+    server web2 10.0.0.12:3000 check
+```
+
+Validate the real file with `nginx -t` or `haproxy -c -f …` on the proxy host: these examples were not run through either tool (the rehearsal used a stand-in proxy, §12).
+
+**systemd units** (Linux; on Windows use NSSM with `AppStopMethodConsole` and the same timeouts):
+
+```ini
+# /etc/systemd/system/serene-web@.service   (instance name = port, e.g. serene-web@3000)
+[Unit]
+Description=SERENE MANAGEMENT web %i
+After=network-online.target
+[Service]
+User=serene
+WorkingDirectory=/srv/serene/current
+EnvironmentFile=/etc/serene/serene.env
+Environment=INSTANCE_ID=web-%H-%i JOB_WORKER=off
+ExecStart=/usr/bin/node scripts/start.mjs -p %i -H 0.0.0.0
+KillSignal=SIGTERM
+# SHUTDOWN_TIMEOUT_MS + 5 s + margin
+TimeoutStopSec=35
+Restart=on-failure
+NoNewPrivileges=true
+[Install]
+WantedBy=multi-user.target
+
+# /etc/systemd/system/serene-worker@.service   (instance name = metrics port, e.g. serene-worker@9101)
+[Unit]
+Description=SERENE MANAGEMENT worker %i
+After=network-online.target
+[Service]
+User=serene
+WorkingDirectory=/srv/serene/current
+EnvironmentFile=/etc/serene/serene.env
+Environment=INSTANCE_ID=worker-%H-%i JOB_WORKER=inline DATABASE_POOL_MAX=4
+ExecStart=/usr/bin/node --conditions=react-server dist/ops/worker.mjs --metrics-port %i
+KillSignal=SIGTERM
+# The worker waits up to 60 s for running jobs; systemd kills it after this (OPERATIONS §7)
+TimeoutStopSec=90
+Restart=on-failure
+NoNewPrivileges=true
+[Install]
+WantedBy=multi-user.target
+```
+
+`/srv/serene/current` is a symlink to `/srv/serene/releases/<version>`: a deploy or a rollback switches the link and restarts the units one at a time (OPERATIONS §12.2).
+
+**Firewall.** Only the load balancer reaches the web ports, only the monitoring host reaches the metrics ports, and only application hosts, the backup host and administrators reach PostgreSQL (5432).
+
+**Domain and TLS checklist (before go-live).**
+
+- DNS `A`/`AAAA` records for the public name point at the load balancer; keep the TTL low during the first week.
+- A publicly trusted certificate for exactly that name (ACME/Let's Encrypt or the hotel's CA), with automatic renewal and an expiry alert at 14 days.
+- `http://` answers 301 to `https://`, and `APP_URL` is that exact `https://` origin (scheme, host, port).
+- After the first sign-in the browser holds `__Host-sm_at` and `__Host-sm_s`: `Secure; HttpOnly; SameSite=Lax; Path=/`.
+- There are no OAuth or SSO callbacks: sign-in redirects stay on `APP_URL` (`/login?next=…`).
+- The application already sends `Strict-Transport-Security: max-age=63072000; includeSubDomains`. Consider HSTS preload only after the name has served HTTPS correctly for weeks.
+
+## 12. Release rehearsal: v1.0.0-rc1 (2026-10-03)
+
+The exact tag (`cb41640`) was exported with `git archive`, installed with `npm ci`, verified with `npm run verify` (872/872 tests) and `format:check`, then built and pruned (layout A). It ran in the §11 topology on one Windows host:
+
+- a stand-in TLS load balancer (a rehearsal tool modelling the nginx/HAProxy rules above: TLS 1.3, readiness checks, 1 MiB limit, unbuffered SSE, `X-Request-Id`) with a certificate from a private CA;
+- 2 web instances and 2 separate workers;
+- native PostgreSQL 18, on a copy of the demo dataset (fictional guests).
+
+| Area                      | Result                                                                                                                                                                                                                                                                                |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Migrations                | 27 applied, none pending, none failed. Fresh install from an empty database in 3.6 s, then `ops:seed` and `ops:bootstrap` (a second run is refused, exit 2)                                                                                                                           |
+| Drift                     | Live schema vs Prisma schema: one difference, a false positive (PostgreSQL stores the `background_jobs` partial unique index predicate in normalized form)                                                                                                                            |
+| Environment validation    | 7 unsafe configurations refused at start: localhost or http `APP_URL`, missing `TRUSTED_PROXY_HOPS`, placeholder or identical secrets, weak metrics token, placeholder database password. Development secrets are accepted (§2)                                                       |
+| HTTPS and headers         | TLS 1.3 verified against the CA; 301 from http to https; HSTS, nonce CSP, `X-Frame-Options: DENY`, `nosniff`, COOP, Referrer- and Permissions-Policy; a 2 MB body gets 413 at the proxy                                                                                               |
+| Cookies                   | `__Host-sm_at` and `__Host-sm_s`: `Secure`, `HttpOnly`, `SameSite=Lax`, `Path=/`, host-only; cleared on sign-out                                                                                                                                                                      |
+| Smoke test (20 steps)     | Login, property, guest, reservation, availability, arrival, check-in, room move, housekeeping, charge, payment (idempotent retry), check-out, night audit on a separate worker, reports and CSV, search, property switching, sign-out, permission revocation (stream ended): all pass |
+| Browser                   | 32 routes through the proxy: no console, hydration or request errors; 0 axe violations; offline and reconnect work. The `/design-system` catalogue is not served (not-found page, HTTP 200 because the response streams)                                                              |
+| Instance failure          | k6 through the proxy: a hard kill of one instance and a graceful drain of the other under load, 0 failed requests of 19 557 (4 in-flight GETs retried by the proxy)                                                                                                                   |
+| Worker failure            | A worker killed while holding a job: the job was reclaimed after the 60 s lease and finished exactly once. Graceful worker stops exit 0                                                                                                                                               |
+| Database interruption     | Connections refused for 15 s: readiness 503, a clean 503 from the proxy, recovery within 1 s without restarts. A 20 s network partition: 0 failed requests of 14 383; requests completed after it                                                                                     |
+| Proxy restart             | Event streams reconnect within 0.4 s. A screen whose request failed during the outage shows "Cannot reach the server · Retry" until retried (OPERATIONS §10)                                                                                                                          |
+| Rollback and roll-forward | The previous release (`a70992d`, same schema) rolled in and out one instance at a time under load: 0 failed requests of 27 002 and 28 442                                                                                                                                             |
+| Backup and restore        | `ops:backup`, gpg encryption (public key only on the server), off-host copy. Restore drill from the encrypted copy into a new database in 3 s (0.6 MB); row counts identical; an instance on it was ready in 0.5 s and sign-in worked                                                 |
+
+Not covered by the rehearsal (it ran on one host): a real public DNS name and certificate, separate hosts and networks, a real nginx/HAProxy/cloud load balancer, PgBouncer, a read replica, PostgreSQL TLS, real off-site storage, and the dedicated owner/runtime roles (the rehearsal's application role owned the schema, so `ops:db-check --strict` reported its two role warnings).

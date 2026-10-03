@@ -97,7 +97,7 @@ export async function listPropertyAuditLogs(
 ): Promise<{ items: AuditLogView[]; meta: CursorPageMeta }> {
   let after: { createdAt: Date; id: string } | null = null;
   if (query.cursor) {
-    const decoded = decodeCursor(query.cursor, ["c", "i"] as const);
+    const decoded = decodeCursor(query.cursor, ["c", "i"] as const, { c: "timestamp" });
     const createdAt = decoded ? new Date(decoded.c) : null;
     if (!decoded || !createdAt || Number.isNaN(createdAt.getTime())) {
       throw new AppError("VALIDATION_FAILED", "Invalid cursor", {
@@ -183,7 +183,7 @@ export async function listOrganizationAuditLogs(
 
   let after: { createdAt: Date; id: string } | null = null;
   if (query.cursor) {
-    const decoded = decodeCursor(query.cursor, ["c", "i"] as const);
+    const decoded = decodeCursor(query.cursor, ["c", "i"] as const, { c: "timestamp" });
     const createdAt = decoded ? new Date(decoded.c) : null;
     if (!decoded || !createdAt || Number.isNaN(createdAt.getTime())) {
       throw new AppError("VALIDATION_FAILED", "Invalid cursor", {

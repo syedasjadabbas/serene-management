@@ -118,10 +118,12 @@ export function definePropertyRoute<P extends { propertyId: string }, Q = undefi
     params: z.ZodType<P>;
     permission?: Permission;
     /**
-     * Financial commands: the `Idempotency-Key` header is required and passed
-     * to the service as `idempotency` (null on routes without this flag).
+     * Financial commands (`true`): the `Idempotency-Key` header is required and
+     * passed to the service as `idempotency` (null on routes without this flag).
+     * `"optional"` (bookings, PRODUCTION_READINESS P2-3): a key is honoured
+     * when the client sends one, so existing clients without it keep working.
      */
-    idempotent?: boolean;
+    idempotent?: boolean | "optional";
     handler: (
       args: Parsed<P, Q, B> & { ctx: PropertyContext; idempotency: IdempotencyRequest | null },
     ) => Promise<unknown>;
@@ -149,7 +151,11 @@ export function definePropertyRoute<P extends { propertyId: string }, Q = undefi
 
       const parsed = await parse(request, context, options);
       assertReasonForHighRisk(request, options.permission, parsed.body);
-      const idempotency = options.idempotent ? idempotencyOf(request, parsed.body) : null;
+      const idempotency =
+        options.idempotent === true ||
+        (options.idempotent === "optional" && request.headers.has("idempotency-key"))
+          ? idempotencyOf(request, parsed.body)
+          : null;
 
       const ctx: PropertyContext = {
         ...session.ctx,

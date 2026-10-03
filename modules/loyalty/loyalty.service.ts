@@ -250,7 +250,7 @@ export async function listMembers(
   if (!program) throw notFound("Loyalty program");
   let after: { enrolledAt: Date; id: string } | null = null;
   if (query.cursor) {
-    const c = decodeCursor(query.cursor, ["e", "i"] as const);
+    const c = decodeCursor(query.cursor, ["e", "i"] as const, { e: "timestamp" });
     const at = c ? new Date(c.e) : null;
     if (!c || !at || Number.isNaN(at.getTime())) {
       throw new AppError("VALIDATION_FAILED", "Invalid cursor", {

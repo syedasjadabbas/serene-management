@@ -1,6 +1,6 @@
 # Operations
 
-Running SERENE MANAGEMENT in production after it is deployed: backups and recovery, migrations, database roles, data retention, connection settings, scheduling and CI. Installation and the release runbook are in [DEPLOYMENT.md](DEPLOYMENT.md). Everything here uses native PostgreSQL and the commands in this repository. There is no Docker, no Redis and no background worker.
+Running SERENE MANAGEMENT in production after it is deployed: backups and recovery, migrations, database roles, data retention, connection settings, scheduling and CI. Installation and the release runbook are in [DEPLOYMENT.md](DEPLOYMENT.md). Everything here uses native PostgreSQL and the commands in this repository. There is no Docker and no Redis; background jobs run inside the application or in separate worker processes (§7), with PostgreSQL as the queue. Step-by-step procedures for deploy, rollback, restart, drain, backup, restore, night audit recovery and incidents are in §12.
 
 Related decisions: [ARCHITECTURE.md](ARCHITECTURE.md) D50 (retention), D51 (TRUNCATE guards), D52 (pool and timeouts), D53 (database roles).
 
@@ -27,7 +27,7 @@ Assumptions:
 - **Nightly logical backup** of the application database with `pg_dump -Fc` (custom format: compressed, selective restore), via `npm run ops:backup -- create`.
 - **Checksums.** Each backup gets a `.sha256` file next to it. `verify` checks the checksum and that `pg_restore` can read the archive.
 - **Keep copies off the host.** A backup on the database server is lost with the server. Copy both files to another machine or site every night (`rsync`/`scp` to a backup host, or object storage with versioning and deletion protection).
-- **Encrypt backup storage.** Backups contain guest personal data, audit trails and password hashes. Store them on an encrypted volume, or encrypt each file before it leaves the host (for example `age` or `gpg` with a key kept away from the backups). Limit read access to operators.
+- **Encrypt backup storage.** Backups contain guest personal data, audit trails and password hashes. Encrypt each file before it leaves the host with a public key whose private half is kept away from the servers and the backups (§2.6: `gpg`, rehearsed for v1.0.0-rc1), and store the copies on encrypted, access-limited storage.
 - **Retention.** Keep 14 daily, 8 weekly and 12 monthly backups; prune older copies on the backup host. Fiscal or legal rules may require keeping month-end or year-end backups longer.
 - **Global objects.** Roles and passwords are not in `pg_dump`. Keep the role setup reproducible (`scripts/db/runtime-role.sql`, §4), or add `pg_dumpall --globals-only --no-role-passwords` to the backup job.
 - **Pre-release backup.** Take an extra backup before every release that contains migrations (DEPLOYMENT.md §9).
@@ -69,7 +69,7 @@ Commands:
 
 Run the drill on a staging host, or on the production server outside business hours. Use a throwaway database name.
 
-1. Pick last night's backup (or a copied off-site one) and verify it:
+1. Pick last night's backup (or a copied off-site one; decrypt it first on the restore host, §2.6) and verify it:
    ```bash
    npm run ops:backup -- verify --file <file.dump>
    ```
@@ -118,6 +118,30 @@ To replace a lost or corrupted production database:
 - Recovery restores the base backup and replays WAL up to `recovery_target_time`.
 
 This is server administration outside the application; test it in the same quarterly drill. Keep the nightly `pg_dump` alongside it, because a logical dump is the simplest way to restore into a different server version or host.
+
+### 2.6 Encryption, off-host copies and retention
+
+`ops:backup` writes a plain (compressed) `pg_dump` and its checksum. Encrypt it before it leaves the host, with **public-key** encryption, so the server that makes backups cannot read them:
+
+1. **Once, on an administrator's workstation (not a server):** create the backup key and keep its private half offline (password manager, hardware token or a sealed copy with the hotel):
+   ```bash
+   gpg --quick-gen-key "SERENE backup key <backup@your-hotel.com>" rsa3072 encrypt 2y
+   gpg --armor --export backup@your-hotel.com > serene-backup-public.asc
+   ```
+   Import only `serene-backup-public.asc` on the backup host (`gpg --import`). Its keyring must hold no secret key.
+2. **Nightly, on the backup host** (cron, §8), after `create` and `verify`:
+   ```bash
+   f=$(ls -1t /var/backups/serene/*.dump | head -n 1)
+   gpg --batch --yes --trust-model always --recipient backup@your-hotel.com --output "$f.gpg" --encrypt "$f"
+   sha256sum "$f.gpg" > "$f.gpg.sha256"
+   rsync -a "$f.gpg" "$f.gpg.sha256" "$f.sha256" backup@offsite:/srv/serene-backups/   # or object storage with versioning + deletion protection
+   ssh backup@offsite "cd /srv/serene-backups && sha256sum -c $(basename "$f").gpg.sha256" && rm -f "$f"
+   ```
+   Copy the dump's own `.sha256` too: `ops:backup restore` checks it after decryption. Remove the plaintext dump once the encrypted copy is confirmed off the host.
+3. **Retention** on the off-host store: keep 14 daily, 8 weekly (Sunday) and 12 monthly (first of the month) backups, for example `find /srv/serene-backups -name '*.dump.gpg' -mtime +14 …` with the weekly and monthly ones moved to their own folders before pruning. Alert when no new `.gpg` file arrived in 26 hours.
+4. **Restore host:** copy the three files, check `sha256sum -c <file>.gpg.sha256`, decrypt with the private key (`gpg --output <file>.dump --decrypt <file>.dump.gpg`), then follow §2.3 from step 1. Delete the decrypted file after the restore.
+
+Rehearsed for v1.0.0-rc1 (DEPLOYMENT.md §12): a 610 KiB dump in 1 s, encrypted (no plaintext `PGDMP` header left), copied and checked off the host, decrypted and restored into a new database in 3 s, with identical row counts and a ready instance 0.5 s later. Scale the RTO in §1 from your own drill, not from this small database.
 
 ## 3. Migrations
 
@@ -324,6 +348,8 @@ Notes:
 - **Long jobs.** The night audit runs in a background job (§7), not in the request. Its commit raises its own statement timeout to 5 minutes for its transaction only (`runInTransaction({ statementTimeoutMs })`). Interactive transactions keep their own limit: 15 s by default, 300 s for the night audit commit.
 - **Sizing.** Total connections are (application processes × `DATABASE_POOL_MAX`) + maintenance and backup jobs + a few for administration. They must stay well under PostgreSQL's `max_connections` (100 by default). One process with 10 connections suits a hotel group on a small server. **Do not raise the pool to fix slowness.** Find the slow query first (`pg_stat_activity`, `pg_stat_statements`), because more connections usually add lock contention.
 - **Tuning.** These values are starting points. Tune them against the server's CPU count and the measured load.
+- **Database unreachable (measured for v1.0.0-rc1).** When PostgreSQL refuses or resets connections (restart, crash, failover with a reset), readiness turns 503 within about a second, the load balancer returns a fast 503, and every instance recovers on its own within a second of the database returning; no restart is needed. A network partition that heals (packets delayed, TCP retransmits) is also absorbed: requests wait and complete afterwards.
+- **Dead database peer (operational risk).** The pool sets no client-side query timeout and no TCP keepalive. If the database host disappears without resetting connections (host power loss, a failover that moves the address, a firewall dropping state), queries already sent wait until the operating system abandons the connection, about 15 minutes with Linux defaults. Readiness reports 503 throughout, so traffic is shed rather than hung, but the instance does not heal sooner by itself. Mitigation now: on the application hosts set `net.ipv4.tcp_retries2 = 8` (about 100 s) in `/etc/sysctl.d/`, and after a database failover restart the instances (§12.3). Planned for a later release: `keepAlive` and a client query timeout in `lib/db/pool-config.ts`.
 - **PgBouncer.** The settings travel as startup `options`. A transaction-pooling PgBouncer does not forward them, so either:
   - add `ignore_startup_parameters = options` to PgBouncer, and rely on the runtime role defaults that `runtime-role.sql` sets (`TimeZone=UTC`, `statement_timeout=30s`, `idle_in_transaction_session_timeout=60s`); or
   - use session pooling.
@@ -352,6 +378,8 @@ Work too long for a request (today: the night audit) is queued in the `backgroun
 **Monitoring.** `npm run worker -- --stats` prints the queue's health as JSON: queued, due, running, expired leases, failed in the last 24 h, and the oldest due job's age in seconds. Alert when `oldestDueSeconds` grows past a few minutes (no worker is running) or `failedLast24h` is not 0. Workers print one JSON line per job event (no payloads). A run whose job no worker holds can be recovered from its page (Recover / Cancel audit).
 
 **Draining.** `npm run worker -- --once` runs every due job, then exits (maintenance windows, or when no worker is deployed).
+
+**Stopping a worker (measured for v1.0.0-rc1).** A graceful stop with no running job exits 0 within a second. Unlike a web instance, a worker has no overall shutdown bound: if its database connections are stuck (dead database peer, §6), closing the pool can wait indefinitely after "stopping". Always run workers under a service manager stop timeout (systemd `TimeoutStopSec=90`, DEPLOYMENT.md §11) that kills the process; any job it held is reclaimed after its lease. On Windows, one of eleven graceful worker stops in the rehearsal ended with a Node/libuv assertion at exit (`UV_HANDLE_CLOSING`, exit `0xC0000409`) after the worker had stopped claiming jobs; no job was affected, and the service manager restarts it.
 
 ## 8. Scheduling
 
@@ -429,6 +457,8 @@ target on connection errors or failed readiness, clients reconnect, and leases e
 time: start the new one, wait for readiness 200, add it, then stop an old one with SIGTERM. Keep
 one instance of surge headroom in the connection budget. Old and new releases may serve side by side,
 so a rolling release's migration must be backwards compatible (expand now, contract in a later release).
+
+**Measured for v1.0.0-rc1 (DEPLOYMENT.md §12).** Under steady load through the TLS load balancer: a hard kill of one instance and a graceful drain of the other lost no request (the balancer retried four in-flight GETs). A rolling rollback and roll-forward lost none of about 55 000 requests. A load-balancer **restart** is not invisible to open screens: the event streams reconnect within half a second, but a screen whose data request failed while the balancer was down shows "Cannot reach the server · Retry" until the user retries or returns to the tab. Prefer configuration reloads (`nginx -s reload`, HAProxy hitless reload), which keep connections, to restarts.
 
 **Observability.** `INSTANCE_ID` (default host-pid-random) prefixes shutdown logs. With `SERVER_TIMING=1`
 responses carry `x-instance-id` and the readiness body adds the instance's state (uptime, draining,
@@ -530,6 +560,84 @@ Live-update events carry the PostgreSQL transaction id (`x`), not the request id
 | Rate-limit store   | `rate_limit_store_errors_total` increases                                        | Login fails closed while the store is down                            |
 | Memory             | RSS grows > 20 % per day with flat load                                          | No leak was measured over 26 min (§38.13); watch for it in production |
 
+**Prometheus rules (v1.0.0-rc1).** The application series below were checked against a live scrape of the release (DEPLOYMENT.md §12). Counters such as `jobs_total`, `rate_limit_rejections_total` and `rate_limit_store_errors_total` appear only after their first event. Readiness comes from the blackbox exporter probing `/api/health/ready` on every instance; host, disk and PostgreSQL alerts need `node_exporter` (`windows_exporter` on Windows) and `postgres_exporter` on the database host. Validate the file with `promtool check rules` before loading it, and tune the thresholds per deployment.
+
+```yaml
+groups:
+  - name: serene-app
+    rules:
+      - alert: SereneInstanceDown
+        expr: up{job=~"serene-web|serene-worker"} == 0
+        for: 2m
+      - alert: SereneNotReady # also fires while an instance drains for a deploy: silence it during releases
+        expr: probe_success{job="serene-ready"} == 0
+        for: 1m
+      - alert: SereneAllInstancesNotReady
+        expr: sum(probe_success{job="serene-ready"}) == 0
+        for: 1m
+        labels: { severity: page }
+      - alert: SereneErrorRate
+        expr: sum(rate(http_server_request_duration_seconds_count{status=~"5.."}[5m])) / sum(rate(http_server_request_duration_seconds_count[5m])) > 0.01
+        for: 5m
+      - alert: SereneLatencyP95
+        expr: histogram_quantile(0.95, sum by (le) (rate(http_server_request_duration_seconds_bucket{route!~".*/events"}[5m]))) > 2
+        for: 10m
+      - alert: SerenePoolSaturated
+        expr: max by (instance) (db_client_connection_pending_requests) > 0
+        for: 5m
+      - alert: SerenePoolWait
+        expr: histogram_quantile(0.95, sum by (le, instance) (rate(db_client_connection_wait_seconds_bucket[5m]))) > 0.25
+        for: 5m
+      - alert: SereneEventLoopBlocked
+        expr: nodejs_eventloop_delay_seconds{quantile="0.99"} > 0.5
+        for: 5m
+      - alert: SereneJobBacklog
+        expr: max(jobs_queue{state="oldest_due_seconds"}) > 120 or max(jobs_queue{state="expired_lease"}) > 0
+        for: 5m
+      - alert: SereneJobFailed
+        expr: increase(jobs_total{outcome="failed"}[15m]) > 0 or max(jobs_queue{state="failed_24h"}) > 0
+        labels: { severity: page }
+      - alert: SereneNoWorker
+        expr: count(up{job="serene-worker"} == 1) == 0
+        for: 2m
+      - alert: SereneRealtimeListenerDown
+        expr: realtime_listener_up == 0 and on(instance) realtime_streams_active > 0
+        for: 2m
+      - alert: SereneRateLimitStoreErrors
+        expr: increase(rate_limit_store_errors_total[10m]) > 0
+      - alert: SereneLoginRejectionsSpike
+        expr: sum(rate(rate_limit_rejections_total{rule=~"auth.*"}[10m])) > 1
+        for: 10m
+      - alert: SereneMemoryHigh
+        expr: process_resident_memory_bytes > 1.5e9
+        for: 15m
+  - name: serene-infrastructure
+    rules:
+      - alert: PostgresDown
+        expr: pg_up == 0
+        for: 1m
+        labels: { severity: page }
+      - alert: PostgresConnectionsHigh
+        expr: sum(pg_stat_activity_count) / max(pg_settings_max_connections) > 0.8
+        for: 5m
+      - alert: HostCpuHigh
+        expr: 1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) > 0.85
+        for: 15m
+      - alert: HostMemoryLow
+        expr: node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes < 0.1
+        for: 10m
+      - alert: DiskSpaceLow
+        expr: node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes < 0.15
+        for: 10m
+      - alert: BackupMissing
+        expr: time() - serene_backup_last_success_timestamp_seconds > 26 * 3600
+        labels: { severity: page }
+      - alert: TlsCertificateExpiring
+        expr: probe_ssl_earliest_cert_expiry - time() < 14 * 86400
+```
+
+`serene_backup_last_success_timestamp_seconds` is not exported by the application: have the nightly backup job write it through the `node_exporter` textfile collector after the off-host copy succeeds (§2.6), for example `echo "serene_backup_last_success_timestamp_seconds $(date +%s)" > /var/lib/node_exporter/textfile/serene_backup.prom`.
+
 ### 11.4 Slow queries in PostgreSQL (recommended production settings, not enabled locally)
 
 | Setting                                                    | Recommendation                                                                                                                                                               | Cost / note                                                                                                                                                                               |
@@ -541,3 +649,110 @@ Live-update events carry the PostgreSQL transaction id (`x`), not the request id
 | `track_io_timing`                                          | `on` after `pg_test_timing` shows a cheap clock                                                                                                                              | Adds I/O timings to `EXPLAIN (BUFFERS)` and `pg_stat_statements`                                                                                                                          |
 | `client_connection_check_interval`                         | `10s`                                                                                                                                                                        | Ends the work of a client that vanished mid-statement sooner (measured: an orphaned backend waited for its lock, §38.9)                                                                   |
 | `idle_in_transaction_session_timeout`, `statement_timeout` | Already set per connection (§6)                                                                                                                                              | —                                                                                                                                                                                         |
+
+## 12. Runbooks
+
+Commands assume the reference topology (DEPLOYMENT.md §11): releases in `/srv/serene/releases/<version>`, `/srv/serene/current` pointing at the live one, systemd units `serene-web@<port>` and `serene-worker@<metricsPort>`, and the production environment in `/etc/serene/serene.env`. Run `ops:*` commands from `/srv/serene/current` with that environment loaded. Never paste secrets into a ticket or chat.
+
+### 12.1 Health checks
+
+| Check                    | Command                                                                                          | Healthy                                                                   |
+| ------------------------ | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------- |
+| Liveness (per instance)  | `curl -fsS http://<instance>:3000/api/health/live`                                               | 200 `ok`. Failing = restart that process                                  |
+| Readiness (per instance) | `curl -fsS http://<instance>:3000/api/health/ready`                                              | 200 `ready`. 503 `unavailable` = database; 503 `draining` = shutting down |
+| Public path              | `curl -fsS https://<APP_URL host>/api/health/ready`                                              | 200 through the load balancer                                             |
+| Database posture         | `npm run ops:db-check -- --strict`                                                               | no `FAIL`/`WARN` lines (exit 0)                                           |
+| Job queue                | `npm run worker -- --stats`                                                                      | `oldestDueSeconds` < 120, `expiredLeases` 0, `failedLast24h` 0            |
+| Metrics                  | `curl -fsS -H "Authorization: Bearer $METRICS_TOKEN" http://<instance>:3000/api/metrics \| head` | Prometheus text; 404 means a missing or wrong token                       |
+
+Do not restart an instance whose liveness passes while readiness fails: the database is the problem (§12.9).
+
+### 12.2 Deploy and rollback
+
+**Deploy** (every release; DEPLOYMENT.md §9 has the full checklist):
+
+1. Back up and verify (§2.2), then encrypt and copy off the host (§2.6). Note the file name.
+2. Unpack and build the new release into `/srv/serene/releases/<version>` (DEPLOYMENT.md §3). Never build inside `current`.
+3. `npm run db:deploy` and `npm run ops:seed` once, from the new release directory (only when the release has migrations or new permissions; safe to repeat).
+4. Switch `current` to the new release: `ln -sfn /srv/serene/releases/<version> /srv/serene/current`.
+5. Rolling restart, one web instance at a time: `systemctl restart serene-web@3000`, wait until its readiness is 200 and the load balancer shows it healthy, then the next instance. With open-source nginx, take the instance out of `upstream` and reload first (§12.4).
+6. Restart the workers: `systemctl restart serene-worker@9101 serene-worker@9102`.
+7. Smoke checks: DEPLOYMENT.md §9 step 9, `ops:db-check -- --strict`, and the alert dashboard for 30 minutes.
+
+**Application rollback** (the schema did not change, or changed backward-compatibly):
+
+1. `ln -sfn /srv/serene/releases/<previous> /srv/serene/current`.
+2. Rolling restart of the web instances, then the workers (steps 5–6 above). Rehearsed for v1.0.0-rc1 under load with no failed request (DEPLOYMENT.md §12).
+3. `npm run ops:db-check -- --strict` and the smoke checks.
+
+**Worker rollback.** Workers run the release in `current`, so step 2 covers them; restart them after the web instances. Between `a70992d` and v1.0.0-rc1 the job kinds and payloads are unchanged, so either release's worker runs the other's jobs. For a future release that changes a job payload, drain the queue (`npm run worker -- --stats` shows nothing queued or running) before rolling workers across that change.
+
+**Migration compatibility.** Migrations are never rolled back (§3.2), and nothing in this repository reverses an applied migration.
+
+- **No migrations in the release, or only expanding ones** (new tables, columns, indexes): the previous release runs against the new schema; an application rollback is enough. Between `a70992d` and v1.0.0-rc1 there are no schema changes.
+- **A release that drops, renames or rewrites data:** the previous release may not run against the new schema. Do not roll the application back alone. Either fix forward with a new release, or restore the pre-deploy backup (step 1 of the deploy) into a new database and switch to it (§2.4). Everything written since the backup is then lost and must be re-entered.
+- **First go-live** has no previous production release: a rollback means taking the service offline (emergency shutdown below) and, if needed, restoring the pre-go-live backup.
+
+**Emergency shutdown** (data at risk, security incident, runaway writes):
+
+1. Stop new traffic at the load balancer: serve a static maintenance page or remove every upstream (nginx: `return 503;` in the `location /` block, then reload).
+2. `systemctl stop serene-worker@*` so no job continues (a running night audit commit either finishes or rolls back as a whole).
+3. `systemctl stop serene-web@*` (graceful; bounded by `TimeoutStopSec`).
+4. Leave PostgreSQL running for investigation. Take a backup (§2.2) before changing anything.
+5. To bring the service back: start the workers, then the web instances, check readiness, restore the load balancer configuration.
+
+### 12.3 Restart
+
+- **One instance:** `systemctl restart serene-web@3000` (graceful: readiness 503 `draining`, in-flight requests finish, at most `SHUTDOWN_TIMEOUT_MS` + 5 s). Its event streams reconnect to the other instances.
+- **All instances** (for example after a database failover, §6): restart them one at a time and wait for readiness between them. A simultaneous restart of every instance is an outage of a few seconds; announce it.
+- **After a crash** systemd restarts the process (`Restart=on-failure`). Check `journalctl -u serene-web@3000` for the cause before restarting it by hand again.
+
+### 12.4 Drain an instance
+
+1. HAProxy or a cloud load balancer: send SIGTERM (`systemctl stop serene-web@3000`). Readiness answers 503 `draining` at once and the balancer removes the instance within 2 health checks; the instance serves for `SHUTDOWN_DRAIN_MS` more, then finishes in-flight requests and exits.
+2. Open-source nginx (passive checks only): comment out the instance in `upstream`, `nginx -t && nginx -s reload`, wait 30 s, then stop it. Put it back the same way after the restart.
+3. Confirm: `serene_instance_draining` = 1 while draining; no new 5xx in the access log.
+
+### 12.5 Worker restart
+
+1. `npm run worker -- --stats`: note any running job.
+2. `systemctl restart serene-worker@9101`. The worker stops claiming, waits up to 60 s for its running job, and exits. A job still running is reclaimed after its lease (`JOB_LEASE_MS`, 60 s) by another worker; the night audit commit is atomic, so nothing is half-done.
+3. If the stop times out (systemd kills it after `TimeoutStopSec`), check `--stats` after a minute: `expiredLeases` should return to 0 as another worker reclaims the job.
+4. With no worker running, queued jobs wait (`SereneNoWorker` alert). `npm run worker -- --once` runs the due jobs and exits.
+
+### 12.6 Database backup
+
+Nightly by the scheduler (§8): `ops:backup create` → `verify` → encrypt → off-host copy → checksum check there → remove the local plaintext → write the backup timestamp for monitoring (§2.6, §11.3). On demand (before a release or a risky operation) run the same steps by hand and note the file name.
+
+### 12.7 Database restore
+
+- **Drill or inspection:** restore into a new database (§2.3). Never restore over the production database; `ops:backup restore` refuses it.
+- **Production recovery:** §2.4 (stop writes, keep the damaged database renamed, restore into a new one, re-apply the runtime-role grants, `db:deploy` if needed, `ops:db-check --strict`, smoke checks, tell the hotel which window to re-enter).
+
+### 12.8 Stuck night audit
+
+Symptoms: the business date stays `IN_AUDIT`, postings answer 423 `BUSINESS_DATE_LOCKED`, the night audit page shows a run that does not progress.
+
+1. Look before acting: `npm run worker -- --stats` (running job? expired lease? failures?) and the workers' logs (`journalctl -u 'serene-worker@*'`, one JSON line per job event with the run's `requestId`).
+2. **A worker is still running it** (job RUNNING, lease being renewed): wait. A large property's commit can take minutes (its statement timeout is 5 minutes). Recovery is refused while a worker holds the run (409 `NIGHT_AUDIT_IN_PROGRESS`).
+3. **No worker holds it** (worker crashed, or every attempt failed and the give-up step could not run, PRODUCTION_READINESS P2-6): once the run is at least 2 minutes old, a user with `nightaudit:run` opens Night audit → the run → **Recover** (a running run) or **Cancel audit** (a queued run whose job never started), giving a reason. API: `POST /api/v1/properties/{propertyId}/night-audits/{runId}/recover` with `{ "reason": "…" }`. The run becomes FAILED and the date reopens. Nothing was posted: a failed commit rolls back as a whole.
+4. Fix the cause (database reachable, a worker running, the blocking check resolved), then start the audit again from the page. Re-running is safe.
+5. Record the incident with the run id and request id (§12.9).
+
+### 12.9 Incident response
+
+1. **Detect and declare.** An alert (§11.3) or a hotel call. Name one incident lead; note the start time.
+2. **Triage with §12.1:**
+   - liveness fails → process problem: restart that instance (§12.3);
+   - readiness fails on every instance, liveness passes → database: check PostgreSQL (`pg_isready`, server log, disk space, connections). Do not restart the application in a loop; after the database returns, instances recover by themselves (§6). After a failover that moved the database address, restart the instances;
+   - 5xx or latency on one route → slow-request log lines (`SLOW_REQUEST_MS`) by request id; `pg_stat_activity` for long queries or lock waits;
+   - jobs stuck → §12.5, night audit → §12.8;
+   - live updates down (`realtime_listener_up` 0) → screens fall back to polling; restart the affected instance at a quiet moment;
+   - suspected compromise → emergency shutdown (§12.2), preserve logs and the database, rotate `AUTH_*` secrets (signs everyone out) and the database passwords, then investigate.
+3. **Stabilize before fixing.** Prefer shedding load or rolling back (§12.2) over live changes.
+4. **Communicate.** Tell the front office what works (the offline view shows today's arrivals, departures, in-house guests and rooms read-only; writes need the server) and the expected time to recovery.
+5. **Close.** Confirm health (§12.1), check that the night audit for the affected date ran, and write a short report: timeline, cause, data affected (with the request ids and audit-log rows), and follow-up actions.
+
+### 12.10 Monitoring
+
+Scrape every web instance's `/api/metrics` and every worker's `/metrics` directly with the bearer token (§11.1), probe each instance's `/api/health/ready` and the public URL with the blackbox exporter, run `node_exporter` on every host and `postgres_exporter` on the database host, and load the rules in §11.3. Review the dashboard after every deploy and weekly: error rate, p95 latency, pool wait, job queue age, failed jobs, the last backup time, disk space and certificate expiry.

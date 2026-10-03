@@ -56,6 +56,13 @@ export type LedgerQuery = z.infer<typeof ledgerQuerySchema>;
 /** Opens the next billing window (window 1 first). The server numbers it. */
 export const openWindowSchema = z.object({}).strict();
 
+/**
+ * One posting's net total (quantity × unit price) stays below 10^12, so the
+ * total with tax and the folio balance keep headroom in numeric(19,4) and an
+ * oversized entry answers 400 instead of a database overflow.
+ */
+const MAX_POSTING_TOTAL = 1_000_000_000_000;
+
 export const chargeSchema = z
   .object({
     transactionCodeId: idSchema,
@@ -64,7 +71,11 @@ export const chargeSchema = z
     reference,
     comment,
   })
-  .strict();
+  .strict()
+  .refine((input) => Number(input.unitAmount) * input.quantity < MAX_POSTING_TOTAL, {
+    path: ["unitAmount"],
+    message: "Quantity × price is too large for one posting",
+  });
 export type ChargeInput = z.infer<typeof chargeSchema>;
 
 /** Posts the room (and package) charges of unposted nights up to `through` (default: business date). */

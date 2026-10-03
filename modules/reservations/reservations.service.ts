@@ -1751,7 +1751,9 @@ export async function listReservations(
   if (query.guestId) and.push({ primaryGuestId: query.guestId });
 
   if (query.cursor) {
-    const cursor = decodeCursor(query.cursor, ["v", "i"] as const);
+    const cursor = decodeCursor(query.cursor, ["v", "i"] as const, {
+      v: sort.field === "arrivalDate" ? "date" : "timestamp",
+    });
     if (!cursor)
       throw new AppError("VALIDATION_FAILED", "Invalid cursor", {
         fields: { cursor: ["Invalid cursor"] },

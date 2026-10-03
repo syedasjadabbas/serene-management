@@ -7,8 +7,16 @@ import { z } from "zod";
 
 export const idSchema = z.uuid();
 
-/** Calendar / business date on the wire: "YYYY-MM-DD" (no time zone). */
-export const isoDateSchema = z.iso.date();
+/**
+ * Calendar / business date on the wire: "YYYY-MM-DD" (no time zone), years
+ * 1900–2199. The bound keeps impossible dates (year 0000, which PostgreSQL
+ * rejects) a 400 instead of a database error, and covers every business use
+ * (dates of birth, stays, seasons, reports).
+ */
+export const isoDateSchema = z.iso.date().refine((value) => {
+  const year = Number(value.slice(0, 4));
+  return year >= 1900 && year <= 2199;
+}, "Enter a date between 1900 and 2199");
 
 /** Instant on the wire: ISO-8601 with offset, e.g. "2026-09-24T09:30:00.000Z". */
 export const isoDateTimeSchema = z.iso.datetime({ offset: true });

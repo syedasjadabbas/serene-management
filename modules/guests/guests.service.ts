@@ -640,7 +640,7 @@ export async function guestHistory(
   const propertyIds = query.propertyId ? [query.propertyId] : readable;
   let after: { arrival: string; id: string } | null = null;
   if (query.cursor) {
-    const c = decodeCursor(query.cursor, ["a", "i"] as const);
+    const c = decodeCursor(query.cursor, ["a", "i"] as const, { a: "date" });
     if (!c) throw invalid("cursor", "Invalid cursor");
     after = { arrival: c.a, id: c.i };
   }
