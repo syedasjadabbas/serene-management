@@ -190,6 +190,11 @@ export function StayDetailView({
             {stay.allowedActions.checkOut ? (
               <Button onClick={() => setDialog("checkOut")}>Check out</Button>
             ) : null}
+            {stay.allowedActions.reverseCheckIn ? (
+              <Button variant="secondary" onClick={() => setDialog("checkOut")}>
+                Same-day departure
+              </Button>
+            ) : null}
           </>
         }
         footer={<KeyFacts items={keyFacts} />}

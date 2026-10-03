@@ -6,7 +6,13 @@ import type {
   OrganizationPerformanceReport,
 } from "@/modules/organization/organization.types";
 import type { PropertySetupCopyResult, PropertyView } from "@/modules/properties/properties.types";
-import type { PasswordResetIssued, RoleView, UserView } from "@/modules/users/users.types";
+import type { InviteUserInput } from "@/modules/users/users.schema";
+import type {
+  PasswordResetIssued,
+  RoleView,
+  UserInvited,
+  UserView,
+} from "@/modules/users/users.types";
 import type { ApiSuccess, CursorPageMeta, OffsetPageMeta } from "@/types/api";
 import { baseApi } from "../baseApi";
 
@@ -118,6 +124,12 @@ export const organizationApi = baseApi.injectEndpoints({
       transformResponse: (response: ApiSuccess<UserView>) => response.data,
       invalidatesTags: ["User", "AuditLog"],
     }),
+    /** Adds an INVITED user with a first role; returns the one-time set-password link. */
+    inviteUser: build.mutation<UserInvited, InviteUserInput>({
+      query: (body) => ({ url: "/users", method: "POST", body }),
+      transformResponse: (response: ApiSuccess<UserInvited>) => response.data,
+      invalidatesTags: ["User", "AuditLog"],
+    }),
     issuePasswordReset: build.mutation<PasswordResetIssued, { userId: string; reason: string }>({
       query: ({ userId, reason }) => ({
         url: `/users/${userId}/password-reset`,
@@ -174,6 +186,7 @@ export const {
   useRevokeRoleMutation,
   useUserStatusMutation,
   useIssuePasswordResetMutation,
+  useInviteUserMutation,
   useAccessiblePropertiesQuery,
   useCreatePropertyMutation,
   useCopyPropertySetupMutation,

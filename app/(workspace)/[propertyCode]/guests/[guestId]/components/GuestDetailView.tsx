@@ -58,14 +58,14 @@ export function GuestDetailView({ guestId }: { guestId: string }) {
   if (error || !query.data) {
     return (
       <StatusPanel
-        kind={
+        kind={error?.code === "NOT_FOUND" ? "empty" : error?.status === 403 ? "forbidden" : "error"}
+        title={
           error?.code === "NOT_FOUND"
-            ? "empty"
-            : error?.code === "FORBIDDEN"
-              ? "forbidden"
-              : "error"
+            ? "Guest not found"
+            : error?.status === 403
+              ? "Access denied"
+              : "Could not load the guest"
         }
-        title={error?.code === "NOT_FOUND" ? "Guest not found" : "Could not load the guest"}
         description={error?.message}
         requestId={error?.requestId}
         action={

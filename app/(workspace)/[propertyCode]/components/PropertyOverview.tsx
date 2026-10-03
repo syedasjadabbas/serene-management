@@ -116,9 +116,11 @@ export function PropertyOverview() {
       tone: "warning",
       message: `This property is not live yet. ${
         can("properties:manage")
-          ? "Initialize its first business date to go live."
-          : "An administrator must initialize its first business date."
+          ? "Set up its rooms and rates, then open its first business date."
+          : "An administrator opens its first business date once the rooms and rates are set up."
       }`,
+      href: can("settings:read") ? (`${base}/setup` as Route) : null,
+      linkLabel: "Property setup",
     });
   }
   if (bd?.status === "IN_AUDIT") {

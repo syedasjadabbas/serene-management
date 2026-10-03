@@ -37,7 +37,12 @@ export function RateCalendarPanel({ initialPlanId }: { initialPlanId?: string })
   const [from, setFrom] = useState("");
   const start = from || o?.businessDate || "";
   const plan = planId || o?.ratePlans.find((p) => p.status === "ACTIVE")?.id || "";
-  const roomType = roomTypeId || o?.roomTypes[0]?.id || "";
+  // Only the room types the plan is sold for; a type from another plan would show no prices.
+  const planTypes = o?.ratePlans.find((p) => p.id === plan)?.roomTypeIds;
+  const roomTypes = (o?.roomTypes ?? []).filter((rt) => !planTypes || planTypes.includes(rt.id));
+  const roomType = roomTypes.some((rt) => rt.id === roomTypeId)
+    ? roomTypeId
+    : (roomTypes[0]?.id ?? "");
   const query = useRateCalendarQuery(
     {
       propertyId: property.id,
@@ -76,7 +81,7 @@ export function RateCalendarPanel({ initialPlanId }: { initialPlanId?: string })
         />
         <Select
           label="Room type"
-          options={(o?.roomTypes ?? []).map((rt) => ({
+          options={roomTypes.map((rt) => ({
             value: rt.id,
             label: `${rt.code} · ${rt.name}`,
           }))}

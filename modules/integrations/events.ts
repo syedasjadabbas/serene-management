@@ -12,6 +12,7 @@ export const INTEGRATION_EVENT_TYPES = [
   "reservation.cancelled",
   "stay.checked_in",
   "stay.checked_out",
+  "stay.check_in_reversed",
   "payment.posted",
   "payment.voided",
   "payment.refunded",
@@ -30,6 +31,7 @@ interface EventShapes {
   "reservation.cancelled": { reservationId: string; reservationRoomId: string };
   "stay.checked_in": { stayId: string; reservationId: string; reservationRoomId: string };
   "stay.checked_out": { stayId: string; reservationId: string; reservationRoomId: string };
+  "stay.check_in_reversed": { stayId: string; reservationId: string; reservationRoomId: string };
   "payment.posted": { paymentId: string; folioId: string };
   "payment.voided": { paymentId: string; folioId: string };
   "payment.refunded": { paymentId: string; refundId: string; folioId: string };
@@ -48,6 +50,7 @@ export const EVENT_AGGREGATES: {
   "reservation.cancelled": { type: "Reservation", id: (p) => p.reservationId },
   "stay.checked_in": { type: "Stay", id: (p) => p.stayId },
   "stay.checked_out": { type: "Stay", id: (p) => p.stayId },
+  "stay.check_in_reversed": { type: "Stay", id: (p) => p.stayId },
   "payment.posted": { type: "Payment", id: (p) => p.paymentId },
   "payment.voided": { type: "Payment", id: (p) => p.paymentId },
   "payment.refunded": { type: "Payment", id: (p) => p.paymentId },

@@ -122,7 +122,8 @@ export function countBlockedNights(
       FROM "reservation_room_nights" n
       JOIN "reservation_rooms" rr ON rr."id" = n."reservation_room_id"
       JOIN "reservation_types" t ON t."id" = rr."reservation_type_id"
-      WHERE rr."block_id" = a."block_id"
+      WHERE n."property_id" = a."property_id" AND rr."property_id" = a."property_id"
+        AND rr."block_id" = a."block_id"
         AND n."room_type_id" = a."room_type_id" AND n."stay_date" = a."stay_date"
         AND rr."status" IN ('RESERVED', 'IN_HOUSE', 'CHECKED_OUT') AND t."deducts_inventory"
         AND NOT (rr."id" = ANY(${excluded}::uuid[]))
@@ -152,7 +153,8 @@ export function findBlockNights(
               FROM "reservation_room_nights" n
               JOIN "reservation_rooms" rr ON rr."id" = n."reservation_room_id"
               JOIN "reservation_types" t ON t."id" = rr."reservation_type_id"
-             WHERE rr."block_id" = a."block_id"
+             WHERE n."property_id" = a."property_id" AND rr."property_id" = a."property_id"
+               AND rr."block_id" = a."block_id"
                AND n."room_type_id" = a."room_type_id" AND n."stay_date" = a."stay_date"
                AND rr."status" IN ('RESERVED', 'IN_HOUSE', 'CHECKED_OUT') AND t."deducts_inventory"
                AND NOT (rr."id" = ANY(${excludeReservationRoomIds}::uuid[]))) AS "picked"
@@ -209,7 +211,8 @@ export async function syncAllocationPickup(
             FROM "reservation_room_nights" n
             JOIN "reservation_rooms" rr ON rr."id" = n."reservation_room_id"
             JOIN "reservation_types" t ON t."id" = rr."reservation_type_id"
-           WHERE rr."block_id" = a."block_id"
+           WHERE n."property_id" = a."property_id" AND rr."property_id" = a."property_id"
+             AND rr."block_id" = a."block_id"
              AND n."room_type_id" = a."room_type_id" AND n."stay_date" = a."stay_date"
              AND rr."status" IN ('RESERVED', 'IN_HOUSE', 'CHECKED_OUT') AND t."deducts_inventory"),
         "updated_at" = now()

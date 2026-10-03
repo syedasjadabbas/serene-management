@@ -126,6 +126,7 @@ POST  /api/v1/properties/{id}/reservation-rooms/{rrId}/check-in              { v
 GET   /api/v1/properties/{id}/stays/{stayId}                     stay detail with room history, room status changes, audit history, allowed actions
 POST  /api/v1/properties/{id}/stays/{stayId}/room-move           { version, roomId, reasonCodeId, reason?, acceptNotReady? }
 POST  /api/v1/properties/{id}/stays/{stayId}/check-out           { version, earlyDeparture?, reasonCodeId?, reason? }
+POST  /api/v1/properties/{id}/stays/{stayId}/reverse-check-in    { version, releaseRoom?, reason } → { reservationId, reservationRoomId }   frontdesk:reverse_checkin (HIGH); same business date and no folio postings (PMS_WORKFLOWS §6.3)
 ```
 
 **Implemented in Phase 5 (folios, charges, payments)**:
@@ -173,7 +174,7 @@ POST  /api/v1/properties/{id}/maintenance/{requestId}/assign | start | hold | re
 
 Commands carry the aggregate `version` (task, request, or the room's for room-level housekeeping commands); the server decides every target status from the action. Error reasons: `NOT_TASK_OWNER`, `NOT_ASSIGNEE` (403); `TASK_EXISTS`, `BLOCK_OVERLAPS`, `ROOM_ASSIGNED`, `ROOM_OCCUPIED`, `BLOCK_RELEASED` (409); `BLOCK_OVERSELLS`, `ROOM_STILL_BLOCKED`, `NO_ROOM` (422). Guest names on the board are returned only to users with `frontdesk:read`.
 
-Check-in is addressed by reservation room (the stay does not exist yet); later commands by stay. Stay commands carry the stay's `version`. Permissions: `frontdesk:read` (lists, stay), `rooms:read` (room board, room options), `frontdesk:checkin` (+ `reservations:create` for walk-ins, `rooms:assign` to choose a room), `rooms:assign` (moves), `frontdesk:checkout`; accepting a room that is not ready needs `rooms:update_status`. Error reasons in `error.details.reason`: `ROOM_REQUIRED`, `ROOM_OCCUPIED` (409), `ROOM_NOT_READY`, `ROOM_OUT_OF_ORDER`, `ROOM_TYPE_MISMATCH`, `NO_REMAINING_NIGHTS`, `EARLY_DEPARTURE_NOT_CONFIRMED`, `SAME_DAY_CHECK_OUT` (422).
+Check-in is addressed by reservation room (the stay does not exist yet); later commands by stay. Stay commands carry the stay's `version`. Permissions: `frontdesk:read` (lists, stay), `rooms:read` (room board, room options), `frontdesk:checkin` (+ `reservations:create` for walk-ins, `rooms:assign` to choose a room), `rooms:assign` (moves), `frontdesk:checkout`; accepting a room that is not ready needs `rooms:update_status`. Reverse check-in: `frontdesk:reverse_checkin` (§ PMS_WORKFLOWS 6.3). Error reasons in `error.details.reason`: `ROOM_REQUIRED`, `ROOM_OCCUPIED` (409), `ROOM_NOT_READY`, `ROOM_OUT_OF_ORDER`, `ROOM_TYPE_MISMATCH`, `NO_REMAINING_NIGHTS`, `EARLY_DEPARTURE_NOT_CONFIRMED`, `SAME_DAY_CHECK_OUT` (422).
 
 The reservation **room** is the unit of every command (a multi-room booking has one per room); the booking (`reservations/{id}`) is the read aggregate.
 
@@ -258,6 +259,23 @@ POST   /api/v1/properties/{target}/setup/copy-from/{sourceId}      { reason, rea
 POST   /api/v1/properties                                          { …, confirmationPrefix? } (defaults to the code; 409 when used by another property)
 PATCH  /api/v1/properties/{id}/configuration                      { confirmationPrefix?, … } (422 after go-live, 409 when taken)
 ```
+
+**Implemented at handover (property setup, invitations, sessions):**
+
+```text
+GET    /api/v1/properties/{id}/setup                               room types, floors, rooms, taxes, taxable revenue codes and the go-live checklist   settings:read
+POST   /api/v1/properties/{id}/setup/room-types                    { code, name, baseOccupancy, maxOccupancy, maxAdults, maxChildren, …, reason }   settings:manage (HIGH)
+PATCH  /api/v1/properties/{id}/setup/room-types/{roomTypeId}       name, occupancy, description, status (RETIRED refused while rooms or bookings use it: ROOM_TYPE_HAS_ROOMS, ROOM_TYPE_IN_USE)
+POST   /api/v1/properties/{id}/setup/floors · PATCH …/floors/{floorId}   (FLOOR_HAS_ROOMS when retiring)
+POST   /api/v1/properties/{id}/setup/rooms                         { numbers[1..200], roomTypeId, floorId?, housekeepingStatus?, isSmoking?, isAccessible?, reason } (ROOM_NUMBER_TAKEN; inventory reconciled)
+PATCH  /api/v1/properties/{id}/setup/rooms/{roomId}                { version, number?, roomTypeId?, floorId?, flags?, status?, reason } (ROOM_OCCUPIED, ROOM_ASSIGNED on retype/retire; 409 stale version)
+POST   /api/v1/properties/{id}/setup/taxes · PATCH …/taxes/{taxRuleId}   { name, calculation PERCENT|FLAT_PER_UNIT, basis NET|COMPOUND, rate, effectiveFrom, effectiveTo?, appliesTo[], status?, reason } (creates the TAX posting code)
+POST   /api/v1/properties/{id}/business-date/initialize            { businessDate (today or yesterday in the property time zone), reason }   properties:manage (go-live)
+POST   /api/v1/users                                               { email, displayName, role: {scope ORGANIZATION|PROPERTY, roleCode, propertyId?}, reason } → 201 { user (INVITED), setupUrl, expiresAt (24 h) }   users:manage in the role's scope, no escalation (EMAIL_TAKEN 409)
+GET    /api/v1/auth/sessions · DELETE /api/v1/auth/sessions/{id}   the caller's own sessions ("Signed-in devices" in the account menu)
+```
+
+`POST /properties/{id}/reservations` and `POST /properties/{id}/front-desk/walk-ins` honour an optional `Idempotency-Key` (the booking wizard sends one per booking, so a retry after a lost response returns the first booking instead of booking twice).
 
 Central availability never creates a reservation: "Book" opens `/[propertyCode]/reservations/new?arrival&departure&adults&children&rooms` of one property, which re-checks availability and price. Confirmation numbers are `PREFIX-number`; `q` on reservation and guest searches accepts `SMR-100045`, `smr-100045-2`, the digits alone and plain legacy numbers. Per-route rate limits are keyed by user on authenticated routes (D39).
 

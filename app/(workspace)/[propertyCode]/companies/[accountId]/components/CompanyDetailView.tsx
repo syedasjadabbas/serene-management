@@ -43,14 +43,14 @@ export function CompanyDetailView({ accountId }: { accountId: string }) {
   if (error || !query.data) {
     return (
       <StatusPanel
-        kind={
+        kind={error?.code === "NOT_FOUND" ? "empty" : error?.status === 403 ? "forbidden" : "error"}
+        title={
           error?.code === "NOT_FOUND"
-            ? "empty"
-            : error?.code === "FORBIDDEN"
-              ? "forbidden"
-              : "error"
+            ? "Company not found"
+            : error?.status === 403
+              ? "Access denied"
+              : "Could not load the company"
         }
-        title={error?.code === "NOT_FOUND" ? "Company not found" : "Could not load the company"}
         description={error?.message}
         requestId={error?.requestId}
         action={

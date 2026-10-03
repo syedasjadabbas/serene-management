@@ -13,6 +13,8 @@ import { GET as roomOptionsRoute } from "@/app/api/v1/properties/[propertyId]/re
 import { GET as detailRoute } from "@/app/api/v1/properties/[propertyId]/reservations/[reservationId]/route";
 import { POST as createRoute } from "@/app/api/v1/properties/[propertyId]/reservations/route";
 import { POST as checkOutRoute } from "@/app/api/v1/properties/[propertyId]/stays/[stayId]/check-out/route";
+import { POST as reverseRoute } from "@/app/api/v1/properties/[propertyId]/stays/[stayId]/reverse-check-in/route";
+import { POST as chargesRoute } from "@/app/api/v1/properties/[propertyId]/folios/[folioId]/charges/route";
 import { POST as moveRoute } from "@/app/api/v1/properties/[propertyId]/stays/[stayId]/room-move/route";
 import { GET as stayRoute } from "@/app/api/v1/properties/[propertyId]/stays/[stayId]/route";
 import { prisma } from "@/lib/db/prisma";
@@ -117,6 +119,8 @@ const move = (jar: CookieJar, stayId: string, body: Record<string, unknown>, pro
   stayCommand(moveRoute, "room-move", jar, stayId, body, propertyId);
 const checkOut = (jar: CookieJar, stayId: string, body: Record<string, unknown>, propertyId = A) =>
   stayCommand(checkOutRoute, "check-out", jar, stayId, body, propertyId);
+const reverseCheckIn = (jar: CookieJar, stayId: string, body: Record<string, unknown>) =>
+  stayCommand(reverseRoute, "reverse-check-in", jar, stayId, body);
 
 function getStay(jar: CookieJar, stayId: string, propertyId = A) {
   return call(stayRoute, {
@@ -245,7 +249,7 @@ describe("check-in", () => {
       arrivalBusinessDate: D,
       room: { id: roomId, frontOfficeStatus: "OCCUPIED" },
       checkoutTiming: "SAME_DAY",
-      allowedActions: { checkOut: false, moveRoom: true },
+      allowedActions: { checkOut: false, reverseCheckIn: false, moveRoom: true },
     });
 
     const row = await prisma.stay.findUniqueOrThrow({ where: { id: stay.id } });
@@ -797,6 +801,126 @@ describe("check-out", () => {
     });
     expect(r.status).toBe(422);
     expect(r.body.error.details.reason).toBe("SAME_DAY_CHECK_OUT");
+  });
+});
+
+describe("reverse check-in (same-day departure)", () => {
+  it("undoes a same-day check-in: reservation Reserved with its room, stay removed, room vacant, HIGH audit", async () => {
+    const guest = await inHouse("KNG", 2);
+    const before = await roomState(guest.roomId);
+    // Offered to the manager on the stay page, not to the agent.
+    expect((await getStay(fom, guest.stay.id)).body.data.allowedActions.reverseCheckIn).toBe(true);
+    expect((await getStay(agent, guest.stay.id)).body.data.allowedActions.reverseCheckIn).toBe(
+      false,
+    );
+    const r = await reverseCheckIn(fom, guest.stay.id, {
+      version: guest.stay.version,
+      reason: "Checked in to the wrong booking",
+    });
+    expect(r.status).toBe(200);
+    expect(r.body.data.reservationRoomId).toBe(guest.reservationRoomId);
+    expect(await prisma.stay.count({ where: { id: guest.stay.id } })).toBe(0);
+    const rr = await prisma.reservationRoom.findUniqueOrThrow({
+      where: { id: guest.reservationRoomId },
+      select: { status: true, roomId: true },
+    });
+    expect(rr).toEqual({ status: "RESERVED", roomId: guest.roomId });
+    expect(await roomState(guest.roomId)).toEqual({
+      frontOfficeStatus: "VACANT",
+      housekeepingStatus: before.housekeepingStatus,
+    });
+    const history = await prisma.roomStatusHistory.findFirst({
+      where: { roomId: guest.roomId, source: "REVERSE_CHECK_IN" },
+    });
+    expect(history).not.toBeNull();
+    const audit = (await auditLogsFor(guest.stay.id)).find(
+      (a) => a.action === "stay.reverse_check_in",
+    );
+    expect(audit).toMatchObject({ risk: "HIGH", reason: "Checked in to the wrong booking" });
+    expect(
+      await prisma.outboxEvent.count({
+        where: { eventType: "stay.check_in_reversed", aggregateId: guest.stay.id },
+      }),
+    ).toBe(1);
+
+    // The booking can be checked in again, to the same room.
+    const again = await checkIn(agent, guest.reservationRoomId, {
+      version: (
+        await prisma.reservationRoom.findUniqueOrThrow({
+          where: { id: guest.reservationRoomId },
+          select: { version: true },
+        })
+      ).version,
+    });
+    expect(again.status).toBe(201);
+    expect(again.body.data.room.id).toBe(guest.roomId);
+  });
+
+  it("can release the room so the booking is unassigned", async () => {
+    const guest = await inHouse("KNG", 1);
+    const r = await reverseCheckIn(fom, guest.stay.id, {
+      version: guest.stay.version,
+      releaseRoom: true,
+      reason: "Guest cancelled at the desk",
+    });
+    expect(r.status).toBe(200);
+    const rr = await prisma.reservationRoom.findUniqueOrThrow({
+      where: { id: guest.reservationRoomId },
+      select: { status: true, roomId: true },
+    });
+    expect(rr).toEqual({ status: "RESERVED", roomId: null });
+    expect(
+      await prisma.roomAssignment.count({
+        where: { reservationRoomId: guest.reservationRoomId, status: "ACTIVE" },
+      }),
+    ).toBe(0);
+  });
+
+  it("refuses once anything is posted to the folio, for an earlier check-in, and without the permission", async () => {
+    const posted = await inHouse("KNG", 2);
+    const folio = await prisma.folio.findFirstOrThrow({
+      where: { reservationRoomId: posted.reservationRoomId },
+      select: { id: true },
+    });
+    const c = await call(chargesRoute, {
+      method: "POST",
+      path: `${base(A)}/folios/${folio.id}/charges`,
+      params: { propertyId: A, folioId: folio.id },
+      body: { transactionCodeId: invA.chargeCodes["2000"], quantity: 1, unitAmount: "10.00" },
+      jar: agent,
+      headers: { "idempotency-key": crypto.randomUUID() },
+    });
+    expect(c.status).toBe(201);
+    const withPostings = await reverseCheckIn(fom, posted.stay.id, {
+      version: posted.stay.version,
+      reason: "Wrong booking",
+    });
+    expect(withPostings.status).toBe(422);
+    expect(withPostings.body.error.details.reason).toBe("FOLIO_HAS_POSTINGS");
+
+    const earlier = await inHouse("KNG", 1);
+    await backdate(earlier.reservationRoomId, 1, 0);
+    const notToday = await reverseCheckIn(fom, earlier.stay.id, {
+      version: earlier.stay.version,
+      reason: "Wrong booking",
+    });
+    expect(notToday.status).toBe(422);
+    expect(notToday.body.error.details.reason).toBe("NOT_SAME_BUSINESS_DATE");
+
+    const fresh = await inHouse("KNG", 2);
+    const byAgent = await reverseCheckIn(agent, fresh.stay.id, {
+      version: fresh.stay.version,
+      reason: "Wrong booking",
+    });
+    expect(byAgent.status).toBe(403);
+    const noReason = await reverseCheckIn(fom, fresh.stay.id, { version: fresh.stay.version });
+    expect(noReason.status).toBe(400);
+    const stale = await reverseCheckIn(fom, fresh.stay.id, {
+      version: fresh.stay.version + 5,
+      reason: "Wrong booking",
+    });
+    expect(stale.status).toBe(409);
+    expect(await prisma.stay.count({ where: { id: fresh.stay.id } })).toBe(1);
   });
 });
 

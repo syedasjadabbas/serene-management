@@ -1,6 +1,6 @@
 "use client";
 
-import { KeyRound, LogOut, UserRound } from "lucide-react";
+import { KeyRound, LaptopMinimal, LogOut, UserRound } from "lucide-react";
 import { useState } from "react";
 import { Avatar } from "@/components/ui/Avatar";
 import { cn } from "@/components/ui/cn";
@@ -9,6 +9,7 @@ import { ChangePasswordDialog } from "./ChangePasswordDialog";
 import { useMeQuery } from "@/lib/api/endpoints/session.api";
 import { Disclosure } from "./Disclosure";
 import { ProfileDialog } from "./ProfileDialog";
+import { SessionsDialog } from "./SessionsDialog";
 
 /** One look for every account-menu entry: icon, label, 32px (44px on touch). */
 const ITEM =
@@ -18,14 +19,14 @@ const PANEL_ITEM =
   "flex min-h-11 w-full items-center justify-start gap-3 rounded-md px-3 text-start text-base font-medium text-fg hover:bg-surface-sunken [&_svg]:text-fg-muted";
 
 /**
- * The signed-in user's account: profile, password, sign out. `menu` (the
+ * The signed-in user's account: profile, password, signed-in devices, sign out. `menu` (the
  * default) is the account chip in the header; `panel` lists the same
  * entries inline for the navigation drawer on phones, where the header has
  * no room for the chip.
  */
 export function UserMenu({ variant = "menu" }: { variant?: "menu" | "panel" }) {
   const { data: me } = useMeQuery();
-  const [dialog, setDialog] = useState<"profile" | "password" | null>(null);
+  const [dialog, setDialog] = useState<"profile" | "password" | "sessions" | null>(null);
   if (!me) return null;
 
   const panel = variant === "panel";
@@ -64,6 +65,17 @@ export function UserMenu({ variant = "menu" }: { variant?: "menu" | "panel" }) {
         >
           <KeyRound aria-hidden="true" className="size-4" />
           Change password
+        </button>
+        <button
+          type="button"
+          className={item}
+          onClick={() => {
+            close();
+            setDialog("sessions");
+          }}
+        >
+          <LaptopMinimal aria-hidden="true" className="size-4" />
+          Signed-in devices
         </button>
         {panel ? null : <div className="my-1 border-t border-border-subtle" />}
         <SignOutButton className={item}>
@@ -111,6 +123,7 @@ export function UserMenu({ variant = "menu" }: { variant?: "menu" | "panel" }) {
       )}
       {dialog === "profile" ? <ProfileDialog me={me} onClose={() => setDialog(null)} /> : null}
       {dialog === "password" ? <ChangePasswordDialog onClose={() => setDialog(null)} /> : null}
+      {dialog === "sessions" ? <SessionsDialog onClose={() => setDialog(null)} /> : null}
     </>
   );
 }

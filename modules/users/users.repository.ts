@@ -83,6 +83,14 @@ export function findPropertyInOrganization(tx: Tx, organizationId: string, prope
   });
 }
 
+/** A new INVITED user without a password (users.service inviteUser). */
+export function insertInvitedUser(
+  tx: Tx,
+  data: { organizationId: string; email: string; displayName: string },
+) {
+  return tx.user.create({ data: { ...data, status: "INVITED" }, select: { id: true } });
+}
+
 export function insertRoleAssignment(tx: Tx, data: Prisma.UserRoleAssignmentUncheckedCreateInput) {
   return tx.userRoleAssignment.create({ data, select: assignmentSelect });
 }

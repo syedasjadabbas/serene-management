@@ -175,7 +175,7 @@ export function RatePlanDetailView({ ratePlanId }: { ratePlanId: string }) {
               plan.currencyCode,
             ).trim()}
             {plan.derivation.roundingIncrement
-              ? `, rounded to ${plan.derivation.roundingIncrement}`
+              ? `, rounded to ${formatCurrency(plan.derivation.roundingIncrement, plan.currencyCode)}`
               : ""}
             .
           </p>

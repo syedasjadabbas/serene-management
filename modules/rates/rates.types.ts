@@ -94,7 +94,8 @@ export interface RateAdminOptions {
   depositPolicies: Ref[];
   marketCodes: Ref[];
   sourceCodes: Ref[];
-  ratePlans: (Ref & { status: string; parentRatePlanId: string | null })[];
+  /** `roomTypeIds`: the room types the plan is sold for. */
+  ratePlans: (Ref & { status: string; parentRatePlanId: string | null; roomTypeIds: string[] })[];
   packages: (Ref & { status: string; sellSeparately: boolean })[];
 }
 

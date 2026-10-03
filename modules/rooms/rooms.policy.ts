@@ -91,7 +91,14 @@ export type RoomBoardFilter = (typeof ROOM_BOARD_FILTERS)[number];
 
 /** Source tags recorded in room_status_history. */
 export type RoomStatusSource =
-  "CHECK_IN" | "CHECK_OUT" | "ROOM_MOVE" | "HOUSEKEEPING" | "MAINTENANCE" | "USER" | "NIGHT_AUDIT";
+  | "CHECK_IN"
+  | "CHECK_OUT"
+  | "REVERSE_CHECK_IN"
+  | "ROOM_MOVE"
+  | "HOUSEKEEPING"
+  | "MAINTENANCE"
+  | "USER"
+  | "NIGHT_AUDIT";
 
 // --- Housekeeping status transitions (room level) ---------------------------------------
 

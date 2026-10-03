@@ -50,9 +50,10 @@ export function ArrivalsView({
           </Link>
         </Alert>
       ) : null}
-      {/* Narrow screens scroll the table sideways; the guest column and the row action stay pinned. */}
+      {/* Phones scroll the table sideways with the guest column and the row action pinned; tablets
+          (768–1023 px) drop the party size and ETA columns (both on the reservation) so it fits. */}
       <div className="relative overflow-x-auto rounded-lg border border-border-subtle bg-surface shadow-card">
-        <table className="w-full min-w-[940px] text-sm">
+        <table className="w-full min-w-[940px] text-sm md:max-lg:min-w-0">
           <caption className="sr-only">Arrivals for the business date</caption>
           <thead className="bg-surface-sunken text-left text-xs text-fg-secondary">
             <tr>
@@ -68,7 +69,7 @@ export function ArrivalsView({
               <th scope="col" className="px-2 py-2 font-medium">
                 Stay
               </th>
-              <th scope="col" className="px-2 py-2 text-end font-medium">
+              <th scope="col" className="px-2 py-2 text-end font-medium md:max-lg:hidden">
                 Guests
               </th>
               <th scope="col" className="px-2 py-2 font-medium">
@@ -77,7 +78,7 @@ export function ArrivalsView({
               <th scope="col" className="px-2 py-2 font-medium">
                 Room
               </th>
-              <th scope="col" className="px-2 py-2 font-medium">
+              <th scope="col" className="px-2 py-2 font-medium md:max-lg:hidden">
                 ETA
               </th>
               <th scope="col" className="px-2 py-2 font-medium">
@@ -228,11 +229,11 @@ function ArrivalsPage({
               {row.confirmation}
             </Link>
           </td>
-          <td className="px-2 py-2 whitespace-nowrap">
+          <td className="px-2 py-2 whitespace-nowrap md:max-lg:whitespace-normal">
             {formatShortDate(row.arrival)} → {formatShortDate(row.departure)}
             <span className="ms-1 text-xs text-fg-muted">{row.nights}n</span>
           </td>
-          <td className="px-2 py-2 text-end tabular-nums">
+          <td className="px-2 py-2 text-end tabular-nums md:max-lg:hidden">
             {row.adults}
             {row.children ? `+${row.children}` : ""}
           </td>
@@ -249,7 +250,7 @@ function ArrivalsPage({
               <span className="text-fg-muted">—</span>
             )}
           </td>
-          <td className="px-2 py-2 tabular-nums">{row.eta ?? "—"}</td>
+          <td className="px-2 py-2 tabular-nums md:max-lg:hidden">{row.eta ?? "—"}</td>
           <td className="px-2 py-2">
             <ArrivalStateBadge state={row.state} />
           </td>

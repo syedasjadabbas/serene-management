@@ -367,11 +367,21 @@ export async function findRateReferenceData(tx: Tx, propertyId: string) {
       orderBy: { code: "asc" },
       select: ref,
     }),
-    ratePlans: await tx.ratePlan.findMany({
-      where: { propertyId },
-      orderBy: [{ displayOrder: "asc" }, { code: "asc" }],
-      select: { ...ref, status: true, parentRatePlanId: true },
-    }),
+    ratePlans: (
+      await tx.ratePlan.findMany({
+        where: { propertyId },
+        orderBy: [{ displayOrder: "asc" }, { code: "asc" }],
+        select: {
+          ...ref,
+          status: true,
+          parentRatePlanId: true,
+          roomTypes: { select: { roomTypeId: true } },
+        },
+      })
+    ).map(({ roomTypes, ...plan }) => ({
+      ...plan,
+      roomTypeIds: roomTypes.map((rt) => rt.roomTypeId),
+    })),
     packages: await tx.package.findMany({
       where: { propertyId },
       orderBy: { code: "asc" },

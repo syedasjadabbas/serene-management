@@ -8,13 +8,13 @@ import {
   hasOrganizationPermission,
   hasPermission,
   hasPermissionAnywhere,
-  permissionsInScope,
   propertiesWithPermission,
 } from "@/lib/permissions/evaluate";
 import { serverEnv } from "@/lib/env";
 import { type GrantedPermissions, loadGrantedPermissions } from "@/modules/access/access.service";
 import { recordAudit } from "@/modules/audit/audit.service";
 import {
+  INVITE_TOKEN_TTL_MS,
   issuePasswordResetInTx,
   revokeAllSessionsForUser,
 } from "@/modules/identity/identity.service";
@@ -30,13 +30,25 @@ import {
   findUserInOrganization,
   findUserAuthority,
   findUsersPage,
+  insertInvitedUser,
   insertRoleAssignment,
   lockOrganization,
   updateUserStatus,
   type UserRow,
 } from "./users.repository";
-import type { GrantRoleInput, ListUsersQuery, ReasonOnlyInput } from "./users.schema";
-import type { PasswordResetIssued, RoleAssignmentView, RoleView, UserView } from "./users.types";
+import type {
+  GrantRoleInput,
+  InviteUserInput,
+  ListUsersQuery,
+  ReasonOnlyInput,
+} from "./users.schema";
+import type {
+  PasswordResetIssued,
+  RoleAssignmentView,
+  RoleView,
+  UserInvited,
+  UserView,
+} from "./users.types";
 
 /**
  * Users are organization data: any holder of `users:read` (org or property
@@ -83,6 +95,101 @@ export async function listRoles(ctx: SessionContext): Promise<RoleView[]> {
 }
 
 /**
+ * Adds a user to the organization with a first role (docs/RBAC.md §6). The
+ * inviter needs `users:manage` in the role's scope and must hold every
+ * permission the role grants (no escalation), checked under the
+ * administration lock. The account is INVITED, without a password, until
+ * the person uses the one-time set-password link returned ONCE here (24 h;
+ * no e-mail infrastructure: the administrator hands it over). E-mail
+ * addresses are unique across the installation.
+ */
+export async function inviteUser(
+  ctx: SessionContext,
+  input: InviteUserInput,
+): Promise<UserInvited> {
+  const propertyId = input.role.scope === "PROPERTY" ? input.role.propertyId : null;
+  assertCanManageScope(ctx, propertyId);
+
+  return runInTransaction(async (tx) => {
+    const caller = await lockAdministration(tx, ctx);
+    requireUsersManageInScope(caller, propertyId);
+    if (propertyId && !(await findPropertyInOrganization(tx, ctx.organizationId, propertyId))) {
+      throw new AppError("FORBIDDEN", "You do not have access to this property");
+    }
+    const role = await findOrganizationRole(tx, ctx.organizationId, input.role.roleId);
+    if (!role) throw notFound("Role");
+    assertNoEscalation(
+      caller,
+      propertyId,
+      role.permissions.map((p) => p.permissionKey),
+    );
+    const taken = await tx.user.findUnique({ where: { email: input.email }, select: { id: true } });
+    if (taken) {
+      throw new AppError("CONFLICT", "A user with this e-mail address already exists", {
+        reason: "EMAIL_TAKEN",
+        fields: { email: ["This e-mail address is already in use"] },
+      });
+    }
+
+    let created: { id: string };
+    try {
+      created = await insertInvitedUser(tx, {
+        organizationId: ctx.organizationId,
+        email: input.email,
+        displayName: input.displayName,
+      });
+    } catch (error) {
+      // A concurrent invitation for the same address won the unique index.
+      if (error instanceof Error && "code" in error && error.code === "P2002") {
+        throw new AppError("CONFLICT", "A user with this e-mail address already exists", {
+          reason: "EMAIL_TAKEN",
+          fields: { email: ["This e-mail address is already in use"] },
+        });
+      }
+      throw error;
+    }
+    const assignment = await insertRoleAssignment(tx, {
+      userId: created.id,
+      roleId: role.id,
+      scope: input.role.scope,
+      propertyId,
+      grantedById: ctx.userId,
+    });
+    const now = new Date();
+    const issued = await issuePasswordResetInTx(tx, created.id, now, INVITE_TOKEN_TTL_MS);
+    await recordAudit(
+      tx,
+      { ...auditActor(ctx), propertyId },
+      {
+        action: "user.invite",
+        resourceType: "User",
+        resourceId: created.id,
+        risk: "HIGH",
+        after: {
+          status: "INVITED",
+          role: role.code,
+          scope: input.role.scope,
+          propertyId,
+          assignmentId: assignment.id,
+          tokenId: issued.tokenId,
+          expiresAt: issued.expiresAt.toISOString(),
+        },
+        reason: input.reason,
+        reasonCodeId: input.reasonCodeId ?? null,
+        permission: "users:manage",
+      },
+    );
+    const url = new URL("/reset-password", serverEnv().APP_URL);
+    url.hash = `token=${issued.token}`;
+    return {
+      user: await reloadUser(tx, ctx, created.id),
+      setupUrl: url.toString(),
+      expiresAt: issued.expiresAt.toISOString(),
+    };
+  });
+}
+
+/**
  * Grants a role organization-wide or for one property (docs/RBAC.md §6).
  * The target property comes from the body, so it is authorized here:
  * the caller needs `users:manage` in exactly that scope, may not change their
@@ -99,7 +206,8 @@ export async function grantRole(
     throw new AppError("FORBIDDEN", "You cannot change your own role assignments");
 
   return runInTransaction(async (tx) => {
-    await lockAdministration(tx, ctx);
+    const caller = await lockAdministration(tx, ctx);
+    requireUsersManageInScope(caller, propertyId);
     const user = await findUserInOrganization(tx, ctx.organizationId, userId);
     if (!user) throw notFound("User");
     if (propertyId && !(await findPropertyInOrganization(tx, ctx.organizationId, propertyId))) {
@@ -108,7 +216,7 @@ export async function grantRole(
     const role = await findOrganizationRole(tx, ctx.organizationId, input.roleId);
     if (!role) throw notFound("Role");
     assertNoEscalation(
-      ctx,
+      caller,
       propertyId,
       role.permissions.map((p) => p.permissionKey),
     );
@@ -148,16 +256,17 @@ export async function revokeRole(
     throw new AppError("FORBIDDEN", "You cannot change your own role assignments");
 
   return runInTransaction(async (tx) => {
-    await lockAdministration(tx, ctx);
+    const caller = await lockAdministration(tx, ctx);
     const user = await findUserInOrganization(tx, ctx.organizationId, userId);
     if (!user) throw notFound("User");
     const assignment = await findRoleAssignment(tx, userId, assignmentId);
     if (!assignment) throw notFound("Role assignment");
     const propertyId = assignment.scope === "PROPERTY" ? assignment.propertyId : null;
     assertCanManageScope(ctx, propertyId);
+    requireUsersManageInScope(caller, propertyId);
     // A lesser administrator cannot strip a role more powerful than their own.
     assertNoEscalation(
-      ctx,
+      caller,
       propertyId,
       assignment.role.permissions.map((p) => p.permissionKey),
     );
@@ -332,7 +441,7 @@ export async function issuePasswordReset(
     requireOrganizationUsersManage(caller);
     const user = await findUserInOrganization(tx, ctx.organizationId, userId);
     if (!user) throw notFound("User");
-    if (user.status !== "ACTIVE" && user.status !== "LOCKED") {
+    if (user.status !== "ACTIVE" && user.status !== "LOCKED" && user.status !== "INVITED") {
       throw new AppError(
         "BUSINESS_RULE_VIOLATION",
         `A ${user.status.toLowerCase()} user cannot receive a password reset`,
@@ -341,7 +450,13 @@ export async function issuePasswordReset(
     }
     await assertOutranks(tx, ctx.organizationId, caller, userId);
     const now = new Date();
-    const issued = await issuePasswordResetInTx(tx, userId, now);
+    // An invited user who lost the first link gets a new invitation link (24 h).
+    const issued = await issuePasswordResetInTx(
+      tx,
+      userId,
+      now,
+      user.status === "INVITED" ? INVITE_TOKEN_TTL_MS : undefined,
+    );
     await recordAudit(tx, auditActor(ctx), {
       action: "user.password_reset_issue",
       resourceType: "User",
@@ -467,14 +582,38 @@ function assertCanManageScope(ctx: SessionContext, propertyId: string | null) {
   }
 }
 
-/** No privilege escalation: every permission in the role must already be held in that scope. */
+/** The caller's grants in one scope, as re-read under the administration lock (H3). */
+function lockedPermissionsInScope(caller: CallerAuthority, propertyId: string | null) {
+  const held = new Set<Permission>(caller.organizationPermissions);
+  if (propertyId !== null) for (const p of caller.propertyGrants.get(propertyId) ?? []) held.add(p);
+  return held;
+}
+
+/**
+ * Re-checked inside the administration lock (PRODUCTION_READINESS P2-2): an
+ * administrator demoted by a concurrent command can no longer finish a grant
+ * or revoke authorized from their request-start profile.
+ */
+function requireUsersManageInScope(caller: CallerAuthority, propertyId: string | null) {
+  if (caller.isSuperAdmin) return;
+  if (!lockedPermissionsInScope(caller, propertyId).has("users:manage")) {
+    throw propertyId === null
+      ? forbidden("users:manage")
+      : new AppError("FORBIDDEN", "You do not have access to this property");
+  }
+}
+
+/**
+ * No privilege escalation: every permission in the role must already be held
+ * in that scope, judged from the caller's grants re-read under the lock.
+ */
 function assertNoEscalation(
-  ctx: SessionContext,
+  caller: CallerAuthority,
   propertyId: string | null,
   rolePermissions: string[],
 ) {
-  if (ctx.access.isSuperAdmin) return;
-  const held = new Set<Permission>(permissionsInScope(ctx.access, propertyId));
+  if (caller.isSuperAdmin) return;
+  const held = lockedPermissionsInScope(caller, propertyId);
   const missing = rolePermissions.filter((p) => !isPermission(p) || !held.has(p));
   if (missing.length > 0) {
     throw new AppError(

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   arrivalState,
   checkoutTiming,
+  reverseCheckInProblem,
   stayTransitionProblem,
 } from "@/modules/front-desk/front-desk.policy";
 import {
@@ -161,5 +162,24 @@ describe("front desk contracts", () => {
     expect(walkInSchema.safeParse({ ...walkIn, roomId: ID }).success).toBe(true);
     expect(walkInSchema.safeParse(walkIn).success).toBe(false);
     expect(walkInSchema.safeParse({ ...walkIn, roomId: ID, waitlist: true }).success).toBe(false);
+  });
+});
+
+describe("reverseCheckInProblem", () => {
+  const ok = {
+    status: "IN_HOUSE" as const,
+    arrivalBusinessDate: "2026-10-03",
+    businessDate: "2026-10-03",
+    postings: 0,
+  };
+  it("allows a same-day check-in with an empty folio", () => {
+    expect(reverseCheckInProblem(ok)).toBeNull();
+  });
+  it("refuses a checked-out stay, an earlier check-in and a folio with postings", () => {
+    expect(reverseCheckInProblem({ ...ok, status: "CHECKED_OUT" })?.reason).toBe("NOT_IN_HOUSE");
+    expect(reverseCheckInProblem({ ...ok, arrivalBusinessDate: "2026-10-02" })?.reason).toBe(
+      "NOT_SAME_BUSINESS_DATE",
+    );
+    expect(reverseCheckInProblem({ ...ok, postings: 1 })?.reason).toBe("FOLIO_HAS_POSTINGS");
   });
 });

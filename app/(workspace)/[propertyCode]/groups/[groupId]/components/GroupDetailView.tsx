@@ -19,6 +19,7 @@ import type { BlockView, GroupDetail } from "@/modules/groups/groups.types";
 import {
   AllocationDialog,
   BlockStatusDialog,
+  EditGroupDialog,
   GroupStatusDialog,
   NewBlockDialog,
   PickupDialog,
@@ -30,6 +31,7 @@ type Dialog =
   | null
   | { kind: "block" }
   | { kind: "groupStatus" }
+  | { kind: "edit" }
   | { kind: "pickup" | "allocation" | "status" | "release"; block: BlockView };
 
 const STATUS_TONES: Record<string, BadgeTone> = {
@@ -94,6 +96,9 @@ export function GroupDetailView({ groupId }: { groupId: string }) {
         actions={
           a.manage ? (
             <>
+              <Button variant="secondary" onClick={() => setDialog({ kind: "edit" })}>
+                Edit group
+              </Button>
               <Button variant="ghost" onClick={() => setDialog({ kind: "groupStatus" })}>
                 Close or cancel group
               </Button>
@@ -180,6 +185,9 @@ export function GroupDetailView({ groupId }: { groupId: string }) {
 
       {dialog?.kind === "block" ? (
         <NewBlockDialog group={group} onClose={() => setDialog(null)} />
+      ) : null}
+      {dialog?.kind === "edit" ? (
+        <EditGroupDialog group={group} onClose={() => setDialog(null)} />
       ) : null}
       {dialog?.kind === "groupStatus" ? (
         <GroupStatusDialog group={group} onClose={() => setDialog(null)} />

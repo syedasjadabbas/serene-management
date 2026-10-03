@@ -43,6 +43,9 @@ export function StepReview() {
   const [walkInMutation, walkedIn] = useWalkInMutation();
   const isLoading = created.isLoading || walkedIn.isLoading;
   const error = created.error ?? walkedIn.error;
+  // One Idempotency-Key per review screen: a retry after a lost response returns the first
+  // booking. A failed attempt stores nothing, so a corrected resubmission books normally.
+  const [idempotencyKey] = useState(() => crypto.randomUUID());
   const [override, setOverride] = useState(false);
   const [reason, setReason] = useState("");
   const apiError = toClientApiError(error);
@@ -87,14 +90,14 @@ export function StepReview() {
       ...(override ? { override: true, reason } : {}),
     };
     if (walkIn) {
-      const result = await walkInMutation({ propertyId: property.id, body });
+      const result = await walkInMutation({ propertyId: property.id, body, idempotencyKey });
       if ("data" in result && result.data) {
         reset(property.id);
         router.push(`/${property.code}/front-desk/stays/${result.data.id}?checkedIn=1` as Route);
       }
       return;
     }
-    const result = await createReservation({ propertyId: property.id, body });
+    const result = await createReservation({ propertyId: property.id, body, idempotencyKey });
     if ("data" in result && result.data) {
       reset(property.id);
       router.push(`/${property.code}/reservations/${result.data.id}?created=1` as Route);

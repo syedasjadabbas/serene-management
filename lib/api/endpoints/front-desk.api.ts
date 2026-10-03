@@ -4,6 +4,7 @@ import type {
   RoomMoveInput,
   WalkInInput,
   ExtendStayInput,
+  ReverseCheckInInput,
 } from "@/modules/front-desk/front-desk.schema";
 import type {
   ArrivalRow,
@@ -120,11 +121,15 @@ export const frontDeskApi = baseApi.injectEndpoints({
       transformResponse: (response: ApiSuccess<StayDetail>) => response.data,
       invalidatesTags: afterCommand,
     }),
-    walkIn: build.mutation<StayDetail, { propertyId: string; body: Partial<WalkInInput> }>({
-      query: ({ propertyId, body }) => ({
+    walkIn: build.mutation<
+      StayDetail,
+      { propertyId: string; body: Partial<WalkInInput>; idempotencyKey?: string }
+    >({
+      query: ({ propertyId, body, idempotencyKey }) => ({
         url: `/properties/${propertyId}/front-desk/walk-ins`,
         method: "POST",
         body,
+        ...(idempotencyKey ? { headers: { "Idempotency-Key": idempotencyKey } } : {}),
       }),
       transformResponse: (response: ApiSuccess<StayDetail>) => response.data,
       invalidatesTags: afterCommand,
@@ -166,6 +171,33 @@ export const frontDeskApi = baseApi.injectEndpoints({
       transformResponse: (response: ApiSuccess<StayDetail>) => response.data,
       invalidatesTags: afterCommand,
     }),
+    /** Undo a same-day check-in with no postings; the reservation returns to Reserved. */
+    reverseCheckIn: build.mutation<
+      { reservationId: string; reservationRoomId: string },
+      { propertyId: string; stayId: string; body: ReverseCheckInInput }
+    >({
+      query: ({ propertyId, stayId, body }) => ({
+        url: `/properties/${propertyId}/stays/${stayId}/reverse-check-in`,
+        method: "POST",
+        body,
+      }),
+      transformResponse: (
+        response: ApiSuccess<{ reservationId: string; reservationRoomId: string }>,
+      ) => response.data,
+      invalidatesTags: (result, _error, arg) => [
+        ...operationsTags(arg.propertyId),
+        { type: "Reservation" as const, id: `LIST-${arg.propertyId}` },
+        { type: "Folio" as const, id: `LIST-${arg.propertyId}` },
+        // The reversed stay no longer exists: a still-open stay page refetches and shows "not found".
+        { type: "Stay" as const, id: arg.stayId },
+        ...(result
+          ? [
+              { type: "Reservation" as const, id: result.reservationId },
+              { type: "Folio" as const, id: result.reservationRoomId },
+            ]
+          : []),
+      ],
+    }),
   }),
 });
 
@@ -182,4 +214,5 @@ export const {
   useMoveRoomMutation,
   useCheckOutMutation,
   useExtendStayMutation,
+  useReverseCheckInMutation,
 } = frontDeskApi;

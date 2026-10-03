@@ -390,11 +390,13 @@ export async function updateGroup(
         before: {
           name: before!.name,
           accountProfileId: before!.account?.id ?? null,
+          contactGuestId: before!.contactGuest?.id ?? null,
           notes: before!.notes,
         },
         after: {
           name: input.name,
           accountProfileId: input.accountProfileId ?? null,
+          contactGuestId: input.contactGuestId ?? null,
           notes: input.notes ?? null,
         },
         permission: "groups:manage",

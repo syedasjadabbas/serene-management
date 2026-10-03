@@ -133,3 +133,16 @@ export const departuresQuerySchema = cursorPageQuerySchema
   .extend({ q: listSearch, filter: z.enum(DEPARTURE_FILTERS).default("all") })
   .strict();
 export type DeparturesQuery = z.infer<typeof departuresQuerySchema>;
+
+/**
+ * Reverse check-in (frontdesk:reverse_checkin, HIGH): same business date, no
+ * postings. `releaseRoom` also takes the room off the reservation.
+ */
+export const reverseCheckInSchema = z
+  .object({
+    version: z.number().int().positive(),
+    releaseRoom: z.boolean().default(false),
+    reason: z.string().trim().min(3, "A reason is required").max(1000),
+  })
+  .strict();
+export type ReverseCheckInInput = z.infer<typeof reverseCheckInSchema>;

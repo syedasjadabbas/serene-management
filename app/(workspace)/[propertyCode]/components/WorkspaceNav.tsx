@@ -23,6 +23,7 @@ import {
   BriefcaseBusiness,
   BedSingle,
   Landmark,
+  SlidersHorizontal,
 } from "lucide-react";
 import { usePathname, useSearchParams } from "next/navigation";
 import { MobileNav } from "@/components/workspace/MobileNav";
@@ -52,6 +53,7 @@ const ICONS: Record<string, LucideIcon> = {
   "guests:loyalty": Sparkles,
   housekeeping: BedDouble,
   maintenance: Wrench,
+  setup: SlidersHorizontal,
   "rates:plans": Tags,
   "rates:packages": Gift,
   billing: Receipt,

@@ -8,6 +8,8 @@ export const POST = definePropertyRoute({
   permission: "frontdesk:checkin",
   params: propertyParamsSchema,
   body: walkInSchema,
+  /** An Idempotency-Key, when sent, makes a retried walk-in return the first stay. */
+  idempotent: "optional",
   status: 201,
-  handler: ({ ctx, body }) => walkIn(ctx, body),
+  handler: ({ ctx, body, idempotency }) => walkIn(ctx, body, idempotency),
 });

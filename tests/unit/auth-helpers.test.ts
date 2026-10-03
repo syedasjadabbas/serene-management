@@ -52,11 +52,16 @@ describe("post-login redirect", () => {
 
 describe("pagination cursor", () => {
   it("round-trips and rejects garbage", () => {
-    const cursor = encodeCursor({ c: "2026-09-24T10:00:00.000Z", i: "abc" });
+    const id = "01890a5d-ac96-774b-bcce-b302099a8057";
+    const cursor = encodeCursor({ c: "2026-09-24T10:00:00.000Z", i: id });
     expect(decodeCursor(cursor, ["c", "i"] as const)).toEqual({
       c: "2026-09-24T10:00:00.000Z",
-      i: "abc",
+      i: id,
     });
+    // The id key is a UUID: a tampered value is refused before it reaches SQL (P2-4).
+    expect(
+      decodeCursor(encodeCursor({ c: "2026-09-24T10:00:00.000Z", i: "abc" }), ["c", "i"] as const),
+    ).toBeNull();
     expect(decodeCursor("garbage", ["c", "i"] as const)).toBeNull();
     expect(decodeCursor(encodeCursor({ c: "x" }), ["c", "i"] as const)).toBeNull();
   });

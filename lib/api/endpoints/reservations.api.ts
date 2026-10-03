@@ -93,12 +93,15 @@ export const reservationsApi = baseApi.injectEndpoints({
     }),
     createReservation: build.mutation<
       ReservationDetail,
-      WithProperty<{ body: Partial<CreateReservationInput> }>
+      // idempotencyKey: chosen once per booking screen, so a retried request returns the
+      // first booking instead of booking twice (PRODUCTION_READINESS P2-3).
+      WithProperty<{ body: Partial<CreateReservationInput>; idempotencyKey?: string }>
     >({
-      query: ({ propertyId, body }) => ({
+      query: ({ propertyId, body, idempotencyKey }) => ({
         url: `/properties/${propertyId}/reservations`,
         method: "POST",
         body,
+        ...(idempotencyKey ? { headers: { "Idempotency-Key": idempotencyKey } } : {}),
       }),
       transformResponse: (response: ApiSuccess<ReservationDetail>) => response.data,
       invalidatesTags: (_r, _e, { propertyId }) => [

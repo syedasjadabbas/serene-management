@@ -1,7 +1,7 @@
 import "server-only";
 import { prisma, type Tx } from "@/lib/db/prisma";
 import { runInTransaction } from "@/lib/db/transaction";
-import { auditActor, type PropertyContext } from "@/lib/http/context";
+import { auditActor, type IdempotencyRequest, type PropertyContext } from "@/lib/http/context";
 import { AppError, forbidden, notFound, staleVersion } from "@/lib/http/errors";
 import type { Permission } from "@/lib/permissions/catalog";
 import { hasPermission, hasPermissionAnywhere } from "@/lib/permissions/evaluate";
@@ -12,6 +12,7 @@ import {
   userDisplayNames,
 } from "@/modules/audit/audit.service";
 import { recordEvent } from "@/modules/integrations/outbox.service";
+import { runIdempotent } from "@/modules/idempotency/idempotency.service";
 import { fromDateOnly, toDateOnly } from "@/modules/business-date/business-date.policy";
 import { requireOpenBusinessDate } from "@/modules/business-date/business-date.service";
 import { normalizeName } from "@/modules/guests/guests.policy";
@@ -26,6 +27,7 @@ import {
   lockReservationRoomById,
   lockReservationRoomForCommand,
   markCheckedIn,
+  markCheckInReversed,
   markCheckedOut,
   moveInHouseRoom,
   requireReasonCode,
@@ -58,6 +60,7 @@ import {
   type StayStatus,
   arrivalState,
   checkoutTiming,
+  reverseCheckInProblem,
   stayTransitionProblem,
 } from "./front-desk.policy";
 import {
@@ -81,6 +84,7 @@ import type {
   DeparturesQuery,
   ExtendStayInput,
   InHouseQuery,
+  ReverseCheckInInput,
   RoomMoveInput,
   WalkInInput,
 } from "./front-desk.schema";
@@ -328,7 +332,11 @@ export async function checkIn(
  * confirmation number) and the check-in in one transaction, so a failed
  * check-in leaves no reservation behind.
  */
-export async function walkIn(ctx: PropertyContext, input: WalkInInput): Promise<StayDetail> {
+export async function walkIn(
+  ctx: PropertyContext,
+  input: WalkInInput,
+  idempotency: IdempotencyRequest | null = null,
+): Promise<StayDetail> {
   requirePermission(ctx, "reservations:create");
   const stayId = await runInTransaction(async (tx) => {
     const businessDate = await requireOpenBusinessDate(tx, ctx.propertyId);
@@ -337,18 +345,119 @@ export async function walkIn(ctx: PropertyContext, input: WalkInInput): Promise<
         fields: { arrival: [`Arrival must be ${businessDate}`] },
       });
     }
-    const created = await createReservationInTx(tx, ctx, businessDate, input, { walkIn: true });
-    const current = await lockReservationRoomById(tx, ctx, created.reservationRoomIds[0]!);
-    return checkInInTx(
-      tx,
-      ctx,
-      businessDate,
-      current,
-      { roomId: input.roomId, acceptNotReady: false },
-      true,
-    );
+    const book = async () => {
+      const created = await createReservationInTx(tx, ctx, businessDate, input, { walkIn: true });
+      const current = await lockReservationRoomById(tx, ctx, created.reservationRoomIds[0]!);
+      const stayId = await checkInInTx(
+        tx,
+        ctx,
+        businessDate,
+        current,
+        { roomId: input.roomId, acceptNotReady: false },
+        true,
+      );
+      return { stayId };
+    };
+    // With an Idempotency-Key a retried walk-in returns the first stay (P2-3).
+    if (!idempotency) return (await book()).stayId;
+    return (await runIdempotent(tx, ctx.userId, idempotency, book)).result.stayId;
   });
   return getStay(ctx, stayId);
+}
+
+/**
+ * Reverse check-in (PMS_WORKFLOWS §6.3, frontdesk:reverse_checkin, HIGH): a
+ * check-in made on the current business date, with nothing posted to the
+ * folio, is undone. The reservation is RESERVED again (the room kept or
+ * released), the stay row is removed (the audit log keeps it) and the room
+ * is vacant again. Its housekeeping status is unchanged; staff decide whether
+ * the room needs a clean. The folio windows stay open and empty: a new
+ * check-in reuses them. Returns the reservation id.
+ */
+export async function reverseCheckIn(
+  ctx: PropertyContext,
+  stayId: string,
+  input: ReverseCheckInInput,
+): Promise<{ reservationId: string; reservationRoomId: string }> {
+  requirePermission(ctx, "frontdesk:reverse_checkin");
+  return runInTransaction(async (tx) => {
+    const businessDate = await requireOpenBusinessDate(tx, ctx.propertyId);
+    const ref = await findStayRef(tx, ctx.propertyId, stayId);
+    if (!ref) throw notFound("Stay");
+    const current = await lockReservationRoomById(tx, ctx, ref.reservationRoomId);
+    const stay = await lockStay(tx, ctx.propertyId, stayId);
+    if (!stay) throw notFound("Stay");
+    if (stay.version !== input.version) throw staleVersion("Stay");
+    const postings = await tx.folioItem.count({
+      where: { propertyId: ctx.propertyId, folio: { reservationRoomId: current.id } },
+    });
+    const problem = reverseCheckInProblem({
+      status: stay.status,
+      arrivalBusinessDate: toDateOnly(stay.arrival_business_date),
+      businessDate,
+      postings,
+    });
+    if (problem) {
+      throw new AppError("BUSINESS_RULE_VIOLATION", problem.message, { reason: problem.reason });
+    }
+    const rooms = await lockRoomsForUpdate(tx, ctx.propertyId, businessDate, [stay.room_id]);
+    const room = rooms.get(stay.room_id)!;
+
+    await markCheckInReversed(tx, ctx, current, {
+      roomId: stay.room_id,
+      releaseRoom: input.releaseRoom,
+    });
+    // Tasks generated for this stay stay with the room.
+    await tx.housekeepingTask.updateMany({
+      where: { propertyId: ctx.propertyId, stayId },
+      data: { stayId: null },
+    });
+    await tx.stay.delete({ where: { id: stayId } });
+    await changeRoomStatus(
+      tx,
+      { propertyId: ctx.propertyId, userId: ctx.userId },
+      room,
+      { frontOfficeStatus: "VACANT" },
+      "REVERSE_CHECK_IN",
+      businessDate,
+      input.reason,
+    );
+    await recordAudit(
+      tx,
+      { ...auditActor(ctx), businessDate },
+      {
+        action: "stay.reverse_check_in",
+        resourceType: "Stay",
+        resourceId: stayId,
+        risk: "HIGH",
+        before: {
+          reservationStatus: "IN_HOUSE",
+          stayStatus: "IN_HOUSE",
+          roomId: stay.room_id,
+          roomNumber: room.number,
+          roomFrontOfficeStatus: room.frontOfficeStatus,
+          arrivalBusinessDate: businessDate,
+        },
+        after: {
+          reservationStatus: "RESERVED",
+          reservationRoomId: current.id,
+          confirmation: current.reservation.confirmationNumber,
+          roomId: input.releaseRoom ? null : stay.room_id,
+          roomReleased: input.releaseRoom,
+          roomFrontOfficeStatus: "VACANT",
+        },
+        reason: input.reason,
+        permission: "frontdesk:reverse_checkin",
+      },
+    );
+    await recordEvent(
+      tx,
+      { organizationId: ctx.organizationId, propertyId: ctx.propertyId },
+      "stay.check_in_reversed",
+      { stayId, reservationId: current.reservationId, reservationRoomId: current.id },
+    );
+    return { reservationId: current.reservationId, reservationRoomId: current.id };
+  });
 }
 
 /** In-house move to another room of the booked type for the remaining nights. */
@@ -467,7 +576,7 @@ export async function checkOut(
     if (timing === "SAME_DAY") {
       throw new AppError(
         "BUSINESS_RULE_VIOLATION",
-        "The guest checked in today and has not used a night yet. A same-day departure needs a reverse check-in, which is not available yet.",
+        "The guest checked in today and has not used a night yet. Reverse the check-in instead (managers only, while nothing is posted to the folio).",
         { reason: "SAME_DAY_CHECK_OUT" },
       );
     }
@@ -981,6 +1090,11 @@ export async function getStay(ctx: PropertyContext, stayId: string): Promise<Sta
       viewFolio: can("billing:read"),
       checkOut:
         inHouse && businessDate !== null && can("frontdesk:checkout") && timing !== "SAME_DAY",
+      reverseCheckIn:
+        inHouse &&
+        businessDate !== null &&
+        can("frontdesk:reverse_checkin") &&
+        timing === "SAME_DAY",
       moveRoom:
         inHouse &&
         businessDate !== null &&

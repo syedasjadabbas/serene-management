@@ -5,7 +5,7 @@ import type {
   UpdateProfileInput,
   UploadAvatarInput,
 } from "@/modules/identity/identity.schema";
-import type { LoginResult } from "@/modules/identity/identity.types";
+import type { LoginResult, SessionView } from "@/modules/identity/identity.types";
 import type { MeView } from "@/modules/access/access.types";
 import type { ApiSuccess } from "@/types/api";
 import { baseApi } from "../baseApi";
@@ -28,10 +28,24 @@ export const sessionApi = baseApi.injectEndpoints({
     logout: build.mutation<void, void>({
       query: () => ({ url: "/auth/logout", method: "POST" }),
     }),
+    /** The signed-in user's active sessions (browsers and devices). */
+    sessions: build.query<SessionView[], void>({
+      query: () => "/auth/sessions",
+      transformResponse: (response: ApiSuccess<SessionView[]>) => response.data,
+      providesTags: ["Session"],
+    }),
+    /** Signs one of the user's own sessions out; `current` means this browser. */
+    revokeSession: build.mutation<{ revoked: true; current: boolean }, string>({
+      query: (sessionId) => ({ url: `/auth/sessions/${sessionId}`, method: "DELETE" }),
+      transformResponse: (response: ApiSuccess<{ revoked: true; current: boolean }>) =>
+        response.data,
+      invalidatesTags: ["Session"],
+    }),
     /** Every other session is signed out; this browser gets a fresh session. */
     changePassword: build.mutation<{ changed: true }, ChangePasswordInput>({
       query: (body) => ({ url: "/auth/password", method: "POST", body }),
       transformResponse: (response: ApiSuccess<{ changed: true }>) => response.data,
+      invalidatesTags: ["Session"],
     }),
     /** The signed-in user's own display name. */
     updateProfile: build.mutation<{ displayName: string }, UpdateProfileInput>({
@@ -59,6 +73,8 @@ export const sessionApi = baseApi.injectEndpoints({
 
 export const {
   useMeQuery,
+  useSessionsQuery,
+  useRevokeSessionMutation,
   useLoginMutation,
   useLogoutMutation,
   useChangePasswordMutation,

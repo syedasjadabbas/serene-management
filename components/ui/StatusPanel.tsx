@@ -82,7 +82,8 @@ export function StatusPanel({
       {description ? (
         <div className="text-sm text-pretty text-fg-secondary">{description}</div>
       ) : null}
-      {requestId ? (
+      {/* The support reference matters for failures, not for access or empty states. */}
+      {requestId && kind === "error" ? (
         <p className="font-mono text-2xs text-fg-muted">Reference: {requestId}</p>
       ) : null}
       {action ? <div className="mt-2">{action}</div> : null}

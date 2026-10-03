@@ -2,7 +2,7 @@ import "server-only";
 import type { Prisma } from "@/generated/prisma/client";
 import { prisma, type Tx } from "@/lib/db/prisma";
 import { runInTransaction } from "@/lib/db/transaction";
-import { auditActor, type PropertyContext } from "@/lib/http/context";
+import { auditActor, type IdempotencyRequest, type PropertyContext } from "@/lib/http/context";
 import type { AuditActor } from "@/modules/audit/audit.types";
 import { AppError, forbidden, notFound, staleVersion } from "@/lib/http/errors";
 import type { Permission } from "@/lib/permissions/catalog";
@@ -11,6 +11,7 @@ import { decodeCursor, encodeCursor } from "@/lib/utils/cursor";
 import { formatMoney, parseMoney, sum } from "@/lib/utils/money";
 import { requireReservationCompany } from "@/modules/accounts/accounts.service";
 import { recordAudit } from "@/modules/audit/audit.service";
+import { runIdempotent } from "@/modules/idempotency/idempotency.service";
 import { recordEvent } from "@/modules/integrations/outbox.service";
 import type { RestrictionViolation } from "@/modules/availability/availability.policy";
 import {
@@ -348,10 +349,17 @@ function nightRows(
 export async function createReservation(
   ctx: PropertyContext,
   input: CreateReservationInput,
+  idempotency: IdempotencyRequest | null = null,
 ): Promise<ReservationDetail> {
   const reservationId = await runInTransaction(async (tx) => {
     const businessDate = await requireOpenBusinessDate(tx, ctx.propertyId);
-    return (await createReservationInTx(tx, ctx, businessDate, input)).reservationId;
+    const book = async () => ({
+      reservationId: (await createReservationInTx(tx, ctx, businessDate, input)).reservationId,
+    });
+    // With an Idempotency-Key a retried request returns the first booking
+    // instead of booking twice (PRODUCTION_READINESS P2-3).
+    if (!idempotency) return (await book()).reservationId;
+    return (await runIdempotent(tx, ctx.userId, idempotency, book)).result.reservationId;
   });
   return getReservation(ctx, reservationId);
 }
@@ -1258,6 +1266,24 @@ export async function markCheckedIn(
   }
   await saveVersioned(tx, current, { status: "IN_HOUSE", roomId });
   return { roomAssigned: !hasAssignment };
+}
+
+/**
+ * Reverse check-in, reservation side (PMS_WORKFLOWS §6.3): back to RESERVED.
+ * The room stays assigned (its assignment still covers the stay) unless the
+ * user releases it, which closes the assignment as an unassignment would.
+ */
+export async function markCheckInReversed(
+  tx: Tx,
+  ctx: PropertyContext,
+  current: LockedReservationRoom,
+  options: { roomId: string; releaseRoom: boolean },
+): Promise<void> {
+  if (options.releaseRoom) await releaseActiveAssignments(tx, current.id, ctx.userId, new Date());
+  await saveVersioned(tx, current, {
+    status: "RESERVED",
+    roomId: options.releaseRoom ? null : options.roomId,
+  });
 }
 
 /**

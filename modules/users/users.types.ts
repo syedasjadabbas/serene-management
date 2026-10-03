@@ -27,6 +27,14 @@ export interface RoleView {
 }
 
 /** Returned once to the administrator; the token is never stored or logged. */
+/** Returned once by an invitation: the link the administrator hands to the new user. */
+export interface UserInvited {
+  user: UserView;
+  /** One-time set-password link; the token is in the URL fragment. */
+  setupUrl: string;
+  expiresAt: string;
+}
+
 export interface PasswordResetIssued {
   userId: string;
   /** One-time link; the token is in the URL fragment. */

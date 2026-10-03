@@ -20,6 +20,8 @@ export const POST = definePropertyRoute({
   permission: "reservations:create",
   params: propertyParamsSchema,
   body: createReservationSchema,
+  /** An Idempotency-Key, when sent, makes a retried booking return the first one. */
+  idempotent: "optional",
   status: 201,
-  handler: ({ ctx, body }) => createReservation(ctx, body),
+  handler: ({ ctx, body, idempotency }) => createReservation(ctx, body, idempotency),
 });

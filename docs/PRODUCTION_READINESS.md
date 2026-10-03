@@ -121,6 +121,22 @@ Both fail without the fix (mutation-checked). All 83 billing, night-audit, rates
 | P2-10 | Route labels keep any lower-case path segment, so unauthenticated requests can fill the 1,000-series cap per metric                                                          | Later routes fold into `overflow`                                                                           | No personal data in labels (ids and e-mails become placeholders); memory is bounded                                                                                                |
 | P2-11 | `requireOpenBusinessDate` waits (`FOR SHARE`, no NOWAIT) while Phase C holds the date                                                                                        | Commands at that property hold pool connections for up to 15 s during the commit                            | Phase C takes seconds today                                                                                                                                                        |
 
+**Status at client handover (final completion phase):**
+
+| #     | Status                    | What changed                                                                                                                                                                                                                 |
+| ----- | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| P2-1  | POST-HANDOVER ENHANCEMENT | Unchanged. Full token-family tracking needs a schema change (a table of rotated hashes); the risk assessment above stands                                                                                                    |
+| P2-2  | FIXED                     | `grantRole`, `revokeRole` and the new `inviteUser` authorize from the grants re-read under the organization lock (`lockAdministration` → `CallerAuthority`)                                                                  |
+| P2-3  | FIXED                     | `POST /reservations` and `POST /front-desk/walk-ins` honour an optional `Idempotency-Key` (`idempotent: "optional"`); the booking wizard sends one per booking                                                               |
+| P2-4  | FIXED                     | Decoded cursor values are validated per key (uuid, date, timestamp, ≤ 500 chars), dates are bounded to 1900–2199, and a charge's quantity × price must stay below 10¹²: all answer 400 (`tests/unit/input-bounds.test.ts`)   |
+| P2-5  | FIXED                     | Phase B checks of a run execute in one read-only transaction with the commit's 300 s statement timeout (the readiness view keeps the default)                                                                                |
+| P2-6  | DOCUMENTED (operational)  | Unchanged; Recover from the night audit page (OPERATIONS §7)                                                                                                                                                                 |
+| P2-7  | DOCUMENTED (operational)  | Unchanged                                                                                                                                                                                                                    |
+| P2-8  | FIXED                     | The pickup sub-queries filter `n.property_id` and `rr.property_id` by the allocation's property, so they use the property-leading indexes                                                                                    |
+| P2-9  | DOCUMENTED BUSINESS RULE  | Auditors are trusted readers of company records                                                                                                                                                                              |
+| P2-10 | FIXED                     | Route labels name every segment that carries a route parameter (`/reports/{reportKey}`, `/guests/{guestId}` for a non-UUID value); UUIDs stay `{id}`. Report routes are one series per method and status, not one per report |
+| P2-11 | DOCUMENTED (operational)  | Unchanged                                                                                                                                                                                                                    |
+
 ### P3 — post-launch improvements
 
 **Data model and integrity:**
@@ -141,8 +157,8 @@ Both fail without the fix (mutation-checked). All 83 billing, night-audit, rates
 
 **Functional gaps (documented):**
 
-- No same-day check-out or reverse check-in (422 `SAME_DAY_CHECK_OUT`).
-- The integration outbox has no consumer, and there is no payment-provider integration: payments are recorded, not processed.
+- ~~No same-day check-out or reverse check-in~~ — reverse check-in is implemented (PMS_WORKFLOWS §6.3). A same-day departure whose folio already has postings is checked out on its departure date (append-only ledger; DOCUMENTED BUSINESS RULE).
+- The integration outbox has no consumer (POST-HANDOVER ENHANCEMENT), and there is no payment-provider integration: payments are recorded, not processed (EXTERNAL DEPENDENCY; docs/CLIENT_HANDOVER.md §9).
 - Offline mode is read-only.
 
 **Cosmetic:** Prisma reports the partial index `background_jobs_active_dedupe_key` as different from the database. It is the same predicate, stored as `= ANY (ARRAY[…])`.

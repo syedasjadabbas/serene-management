@@ -4,8 +4,10 @@ import { useState } from "react";
 import { FormDialog } from "@/components/ui/FormDialog";
 import { Select } from "@/components/ui/Select";
 import { TextArea } from "@/components/ui/TextArea";
+import { TextField } from "@/components/ui/TextField";
 import {
   useGrantRoleMutation,
+  useInviteUserMutation,
   useIssuePasswordResetMutation,
   useRevokeRoleMutation,
   useUserStatusMutation,
@@ -15,6 +17,7 @@ import type { MeView } from "@/modules/access/access.types";
 import type { RoleAssignmentView, RoleView, UserView } from "@/modules/users/users.types";
 
 export type UserDialog =
+  | { kind: "invite" }
   | { kind: "grant"; user: UserView }
   | { kind: "revoke"; user: UserView; assignment: RoleAssignmentView }
   | { kind: "disable"; user: UserView }
@@ -36,6 +39,16 @@ export function UserDialogs({
   managedProperties: MeView["properties"];
   onClose: () => void;
 }) {
+  if (dialog.kind === "invite") {
+    return (
+      <InviteDialog
+        roles={roles}
+        orgManage={orgManage}
+        managedProperties={managedProperties}
+        onClose={onClose}
+      />
+    );
+  }
   if (dialog.kind === "grant") {
     return (
       <GrantDialog
@@ -62,40 +75,34 @@ function ResetDialog({ user, onClose }: { user: UserView; onClose: () => void })
   const [issue, state] = useIssuePasswordResetMutation();
   const [reason, setReason] = useState("");
   const [link, setLink] = useState<{ url: string; expiresAt: string } | null>(null);
-  const [copied, setCopied] = useState(false);
   const error = toClientApiError(state.error);
+  const invited = user.status === "INVITED";
   if (link) {
     return (
-      <FormDialog
-        title={`Reset link for ${user.displayName}`}
-        description="Shown only once. Give it to the user in person or over a trusted channel. Their old password and every session have been revoked."
+      <LinkResult
+        title={`${invited ? "New invitation link" : "Reset link"} for ${user.displayName}`}
+        description={
+          invited
+            ? "Shown only once. Give it to the user in person or over a trusted channel. Earlier invitation links no longer work."
+            : "Shown only once. Give it to the user in person or over a trusted channel. Their old password and every session have been revoked."
+        }
+        link={link}
         onClose={onClose}
-        onSubmit={onClose}
-        submitLabel="Done"
-        pending={false}
-        error={null}
-      >
-        <TextArea label="One-time link" value={link.url} readOnly rows={3} />
-        <p className="text-xs text-fg-secondary">
-          Expires {new Date(link.expiresAt).toLocaleString()}. It works once.
-        </p>
-        <button
-          type="button"
-          className="self-start text-sm font-medium text-brand underline-offset-2 hover:underline"
-          onClick={async () => {
-            await navigator.clipboard.writeText(link.url);
-            setCopied(true);
-          }}
-        >
-          {copied ? "Copied" : "Copy link"}
-        </button>
-      </FormDialog>
+      />
     );
   }
   return (
     <FormDialog
-      title={`Reset the password of ${user.displayName}`}
-      description="The current password stops working and the user is signed out everywhere. You receive a one-time link valid for 30 minutes."
+      title={
+        invited
+          ? `Send ${user.displayName} a new invitation link`
+          : `Reset the password of ${user.displayName}`
+      }
+      description={
+        invited
+          ? "The user has not set a password yet. You receive a new one-time link valid for 24 hours; earlier links stop working."
+          : "The current password stops working and the user is signed out everywhere. You receive a one-time link valid for 30 minutes."
+      }
       onClose={onClose}
       onSubmit={async () => {
         const result = await issue({ userId: user.id, reason: reason.trim() });
@@ -103,12 +110,162 @@ function ResetDialog({ user, onClose }: { user: UserView; onClose: () => void })
           setLink({ url: result.data.resetUrl, expiresAt: result.data.expiresAt });
         }
       }}
-      submitLabel="Reset password"
-      danger
+      submitLabel={invited ? "Issue new link" : "Reset password"}
+      danger={!invited}
       disabled={reason.trim().length < 3}
       pending={state.isLoading}
       error={error}
     >
+      <Reason value={reason} onChange={setReason} errors={error?.fieldErrors.reason} />
+    </FormDialog>
+  );
+}
+
+/** One-time link shown once after an invitation or a reset (the administrator hands it over). */
+function LinkResult({
+  title,
+  description,
+  link,
+  onClose,
+}: {
+  title: string;
+  description: string;
+  link: { url: string; expiresAt: string };
+  onClose: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <FormDialog
+      title={title}
+      description={description}
+      onClose={onClose}
+      onSubmit={onClose}
+      submitLabel="Done"
+      pending={false}
+      error={null}
+    >
+      <TextArea label="One-time link" value={link.url} readOnly rows={3} />
+      <p className="text-xs text-fg-secondary">
+        Expires {new Date(link.expiresAt).toLocaleString()}. It works once.
+      </p>
+      <button
+        type="button"
+        className="self-start text-sm font-medium text-brand underline-offset-2 hover:underline"
+        onClick={async () => {
+          await navigator.clipboard.writeText(link.url);
+          setCopied(true);
+        }}
+      >
+        {copied ? "Copied" : "Copy link"}
+      </button>
+    </FormDialog>
+  );
+}
+
+/**
+ * Adds a user with a first role. The account stays “Invited” until the
+ * person opens the one-time link (24 hours) and chooses a password; while
+ * the user is still invited, “Reset password” issues a new link.
+ */
+function InviteDialog({
+  roles,
+  orgManage,
+  managedProperties,
+  onClose,
+}: {
+  roles: RoleView[];
+  orgManage: boolean;
+  managedProperties: MeView["properties"];
+  onClose: () => void;
+}) {
+  const [invite, state] = useInviteUserMutation();
+  const scopes = [
+    ...(orgManage ? [{ value: "ORGANIZATION", label: "Whole organization" }] : []),
+    ...managedProperties.map((p) => ({ value: p.id, label: `${p.code} · ${p.name}` })),
+  ];
+  const [displayName, setDisplayName] = useState("");
+  const [email, setEmail] = useState("");
+  const [scope, setScope] = useState(scopes[0]?.value ?? "");
+  const [roleId, setRoleId] = useState(roles[0]?.id ?? "");
+  const [reason, setReason] = useState("");
+  const [link, setLink] = useState<{ url: string; expiresAt: string; name: string } | null>(null);
+  const error = toClientApiError(state.error);
+  if (link) {
+    return (
+      <LinkResult
+        title={`Invitation link for ${link.name}`}
+        description="Shown only once. Give it to the new user in person or over a trusted channel. They choose their own password with it, and the account becomes active when they do."
+        link={link}
+        onClose={onClose}
+      />
+    );
+  }
+  return (
+    <FormDialog
+      title="Add a user"
+      description="The new user receives one role now; add more later with Grant role. You can grant only roles whose permissions you hold in that scope."
+      onClose={onClose}
+      onSubmit={async () => {
+        const role =
+          scope === "ORGANIZATION"
+            ? { scope: "ORGANIZATION" as const, roleId }
+            : { scope: "PROPERTY" as const, roleId, propertyId: scope };
+        const result = await invite({
+          email: email.trim(),
+          displayName: displayName.trim(),
+          role,
+          reason: reason.trim(),
+        });
+        if ("data" in result && result.data) {
+          setLink({
+            url: result.data.setupUrl,
+            expiresAt: result.data.expiresAt,
+            name: result.data.user.displayName,
+          });
+        }
+      }}
+      submitLabel="Add user"
+      disabled={
+        displayName.trim().length < 2 ||
+        !email.includes("@") ||
+        !scope ||
+        !roleId ||
+        reason.trim().length < 3
+      }
+      pending={state.isLoading}
+      error={error}
+    >
+      <TextField
+        label="Full name"
+        value={displayName}
+        onChange={(e) => setDisplayName(e.target.value)}
+        maxLength={120}
+        autoComplete="off"
+        errors={error?.fieldErrors.displayName}
+        required
+      />
+      <TextField
+        label="E-mail (sign-in name)"
+        type="email"
+        value={email}
+        onChange={(e) => setEmail(e.target.value)}
+        maxLength={254}
+        autoComplete="off"
+        errors={error?.fieldErrors.email}
+        required
+      />
+      <Select
+        label="Role"
+        value={roleId}
+        onChange={(e) => setRoleId(e.target.value)}
+        options={roles.map((r) => ({ value: r.id, label: r.name }))}
+      />
+      <Select
+        label="Scope"
+        value={scope}
+        onChange={(e) => setScope(e.target.value)}
+        options={scopes}
+      />
       <Reason value={reason} onChange={setReason} errors={error?.fieldErrors.reason} />
     </FormDialog>
   );

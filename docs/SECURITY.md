@@ -36,5 +36,5 @@ This is an index of the security controls and where each is implemented and veri
 
 See PRODUCTION_READINESS §3. Notably:
 
-- refresh-token reuse is detected for one generation only (P2-1);
+- refresh-token reuse is detected for one generation only (P2-1, a post-handover enhancement);
 - there is no payment-provider integration, so no card data is ever handled (payments are recorded only).

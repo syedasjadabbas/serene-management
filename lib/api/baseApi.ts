@@ -20,6 +20,7 @@ export const TAG_TYPES = [
   "Property",
   "BusinessDate",
   "PropertyConfiguration",
+  "PropertySetup",
   "AuditLog",
   "Session",
   "Room",

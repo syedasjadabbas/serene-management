@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { GuestPicker } from "@/components/guests/GuestPicker";
+import { type PickedCompany, CompanyPicker } from "@/components/accounts/CompanyPicker";
+import { type PickedGuest, GuestPicker } from "@/components/guests/GuestPicker";
 import { FormDialog } from "@/components/ui/FormDialog";
 import { Select } from "@/components/ui/Select";
 import { TextArea } from "@/components/ui/TextArea";
@@ -12,6 +13,7 @@ import {
   useChangeBlockStatusMutation,
   useChangeGroupStatusMutation,
   useCreateBlockMutation,
+  useUpdateGroupMutation,
   useGroupOptionsQuery,
   usePickupMutation,
   useReleaseBlockMutation,
@@ -624,6 +626,60 @@ export function GroupStatusDialog({ group, onClose }: { group: GroupDetail; onCl
         value={reason}
         onChange={(e) => setReason(e.target.value)}
         maxLength={1000}
+      />
+    </FormDialog>
+  );
+}
+
+/** Name, company, contact and notes of an active group; the code is fixed. */
+export function EditGroupDialog({ group, onClose }: { group: GroupDetail; onClose: () => void }) {
+  const property = useProperty();
+  const [save, state] = useUpdateGroupMutation();
+  const [name, setName] = useState(group.name);
+  const [company, setCompany] = useState<PickedCompany | null>(
+    group.account ? { id: group.account.id, label: group.account.name } : null,
+  );
+  const [contact, setContact] = useState<PickedGuest | null>(
+    group.contact ? { id: group.contact.id, label: group.contact.name } : null,
+  );
+  const [notes, setNotes] = useState(group.notes ?? "");
+  const error = toClientApiError(state.error);
+  return (
+    <FormDialog
+      title={`Edit group · ${group.code}`}
+      onClose={onClose}
+      onSubmit={async () => {
+        const result = await save({
+          propertyId: property.id,
+          groupId: group.id,
+          body: {
+            name: name.trim(),
+            accountProfileId: company?.id ?? null,
+            contactGuestId: contact?.id ?? null,
+            notes: notes.trim() || null,
+          },
+        });
+        if ("data" in result) onClose();
+      }}
+      submitLabel="Save group"
+      disabled={!name.trim()}
+      pending={state.isLoading}
+      error={error}
+    >
+      <TextField
+        label="Name"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        maxLength={200}
+        errors={error?.fieldErrors.name}
+      />
+      <CompanyPicker value={company} onChange={setCompany} label="Company (optional)" />
+      <GuestPicker value={contact} onChange={setContact} label="Contact (optional)" />
+      <TextArea
+        label="Notes (optional)"
+        value={notes}
+        onChange={(e) => setNotes(e.target.value)}
+        maxLength={4000}
       />
     </FormDialog>
   );

@@ -72,7 +72,7 @@ export function definePublicRoute<P = undefined, Q = undefined, B = undefined>(
   },
 ): RouteFn {
   return (request, context) =>
-    run(request, options, async (meta) => {
+    run(request, context, options, async (meta) => {
       if (options.rateLimit) await enforceRateLimit(options.rateLimit, rateLimitKey(meta));
       const parsed = await parse(request, context, options);
       return options.handler({ ...parsed, meta });
@@ -95,7 +95,7 @@ export function defineSessionRoute<P = undefined, Q = undefined, B = undefined>(
   },
 ): RouteFn {
   return (request, context) =>
-    run(request, options, async (meta) => {
+    run(request, context, options, async (meta) => {
       const { ctx, session } = await authenticate(request, meta);
       if (options.rateLimit) await enforceRateLimit(options.rateLimit, rateLimitKey(ctx));
       if (options.permission && !hasOrganizationPermission(ctx.access, options.permission)) {
@@ -130,7 +130,7 @@ export function definePropertyRoute<P extends { propertyId: string }, Q = undefi
   },
 ): RouteFn {
   return (request, context) =>
-    run(request, options, async (meta) => {
+    run(request, context, options, async (meta) => {
       const session = await authenticate(request, meta);
       if (options.rateLimit) {
         await enforceRateLimit(options.rateLimit, rateLimitKey(session.ctx));
@@ -247,6 +247,7 @@ function serverTiming(
 
 async function run(
   request: NextRequest,
+  context: RouteContextArg | undefined,
   options: { status?: number },
   execute: (meta: RequestMeta) => Promise<unknown>,
 ): Promise<Response> {
@@ -254,6 +255,8 @@ async function run(
   const meta = requestMeta(request);
   // Pool waits of this request: Server-Timing (opt-in) and the slow-request log.
   const pool: PoolUsage = { waitMs: 0, acquisitions: 0, opened: 0, reads: {} };
+  const observe = async (status: number) =>
+    observeRequest(request, meta, started, pool, status, await routeParams(context));
   const handle = async () => {
     if (MUTATING.has(request.method)) {
       assertSameOrigin(request);
@@ -278,7 +281,7 @@ async function run(
     // Which instance answered (load tests, multi-instance QA); never in normal operation.
     if (timing) response.headers.set("x-instance-id", instanceId());
     if (timing) response.headers.set("server-timing", timing);
-    observe(request, meta, started, pool, response.status);
+    await observe(response.status);
     return response;
   } catch (error) {
     const headers: Record<string, string> = { "cache-control": "no-store" };
@@ -291,8 +294,17 @@ async function run(
       headers["retry-after"] = String(error.details.retryAfterSeconds);
     }
     const response = toErrorResponse(error, meta.requestId, headers);
-    observe(request, meta, started, pool, response.status);
+    await observe(response.status);
     return response;
+  }
+}
+
+/** The matched route's parameters (for the metrics label); none when unavailable. */
+async function routeParams(context: RouteContextArg | undefined): Promise<Record<string, unknown>> {
+  try {
+    return (await context?.params) ?? {};
+  } catch {
+    return {};
   }
 }
 
@@ -301,15 +313,16 @@ async function run(
  * what correlates it: request id, instance, route template, status, timings.
  * Never the path's ids, the query string, the body or the user.
  */
-function observe(
+function observeRequest(
   request: NextRequest,
   meta: RequestMeta,
   started: number,
   pool: PoolUsage,
   status: number,
+  params: Record<string, unknown>,
 ) {
   const ms = performance.now() - started;
-  recordRequest(request.method, request.nextUrl.pathname, status, ms / 1000);
+  recordRequest(request.method, request.nextUrl.pathname, status, ms / 1000, params);
   const slow = serverEnv().SLOW_REQUEST_MS;
   if (slow > 0 && ms >= slow) {
     console.warn(
@@ -318,7 +331,7 @@ function observe(
         requestId: meta.requestId,
         instance: instanceId(),
         method: request.method,
-        route: routeTemplate(request.nextUrl.pathname),
+        route: routeTemplate(request.nextUrl.pathname, params),
         status,
         ms: Math.round(ms),
         authMs: Math.round(authTimings.get(request) ?? 0),

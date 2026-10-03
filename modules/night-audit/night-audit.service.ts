@@ -160,12 +160,21 @@ function check(
   };
 }
 
-/** Phase B, read-only: the checks for closing `businessDate`. */
-export async function runChecks(propertyId: string, businessDate: string): Promise<CheckResult[]> {
-  const config = await findAuditConfiguration(prisma, propertyId);
+/**
+ * Phase B, read-only: the checks for closing `businessDate`. `db` defaults
+ * to the pool (readiness view); the run itself passes a transaction with the
+ * commit's statement timeout, so the balance check's growth with history
+ * cannot fail the audit at the 30 s default (PRODUCTION_READINESS P2-5).
+ */
+export async function runChecks(
+  propertyId: string,
+  businessDate: string,
+  db: Tx | typeof prisma = prisma,
+): Promise<CheckResult[]> {
+  const config = await findAuditConfiguration(db, propertyId);
   const results: CheckResult[] = [];
 
-  const departures = await findOverdueDepartures(prisma, propertyId, businessDate);
+  const departures = await findOverdueDepartures(db, propertyId, businessDate);
   results.push(
     departures.length === 0
       ? check("VALIDATE_DEPARTURES", "PASSED", "Every guest due out has left", [])
@@ -177,7 +186,7 @@ export async function runChecks(propertyId: string, businessDate: string): Promi
         ),
   );
 
-  const arrivals = await findDueArrivals(prisma, propertyId, businessDate);
+  const arrivals = await findDueArrivals(db, propertyId, businessDate);
   if (arrivals.length === 0) {
     results.push(check("VALIDATE_ARRIVALS", "PASSED", "Every arrival has checked in", []));
   } else if (!config.autoNoShowOnNightAudit) {
@@ -189,7 +198,7 @@ export async function runChecks(propertyId: string, businessDate: string): Promi
         arrivals.map((row) => stayItem(row, `Arrival ${row.arrival}`)),
       ),
     );
-  } else if (!(await findNoShowReasonCode(prisma, propertyId, config.noShowReasonCodeId))) {
+  } else if (!(await findNoShowReasonCode(db, propertyId, config.noShowReasonCodeId))) {
     results.push(
       check(
         "VALIDATE_ARRIVALS",
@@ -211,7 +220,7 @@ export async function runChecks(propertyId: string, businessDate: string): Promi
     );
   }
 
-  const folios = await findUnbalancedFolios(prisma, propertyId, businessDate);
+  const folios = await findUnbalancedFolios(db, propertyId, businessDate);
   results.push(
     folios.length === 0
       ? check("VALIDATE_BALANCES", "PASSED", "Every folio balance equals its ledger", [])
@@ -229,7 +238,7 @@ export async function runChecks(propertyId: string, businessDate: string): Promi
         ),
   );
 
-  const payments = await findPaymentMismatches(prisma, propertyId, businessDate);
+  const payments = await findPaymentMismatches(db, propertyId, businessDate);
   results.push(
     payments.length === 0
       ? check("VALIDATE_PAYMENTS", "PASSED", "Every payment, void and refund is in the ledger", [])
@@ -245,7 +254,7 @@ export async function runChecks(propertyId: string, businessDate: string): Promi
         ),
   );
 
-  const rooms = await findRoomStatusDiscrepancies(prisma, propertyId);
+  const rooms = await findRoomStatusDiscrepancies(db, propertyId);
   results.push(
     rooms.length === 0
       ? check("VALIDATE_ROOM_STATUS", "PASSED", "Room status matches the in-house guests", [])
@@ -266,7 +275,7 @@ export async function runChecks(propertyId: string, businessDate: string): Promi
         ),
   );
 
-  const unposted = await findUnpostedNights(prisma, propertyId, businessDate);
+  const unposted = await findUnpostedNights(db, propertyId, businessDate);
   const inHouse = unposted.filter((row) => row.status === "IN_HOUSE");
   const departed = unposted.filter((row) => row.status !== "IN_HOUSE");
   results.push(
@@ -587,7 +596,11 @@ export async function executeNightAudit(
   const checksStarted = new Date();
   let checks: CheckResult[];
   try {
-    checks = await runChecks(ctx.propertyId, businessDate);
+    checks = await runInTransaction((tx) => runChecks(ctx.propertyId, businessDate, tx), {
+      timeoutMs: COMMIT_TIMEOUT_MS,
+      statementTimeoutMs: COMMIT_TIMEOUT_MS,
+      retry: false,
+    });
   } catch (error) {
     return fail(error);
   }
@@ -1234,7 +1247,10 @@ export async function listRuns(
 ): Promise<{ items: RunListItem[]; meta: CursorPageMeta }> {
   let cursor: { c: string; i: string } | null = null;
   if (query.cursor) {
-    cursor = decodeCursor(query.cursor, ["c", "i"], { c: "timestamp" }) as { c: string; i: string } | null;
+    cursor = decodeCursor(query.cursor, ["c", "i"], { c: "timestamp" }) as {
+      c: string;
+      i: string;
+    } | null;
     if (!cursor) {
       throw new AppError("VALIDATION_FAILED", "Invalid cursor", {
         fields: { cursor: ["Invalid cursor"] },

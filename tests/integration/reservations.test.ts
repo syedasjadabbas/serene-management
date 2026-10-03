@@ -534,7 +534,8 @@ describe("lifecycle commands", () => {
   });
 
   it("cancels with a reason code, releases inventory and room, and can reinstate", async () => {
-    const arrival = addDays(D, 130);
+    // Clear of the weekend-pricing test, which books a Thursday found from D+130 on.
+    const arrival = addDays(D, 160);
     const created = await create(
       agent,
       booking({ arrival, departure: addDays(arrival, 2), roomId: invA.roomTypes.KNG!.roomIds[2]! }),

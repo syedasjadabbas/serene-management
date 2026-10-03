@@ -183,23 +183,35 @@ export function resetMetricsForTests(): void {
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * A bounded, non-personal route label from a request path: ids become `{id}`
- * and any segment that is not a plain lower-case word becomes `{param}`
- * (every dynamic API segment is a UUID or a fixed report key).
+ * A bounded, non-personal route label from a request path. Ids become `{id}`;
+ * any other segment that carries a route parameter becomes `{name}`
+ * (`/reports/{reportKey}`), so a caller cannot mint new labels with made-up
+ * values (PRODUCTION_READINESS P2-10); any remaining segment that is not a
+ * plain lower-case word becomes `{param}`.
  */
-export function routeTemplate(pathname: string): string {
+export function routeTemplate(pathname: string, params: Record<string, unknown> = {}): string {
+  const byValue = new Map<string, string>();
+  for (const [name, value] of Object.entries(params)) {
+    if (typeof value === "string" && value !== "") byValue.set(value, name);
+  }
   return pathname
     .split("/")
-    .map((segment) =>
-      segment === ""
-        ? ""
-        : UUID.test(segment)
-          ? "{id}"
-          : /^[a-z][a-z0-9-]{0,40}$/.test(segment)
-            ? segment
-            : "{param}",
-    )
+    .map((segment) => {
+      if (segment === "") return "";
+      if (UUID.test(segment)) return "{id}";
+      const param = byValue.get(safeDecode(segment));
+      if (param) return `{${param}}`;
+      return /^[a-z][a-z0-9-]{0,40}$/.test(segment) ? segment : "{param}";
+    })
     .join("/");
+}
+
+function safeDecode(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
 }
 
 // --- Request metrics (lib/http/route.ts) -------------------------------------------------
@@ -210,9 +222,16 @@ const requestDuration = () =>
     "API request duration by method, route template and status (event streams: until the response starts)",
   );
 
-export function recordRequest(method: string, pathname: string, status: number, seconds: number) {
+/** Labelled by routeTemplate (never the raw path); `params` are the matched route's parameters. */
+export function recordRequest(
+  method: string,
+  pathname: string,
+  status: number,
+  seconds: number,
+  params: Record<string, unknown> = {},
+) {
   requestDuration().observe(
-    { method, route: routeTemplate(pathname), status: String(status) },
+    { method, route: routeTemplate(pathname, params), status: String(status) },
     seconds,
   );
 }

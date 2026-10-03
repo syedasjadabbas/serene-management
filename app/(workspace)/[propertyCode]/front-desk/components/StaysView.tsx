@@ -60,9 +60,10 @@ export function StaysView({
           marked for cleaning.
         </Alert>
       ) : null}
-      {/* Narrow screens scroll the table sideways; the room column and the row action stay pinned. */}
+      {/* Phones scroll the table sideways with the room column and the row action pinned; tablets
+          (768–1023 px) drop the party size and the check-in/out time (both on the stay) so it fits. */}
       <div className="relative overflow-x-auto rounded-lg border border-border-subtle bg-surface shadow-card">
-        <table className="w-full min-w-[900px] text-sm">
+        <table className="w-full min-w-[900px] text-sm md:max-lg:min-w-0">
           <caption className="sr-only">
             {kind === "in-house" ? "Guests in house" : "Departures for the business date"}
           </caption>
@@ -83,10 +84,10 @@ export function StaysView({
               <th scope="col" className="px-2 py-2 font-medium">
                 Stay
               </th>
-              <th scope="col" className="px-2 py-2 text-end font-medium">
+              <th scope="col" className="px-2 py-2 text-end font-medium md:max-lg:hidden">
                 Guests
               </th>
-              <th scope="col" className="px-2 py-2 font-medium">
+              <th scope="col" className="px-2 py-2 font-medium md:max-lg:hidden">
                 {kind === "departures" ? "Checked out" : "Checked in"}
               </th>
               <th scope="col" className="px-2 py-2 font-medium">
@@ -241,15 +242,15 @@ function StaysPage({
                 {row.confirmation}
               </Link>
             </td>
-            <td className="px-2 py-2 whitespace-nowrap">
+            <td className="px-2 py-2 whitespace-nowrap md:max-lg:whitespace-normal">
               {formatShortDate(row.arrival)} → {formatShortDate(row.departure)}
               <span className="ms-1 text-xs text-fg-muted">{row.nights}n</span>
             </td>
-            <td className="px-2 py-2 text-end tabular-nums">
+            <td className="px-2 py-2 text-end tabular-nums md:max-lg:hidden">
               {row.adults}
               {row.children ? `+${row.children}` : ""}
             </td>
-            <td className="px-2 py-2 text-xs whitespace-nowrap text-fg-secondary">
+            <td className="px-2 py-2 text-xs whitespace-nowrap text-fg-secondary md:max-lg:hidden">
               {kind === "in-house"
                 ? formatDateTime(row.checkedInAt, property.timezone)
                 : row.checkedOutAt

@@ -27,6 +27,20 @@ describe("route templates (bounded, non-personal metric labels)", () => {
     expect(routeTemplate("/api/v1/guests/Jane.Doe@mail.test")).toBe("/api/v1/guests/{param}");
     expect(routeTemplate("/api/v1/x/SMR")).toBe("/api/v1/x/{param}");
   });
+
+  it("names parameter segments, so made-up values cannot mint new labels (P2-10)", () => {
+    expect(
+      routeTemplate("/api/v1/properties/01890a5d-ac96-774b-bcce-b302099a8057/reports/made-up", {
+        propertyId: "01890a5d-ac96-774b-bcce-b302099a8057",
+        reportKey: "made-up",
+      }),
+    ).toBe("/api/v1/properties/{id}/reports/{reportKey}");
+    expect(routeTemplate("/api/v1/guests/abc", { guestId: "abc" })).toBe(
+      "/api/v1/guests/{guestId}",
+    );
+    // Fixed segments stay as they are.
+    expect(routeTemplate("/api/v1/auth/sessions", {})).toBe("/api/v1/auth/sessions");
+  });
 });
 
 describe("metrics registry (Prometheus text format)", () => {

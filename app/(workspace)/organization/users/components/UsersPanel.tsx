@@ -23,11 +23,19 @@ const STATUS_TONE = {
   DISABLED: "neutral",
 } as const;
 
+const STATUS_LABEL = {
+  ACTIVE: "Active",
+  INVITED: "Invited",
+  LOCKED: "Locked",
+  DISABLED: "Disabled",
+} as const;
+
 /**
  * Users of the organization and their role assignments. Each user's
  * assignments are shown only for scopes the viewer may inspect (D3); grants
  * and revocations are limited to scopes where the viewer holds users:manage.
- * No users are created here (D7).
+ * "Add user" creates an invited account with a first role and a one-time
+ * set-password link the administrator hands over (no e-mail service, D47).
  */
 export function UsersPanel() {
   const { data: me } = useMeQuery();
@@ -57,7 +65,10 @@ export function UsersPanel() {
         icon={UsersRound}
         breadcrumbs={[{ label: "Organization", href: "/organization" }, { label: "Users" }]}
         title="Users & roles"
-        description="Role assignments are shown for the scopes you may inspect. Users are invited outside this workspace."
+        description="Role assignments are shown for the scopes you may inspect. New users receive a one-time link to set their password."
+        actions={
+          canGrant ? <Button onClick={() => setDialog({ kind: "invite" })}>Add user</Button> : null
+        }
       />
       <form
         className="flex flex-wrap items-end gap-2"
@@ -118,7 +129,11 @@ export function UsersPanel() {
           <StatusPanel
             kind="empty"
             title="No users yet"
-            description="Users are invited outside this workspace; once invited they appear here."
+            description={
+              canGrant
+                ? "Add the first user with Add user."
+                : "Users added by an administrator appear here."
+            }
           />
         )
       ) : list ? (
@@ -138,7 +153,7 @@ export function UsersPanel() {
                   </p>
                   <p className="truncate text-xs text-fg-muted">{user.email}</p>
                   <p className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-fg-muted">
-                    <Badge tone={STATUS_TONE[user.status]}>{user.status.toLowerCase()}</Badge>
+                    <Badge tone={STATUS_TONE[user.status]}>{STATUS_LABEL[user.status]}</Badge>
                     {user.lastLoginAt
                       ? `Last sign-in ${formatDateTime(user.lastLoginAt, "UTC")} UTC`
                       : "Never signed in"}
@@ -193,14 +208,17 @@ export function UsersPanel() {
                         Unlock
                       </Button>
                     ) : null}
-                    {orgManage && (user.status === "ACTIVE" || user.status === "LOCKED") ? (
+                    {orgManage &&
+                    (user.status === "ACTIVE" ||
+                      user.status === "LOCKED" ||
+                      user.status === "INVITED") ? (
                       <Button
                         size="sm"
                         variant="ghost"
                         className="min-h-11 md:min-h-0"
                         onClick={() => setDialog({ kind: "reset", user })}
                       >
-                        Reset password
+                        {user.status === "INVITED" ? "New invitation link" : "Reset password"}
                       </Button>
                     ) : null}
                     {orgManage && user.status === "DISABLED" ? (

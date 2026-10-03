@@ -38,6 +38,39 @@ export function stayTransitionProblem(action: StayAction, status: StayStatus): s
     : "Only in-house guests can change rooms";
 }
 
+/**
+ * Reverse check-in (PMS_WORKFLOWS §6.3, DOMAIN_MODEL IN_HOUSE → RESERVED): the
+ * correction for a guest checked in by mistake or leaving on the arrival day.
+ * Only on the business date of the check-in, and only while nothing has been
+ * posted to the stay's folio: the ledger is append-only, so a stay with
+ * postings really happened and is closed by check-out instead.
+ */
+export function reverseCheckInProblem(input: {
+  status: StayStatus;
+  arrivalBusinessDate: string;
+  businessDate: string;
+  postings: number;
+}): { message: string; reason: string } | null {
+  if (input.status !== "IN_HOUSE") {
+    return { message: "Only an in-house stay can be reversed", reason: "NOT_IN_HOUSE" };
+  }
+  if (input.arrivalBusinessDate !== input.businessDate) {
+    return {
+      message:
+        "Only a check-in made on the current business date can be reversed; check the guest out instead",
+      reason: "NOT_SAME_BUSINESS_DATE",
+    };
+  }
+  if (input.postings > 0) {
+    return {
+      message:
+        "The folio already has postings, so the check-in cannot be undone. Settle the folio; the stay is checked out on its departure date",
+      reason: "FOLIO_HAS_POSTINGS",
+    };
+  }
+  return null;
+}
+
 /** Operational state of a due-in row, in the order staff resolve them. */
 export type ArrivalState =
   "CHECKED_IN" | "NEEDS_CONFIRMATION" | "UNASSIGNED" | "ROOM_NOT_READY" | "READY";

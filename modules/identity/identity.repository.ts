@@ -62,6 +62,14 @@ export function recordSuccessfulLogin(tx: Tx, userId: string, at: Date) {
 }
 
 /** Replaces the password; every earlier session becomes invalid (createdAt < passwordChangedAt). */
+/** An invited user who set their first password (completePasswordReset). */
+export function activateInvitedUser(tx: Tx, userId: string) {
+  return tx.user.updateMany({
+    where: { id: userId, status: "INVITED" },
+    data: { status: "ACTIVE" },
+  });
+}
+
 export function setPassword(tx: Tx, userId: string, passwordHash: string | null, at: Date) {
   return tx.user.update({
     where: { id: userId },

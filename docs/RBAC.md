@@ -51,7 +51,11 @@ High-risk permissions (★) require a reason and create HIGH audit records.
 | `settings`     | `read`, `manage`★                                                                                                       |
 | `properties`   | `manage`★                                                                                                               |
 
-78 permissions in total. Adding a permission = add it to the catalog, check it in a route/service, add it to the relevant templates, run the seed; the unit test rejects malformed keys and unknown keys in templates.
+78 permissions in total.
+
+**Reserved permissions (handover).** These keys are in the catalog and the role templates but no feature checks them yet, because the feature they guard is a post-handover enhancement. Granting or withholding them changes nothing today: `reservations:override_rate` (manual rates and discounts), `frontdesk:reinstate_checkout`, `frontdesk:messages`, `rooms:upgrade`, `rooms:hold`, `rooms:override_hold`, `guests:merge`, `guests:privacy`, `groups:rooming_list`, `housekeeping:lost_found`, `billing:routing`, `billing:invoice`, `billing:credit_note`, `payments:read` (payments are read with `billing:read`), `cashier:operate`, `cashier:manage`, `commissions:read`, `commissions:manage`. `roles:manage` is held only by organization administrators; custom role editing is not built (roles are the fixed templates in §3). `frontdesk:reverse_checkin` is enforced since handover (PMS_WORKFLOWS §6.3).
+
+Adding a permission = add it to the catalog, check it in a route/service, add it to the relevant templates, run the seed; the unit test rejects malformed keys and unknown keys in templates.
 
 Payment creation is not flagged high-risk as a permission (it is routine front-desk work), but every payment, refund and void is still written as a **HIGH** audit record per Guide §29.
 

@@ -6,7 +6,10 @@ import { POST as pickupRoute } from "@/app/api/v1/properties/[propertyId]/blocks
 import { POST as releaseRoute } from "@/app/api/v1/properties/[propertyId]/blocks/[blockId]/release/route";
 import { POST as blockStatusRoute } from "@/app/api/v1/properties/[propertyId]/blocks/[blockId]/status/route";
 import { POST as blocksRoute } from "@/app/api/v1/properties/[propertyId]/groups/[groupId]/blocks/route";
-import { GET as groupRoute } from "@/app/api/v1/properties/[propertyId]/groups/[groupId]/route";
+import {
+  GET as groupRoute,
+  PATCH as updateGroupRoute,
+} from "@/app/api/v1/properties/[propertyId]/groups/[groupId]/route";
 import {
   GET as groupsRoute,
   POST as createGroupRoute,
@@ -706,6 +709,25 @@ describe("packages", () => {
 });
 
 describe("groups and blocks", () => {
+  it("edits an active group's name, contact and notes (audited); the agent cannot", async () => {
+    const groupId = await newGroup(`E${randomUUID().slice(0, 5)}`.toUpperCase());
+    const body = { name: "Wedding party", contactGuestId: guestId, notes: "Late arrival bus" };
+    expect(
+      (await send(updateGroupRoute, agent, "PATCH", `/groups/${groupId}`, { groupId }, body))
+        .status,
+    ).toBe(403);
+    const r = await send(updateGroupRoute, fom, "PATCH", `/groups/${groupId}`, { groupId }, body);
+    expect(r.status).toBe(200);
+    expect(r.body.data).toMatchObject({ name: "Wedding party", notes: "Late arrival bus" });
+    expect(r.body.data.contact.id).toBe(guestId);
+    const read = await send(groupRoute, gm, "GET", `/groups/${groupId}`, { groupId });
+    expect(read.body.data.name).toBe("Wedding party");
+    const audit = await prisma.auditLog.findFirst({
+      where: { resourceId: groupId, action: "group.update" },
+    });
+    expect(audit).not.toBeNull();
+  });
+
   it("holds definite inventory, picks up at the block rate and releases on cancellation", async () => {
     const start = addDays(D, 80);
     const before = await quote(start, addDays(start, 3));

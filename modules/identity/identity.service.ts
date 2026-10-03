@@ -36,6 +36,7 @@ import {
   setLoginFailureState,
   setDisplayName,
   setPassword,
+  activateInvitedUser,
   upsertAvatar,
 } from "./identity.repository";
 import {
@@ -416,6 +417,8 @@ export async function revokeOwnSession(
 
 /** Reset links expire after 30 minutes and work once. */
 export const RESET_TOKEN_TTL_MS = 30 * 60_000;
+/** An invitation link (new user sets the first password) lasts longer than a reset. */
+export const INVITE_TOKEN_TTL_MS = 24 * 60 * 60_000;
 /** Per-user budget for password changes (wrong current passwords included). */
 export const PASSWORD_CHANGE_LIMIT: RateLimitRule = {
   name: "auth.password.change",
@@ -518,13 +521,14 @@ export async function issuePasswordResetInTx(
   tx: Tx,
   userId: string,
   now: Date = new Date(),
+  ttlMs: number = RESET_TOKEN_TTL_MS,
 ): Promise<{ token: string; tokenId: string; expiresAt: Date; sessionsRevoked: number }> {
   const token = generateOpaqueToken();
   await invalidateResetTokens(tx, userId, now);
   const created = await insertPasswordResetToken(tx, {
     userId,
     tokenHash: hashOpaqueToken(token),
-    expiresAt: new Date(now.getTime() + RESET_TOKEN_TTL_MS),
+    expiresAt: new Date(now.getTime() + ttlMs),
     createdAt: now,
   });
   await setPassword(tx, userId, null, now);
@@ -560,12 +564,14 @@ export async function completePasswordReset(
     const user = count === 1 ? await lockUserLoginState(tx, found.userId) : null;
     if (
       !user ||
-      (user.status !== "ACTIVE" && user.status !== "LOCKED") ||
+      (user.status !== "ACTIVE" && user.status !== "LOCKED" && user.status !== "INVITED") ||
       user.organization_status !== "ACTIVE"
     ) {
       throw new AppError("VALIDATION_FAILED", INVALID_RESET, { reason: "RESET_TOKEN_INVALID" });
     }
     await setPassword(tx, user.id, passwordHash, now);
+    // An invited user becomes active by setting their first password.
+    if (user.status === "INVITED") await activateInvitedUser(tx, user.id);
     await invalidateResetTokens(tx, user.id, now);
     const { count: sessionsRevoked } = await revokeAllUserSessions(
       tx,

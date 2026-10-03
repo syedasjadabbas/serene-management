@@ -40,6 +40,7 @@ export const PROPERTY_SECTIONS: {
     permission: "housekeeping:read",
   },
   { segment: "maintenance", label: "Maintenance", group: "Rooms", permission: "maintenance:read" },
+  { segment: "setup", label: "Property setup", group: "Rooms", permission: "settings:read" },
   { segment: "rates", label: "Rates", group: "Revenue & finance", permission: "rates:read" },
   { segment: "billing", label: "Billing", group: "Revenue & finance", permission: "billing:read" },
   {
@@ -126,6 +127,7 @@ export const PROPERTY_NAV: PropertyNavNode[] = [
     items: [
       { segment: "housekeeping", description: "Room board, cleaning and inspections" },
       { segment: "maintenance", description: "Work orders and rooms out of use" },
+      { segment: "setup", description: "Room types, rooms, taxes, settings and go-live" },
     ],
   },
   {

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { ScrollText } from "lucide-react";
+import { auditActionLabel, auditChanges, auditFieldLabel } from "@/components/audit/audit-format";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -55,14 +56,6 @@ const RESOURCE_TYPES: { value: string; label: string; group: string }[] = [
   ["Organization", "Organization", "Administration"],
 ].map(([value, label, group]) => ({ value: value!, label: label!, group: group! }));
 const RESOURCE_LABELS = new Map(RESOURCE_TYPES.map((t) => [t.value, t.label]));
-
-function summarize(value: unknown): string {
-  if (!value || typeof value !== "object") return "";
-  return Object.entries(value as Record<string, unknown>)
-    .filter(([key]) => key !== "meta")
-    .map(([key, v]) => `${key}: ${typeof v === "object" ? JSON.stringify(v) : String(v)}`)
-    .join(", ");
-}
 
 /**
  * The organization audit trail: rows from every property where the user may
@@ -211,7 +204,7 @@ export function OrganizationAuditTrail() {
                   <Badge tone={row.property ? "neutral" : "brand"}>
                     {row.property ? row.property.code : "Organization"}
                   </Badge>
-                  <span className="font-medium">{row.action}</span>
+                  <span className="font-medium">{auditActionLabel(row.action)}</span>
                   {row.risk === "HIGH" ? <Badge tone="warning">High risk</Badge> : null}
                   <span className="text-xs text-fg-muted">
                     {formatDateTime(
@@ -225,18 +218,20 @@ export function OrganizationAuditTrail() {
                 </div>
                 <p className="text-xs text-fg-secondary">
                   {RESOURCE_LABELS.get(row.resourceType) ?? row.resourceType}
-                  {row.resourceId ? (
-                    <span className="font-mono text-2xs text-fg-muted"> · {row.resourceId}</span>
-                  ) : null}
                 </p>
                 {row.reason ? (
                   <p className="text-xs text-fg-secondary">Reason: {row.reason}</p>
                 ) : null}
-                {row.after ? (
-                  <p className="font-mono text-2xs break-all text-fg-muted">
-                    {summarize(row.after)}
+                <AuditChanges before={row.before} after={row.after} />
+                <details className="text-2xs text-fg-muted">
+                  <summary className="w-fit cursor-pointer select-none hover:text-fg-secondary">
+                    Audit reference
+                  </summary>
+                  <p className="mt-1 font-mono break-all">
+                    {row.action}
+                    {row.resourceId ? ` · ${row.resourceType} ${row.resourceId}` : ""}
                   </p>
-                ) : null}
+                </details>
               </li>
             ))}
           </ol>
@@ -266,5 +261,32 @@ export function OrganizationAuditTrail() {
         </section>
       ) : null}
     </div>
+  );
+}
+
+/** The changed fields of a row, inline: "Status: Reserved → In house". */
+function AuditChanges({ before, after }: { before: unknown; after: unknown }) {
+  const list = auditChanges(before, after);
+  if (list.length === 0) return null;
+  return (
+    <ul className="flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-fg-secondary">
+      {list.map((c) => (
+        <li key={c.key} className="min-w-0 break-words">
+          <span className="text-fg-muted">{auditFieldLabel(c.key)}:</span>{" "}
+          {c.before !== undefined && c.after !== undefined ? (
+            <>
+              <span className="text-fg-muted line-through decoration-fg-muted/50">{c.before}</span>
+              <span aria-hidden="true" className="px-1 text-fg-muted">
+                →
+              </span>
+              <span className="sr-only"> changed to </span>
+              {c.after}
+            </>
+          ) : (
+            (c.after ?? c.before)
+          )}
+        </li>
+      ))}
+    </ul>
   );
 }
