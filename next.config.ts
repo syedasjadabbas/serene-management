@@ -21,6 +21,9 @@ const nextConfig: NextConfig = {
   // lingers after pages settle; navigation feedback comes from the shell's
   // own progress bar. Compile and runtime errors are still surfaced.
   devIndicators: false,
+  // LAN testing from another laptop: `next dev` blocks its dev-only resources (HMR) for
+  // any other hostname, so the page never hydrates. Development only; ignored by builds.
+  allowedDevOrigins: ["192.168.19.173"],
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];
   },

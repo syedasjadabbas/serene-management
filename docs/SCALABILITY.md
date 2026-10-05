@@ -3077,3 +3077,148 @@ After the production-readiness fixes (docs/PRODUCTION_READINESS.md), the canonic
 | Crash recovery (200 jobs)       | 17.5 s                             | 14.3 s                                    |
 
 No regression. The host varies about ±25 % between identical runs, so the higher numbers are not claimed as improvements.
+
+## 40. 100K RPS capability check (2026-10-05)
+
+Question: can SERENE MANAGEMENT realistically be tested at 100,000 HTTP requests/s? No application code was changed. The harness (`scripts/load/k6/pms-mix.js`) received the fixes in §40.2.
+
+### 40.1 Harness audit
+
+| Item            | Finding                                                                                                                                                                                                                                                                                                                  |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Arrival model   | An open model was already present: `constant-arrival-rate` (default, `RATE`) and `ramping-arrival-rate` (`STAGES`). `MODE=vus` gives the closed model. **`RATE` counts iterations (user actions), not HTTP requests**: `writeRoomStatus` is 2 requests (canonical ≈ 1.04 requests per iteration) and `globalSearch` is 6 |
+| VU ceiling      | `preAllocatedVUs` 200 and `maxVUs` 2,000 by default (`VUS`, `MAX_VUS`). By Little's law a generator needs rate × iteration-time VUs; past the ceiling k6 drops iterations (reported)                                                                                                                                     |
+| Thresholds      | Before this phase every threshold was `max>=0`: they only made submetrics visible and never failed. No pass/fail criterion existed                                                                                                                                                                                       |
+| Sessions        | Pre-created with `scripts/load/login.mjs` (≈ 20 sign-ins/s, sequential; 500 in 24 s). Access tokens live at most 3,600 s (`AUTH_ACCESS_TOKEN_TTL_SECONDS`) and the script never refreshes them, so a run must end within the token lifetime                                                                              |
+| Per-user limits | Writes are limited to 300/min per client address (`api.write.ip`) and reports to 120/min per user. With 6 % writes the canonical mix needs at least 1 user per 5 write requests/s: at 100K req/s that is ≥ 1,200 distinct users (ESTIMATED), realistically far more                                                      |
+| Distribution    | k6 OSS has no coordinator. Several machines can split one run with `--execution-segment`, but before this phase every generator produced the same users and the same request sequence in lockstep                                                                                                                        |
+| Metrics         | k6 writes an end-of-run summary per process, and percentiles cannot be merged across generators. Server `/api/metrics` was scraped per instance by the scratch harness; PostgreSQL through `pg_stat_activity` sampling and Windows performance counters. There is no central time-series store                           |
+| Workload        | `PROFILE=canonical` (§38.3). The runs below added 100 event streams and a 2 jobs/s job feed                                                                                                                                                                                                                              |
+
+### 40.2 Harness defects found and fixed (load-test only)
+
+1. **Request mix skewed above 33 VUs (bug).** `choose(n)` computed `(n * 2654435761) % total` with `n = __VU * 100003 + __ITER`. Once `__VU > 33` the product exceeds 2^53, and the rounded float makes the remainder land on only a few residues. Simulated with the canonical mix:
+
+   | Class                | Intended | 1–20 VUs | 1–200 VUs | 1–2,000 VUs |
+   | -------------------- | -------- | -------- | --------- | ----------- |
+   | write: guest note    | 2 %      | 2 %      | 0.5 %     | 0.1 %       |
+   | housekeeping summary | 3 %      | 3 %      | 0.7 %     | 0.1 %       |
+   | front-desk summary   | 5 %      | 5 %      | 7.4 %     | 7.9 %       |
+
+   The largest deviation per class was 2.4–2.9 percentage points.
+
+   **Affected earlier numbers:** the §38.4–38.5 runs at ≥ 64 users, and every arrival-rate run (200 pre-allocated VUs), used a mix with fewer writes than stated. Their totals are comparable with each other, not with the stated mix.
+
+   **Fix:** `((n % total) * (2654435761 % total)) % total`, which is exact. It is unchanged for ≤ 33 VUs and deviates 0.00 points at any VU count.
+
+2. **Distributed generators duplicated each other.** New `GEN`/`GENS`: each generator uses the TOKENS users with `index % GENS === GEN` and a shifted request sequence. Use it together with `--execution-segment`.
+3. **No pass/fail.** New opt-in `SLO_P95_MS`, `SLO_ERROR_RATE` and `SLO_DROPPED` become real thresholds, and k6 exits 99 when one is crossed.
+
+**Validation (MEASURED):**
+
+- **Split run:** 2 generators (`--execution-segment 0:1/2` and `1/2:1`, `GEN` 0/1, `RATE=50`) delivered 25.8 + 25.9 req/s with 0 dropped and 0 errors (p95 93 and 103 ms). Both passed their SLOs.
+- **SLO gate:** an overloaded run (`RATE=250`, `SLO_P95_MS=1000`) failed with exit 99 on `dropped_iterations` and `http_req_duration`.
+
+### 40.3 Generator capacity on this machine (MEASURED)
+
+**Setup:**
+
+- k6 2.1.0 against a 4-process Node sink with no database, answering a 2 KB JSON body;
+- requests carry a session cookie and `X-Forwarded-For`;
+- 20 s per level, on the same laptop (i5-8365U, 4 cores / 8 threads, 16 GB).
+
+The k6 CPU column is in cores.
+
+| Requested req/s | Achieved | Dropped | p95    | p99    | Failed | k6 CPU | Machine |
+| --------------- | -------- | ------- | ------ | ------ | ------ | ------ | ------- |
+| 2,000           | 2,000    | 0       | 0.5 ms | 5 ms   | 0      | 0.23   | 14 %    |
+| 5,000           | 4,991    | 169     | 1.7 ms | 9 ms   | 0      | 0.71   | 27 %    |
+| 10,000          | 8,467    | 30,643  | 83 ms  | 172 ms | 0.06 % | 2.48   | 89 %    |
+| 20,000          | 10,572   | 188,085 | 243 ms | 354 ms | 0.02 % | 3.21   | 87 %    |
+| 40,000          | 11,588   | 559,904 | 169 ms | 262 ms | 0      | 3.67   | 90 %    |
+
+**Generator ceiling here:** about 5,000 trivial req/s clean and 11.6K saturated, with the sink sharing the CPU. That is 0.12–0.29 ms of k6 CPU per trivial request.
+
+**With the real PMS script (§40.4):**
+
+- **CPU:** k6 used 8–12 % of one core at 52–103 req/s, i.e. **1.2–1.5 ms per request**. Responses average 22 KB, and the script parses the room board.
+- **Memory:** ≈ 1.6 MB per additional VU (460 MB at 200 VUs, 2.6 GB at 1,595).
+
+### 40.4 Local capacity sweep (MEASURED)
+
+**Setup:**
+
+- **Servers:** 2 production instances with inline workers, pool 10 and `SERVER_TIMING=1`.
+- **Data:** clone `serene_bench_na1` of the regenerated benchmark database (3.0 GB: 300,000 guests, 400,362 stays and folios, 400,000 payments).
+- **Load:** 500 pre-signed users, the canonical mix (fixed selection), 100 event streams and 2 jobs/s.
+- **Timing:** 60 s per level, after a discarded 60 s warm-up.
+
+**Rates and requests:**
+
+| Requested it/s | Achieved it/s | Achieved req/s | Dropped | p50    | p95    | p99    | Errors  | k6 timeouts |
+| -------------- | ------------- | -------------- | ------- | ------ | ------ | ------ | ------- | ----------- |
+| 25             | 24.9          | 25.9           | 0       | 21 ms  | 59 ms  | 141 ms | 0 %     | 0           |
+| 50             | 49.8          | 51.9           | 0       | 30 ms  | 94 ms  | 263 ms | 0 %     | 0           |
+| 75             | 74.6          | 77.6           | 0       | 46 ms  | 213 ms | 514 ms | 0 %     | 0           |
+| 100            | 99.1          | 103.1          | 0       | 177 ms | 931 ms | 1.75 s | 0 %     | 0           |
+| 250            | 97.9          | 102.2          | 8,556   | 4.2 s  | 14.2 s | 17.9 s | 0.015 % | 0           |
+| 500            | 100.4         | 104.5          | 22,896  | 6.7 s  | 22.9 s | 31.0 s | 4.97 %  | 0           |
+| 1,000          | 95.9          | 100.1          | 53,698  | 4.9 s  | 19.4 s | 23.6 s | 0.029 % | 0           |
+
+**Resources:**
+
+| Requested it/s | App CPU (2 inst.) | PostgreSQL CPU | Machine | k6 CPU | k6 memory | DB connections | Pool wait avg / p95 | Event loop p99 |
+| -------------- | ----------------- | -------------- | ------- | ------ | --------- | -------------- | ------------------- | -------------- |
+| 25             | 11 %              | 24 %           | 13 %    | 2 %    | 377 MB    | 22             | 0.1 / 1 ms          | 35 / 35 ms     |
+| 50             | 31 %              | 92 %           | 38 %    | 8 %    | 420 MB    | 22             | 0.1 / 1 ms          | 35 / 35 ms     |
+| 75             | 70 %              | 195 %          | 65 %    | 10 %   | 475 MB    | 22             | 0.5 / 1 ms          | 77 / 49 ms     |
+| 100            | 118 %             | 258 %          | 72 %    | 12 %   | 460 MB    | 22             | 29.5 / 250 ms       | 75 / 85 ms     |
+| 250            | 135 %             | 373 %          | 100 %   | 49 %   | 1.6 GB    | 22             | 1,234 / 2,500 ms    | 166 / 207 ms   |
+| 500            | 128 %             | 272 %          | 79 %    | 53 %   | 2.6 GB    | 22             | 2,002 / 5,000 ms    | 189 / 235 ms   |
+| 1,000          | 121 %             | 239 %          | 70 %    | 34 %   | 1.8 GB    | 22             | 1,437 / 5,000 ms    | 262 / 203 ms   |
+
+**How to read the table:**
+
+- CPU is a percentage of one logical CPU (800 % = the machine).
+- DB connections were 2 × 10 pooled plus LISTEN at every level.
+- Application RSS was 0.9 GB at 25–100 it/s and 1.4–1.5 GB under overload.
+
+**Errors at 500 it/s:** 368 requests failed, across every class. They were pool acquisitions that waited past the 5 s connect timeout and answered 500: instance 1 logged 403 "timeout exceeded when trying to connect" lines. There was also one connection reset on a write. k6's own 60 s request timeout was never reached.
+
+**A cold-cache pass, run first and discarded,** came right after the 3 GB load, with `shared_buffers` at 128 MB. It saturated earlier: 63.9 req/s at 100 it/s, 1,901 dropped, p95 14.3 s.
+
+**Maximum sustained on this machine (MEASURED):** about 100 req/s of the canonical mix with no dropped iterations and 0 % errors (103.1 req/s at 100 it/s, p95 0.93 s). Beyond that, throughput stays flat at 100–104.5 req/s. Only latency, dropped iterations and eventually pool timeouts grow. This matches §38.4.
+
+**First bottleneck (MEASURED): the shared host's CPU, consumed mostly by PostgreSQL.**
+
+- **At 100 it/s:** PostgreSQL used 2.6 cores and the instances 1.2, with the machine at 72 %. The pool had begun to queue (wait p95 250 ms).
+- **At 250 it/s:** the machine was at 100 % and PostgreSQL at 3.7 cores. The pool queue dominated latency.
+- **Cost per request:** ≈ 25 ms of PostgreSQL CPU at 100 it/s and ≈ 36 ms at saturation, plus ≈ 11 ms of application CPU.
+- **The load generator was not the bottleneck:** 12 % of one core at 100 it/s.
+
+### 40.5 What 100K would need (ESTIMATED from §40.3–40.4)
+
+| Resource                 | Arithmetic                                                                            | Estimate                                                                                                           |
+| ------------------------ | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Load generators (CPU)    | 100,000 × 1.2–1.5 ms of k6 CPU = 120–150 cores; 8-vCPU generators at 70 % (5.6 cores) | **≈ 21–27 generators** with this script. Floor with trivial requests (0.12–0.29 ms): 3–6                           |
+| Load generators (memory) | VUs ≈ rate × iteration time; at a 0.5 s budget, 50,000 VUs × ≈ 1.6 MB                 | ≈ 80 GB in total; fits the CPU-sized fleet at 16 GB each                                                           |
+| Network                  | 100,000 × 22 KB per response                                                          | ≈ 2.2 GB/s ≈ 18 Gbit/s from the application tier to the generators. Generators in the same region, ≥ 1 Gbit/s each |
+| Sessions                 | ≥ 1,200 users for the write limit alone; sign-in at ≈ 20/s per signer                 | Tens of thousands of pre-created users, parallel sign-in, and runs shorter than the 1 h token lifetime             |
+| Application CPU          | 100,000 × ≈ 11 ms                                                                     | ≈ 1,100 cores, i.e. hundreds of hosts                                                                              |
+| PostgreSQL CPU           | 100,000 × 25–36 ms                                                                    | ≈ 2,500–3,600 cores: beyond any single primary. It needs the caching, search and partitioning work of §38.17       |
+| Result aggregation       | Per-generator summaries cannot be merged                                              | A time-series output (k6 `--out` to Prometheus remote write or similar) or a managed distributed k6 service        |
+
+### 40.6 Status
+
+| Item                               | Status                                                                                                                        |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| A. Target configuration            | Expressible today: `RATE=100000` with `GEN`/`GENS` and execution segments over ~21–27 generators                              |
+| B. Actual achieved on this machine | ≈ 100 req/s of the canonical mix (MEASURED). The generator alone: ≈ 5K clean / 11.6K saturated trivial req/s (MEASURED)       |
+| C. Proven 100K capacity            | **NOT PROVEN.** No distributed test has run, and the measured cost per request puts the required system at thousands of cores |
+
+**Reproducing:**
+
+1. Regenerate `serene_bench` with `scripts/load/seed-benchmark.mjs` (≈ 15 min).
+2. Clone it.
+3. Create the users (`bench-users.mjs`) and the sessions (`login.mjs`).
+4. Run k6 with `PROFILE=canonical -e RATE=… -e VUS=… -e MAX_VUS=…`.

@@ -24,6 +24,16 @@
 //   PROFILE         "canonical": the final capacity workload (docs/SCALABILITY.md §38.3)
 //   SUMMARY         path of the JSON summary written at the end
 //   COOKIE          access cookie name (default production "__Host-sm_at")
+//   GEN, GENS       distributed run: this generator's index (0-based) and the number of
+//                   generators. Each uses a disjoint share of the TOKENS users and its own
+//                   request sequence; combine with k6 --execution-segment so the RATE is split
+//   SLO_P95_MS      opt-in pass/fail: p95 of the scenario's requests must stay below this
+//   SLO_ERROR_RATE  opt-in pass/fail: failed-request rate must stay below this (e.g. 0.01)
+//   SLO_DROPPED     opt-in pass/fail: at most this many dropped iterations (arrival-rate runs)
+//
+// RATE and STAGES count iterations (user actions) per second, not HTTP requests: a
+// room-status change is two requests and the legacy globalSearch class six. The summary
+// prints the achieved requests/s separately.
 //
 // Every virtual user acts as one of the signed-in staff accounts and sends a stable
 // X-Forwarded-For address per account: each account behaves like a user behind its own
@@ -42,6 +52,8 @@ const BASES = __ENV.BASES ? __ENV.BASES.split(",") : [BASE];
 const ORIGIN = __ENV.ORIGIN || "https://pms.serene-bench.test";
 const COOKIE = __ENV.COOKIE || "__Host-sm_at";
 const USERS = Number(__ENV.BENCH_USERS || 50);
+const GEN = Number(__ENV.GEN || 0);
+const GENS = Math.max(1, Number(__ENV.GENS || 1));
 
 /**
  * Default traffic mix of dynamic API requests (percent). Browser assets, pages and
@@ -148,12 +160,19 @@ function scenario() {
 // Submetrics (per request class, and the scenario without setup logins) appear in
 // the summary only when a threshold references them; these thresholds never fail.
 const thresholds = {
-  "http_req_duration{scenario:pms}": ["max>=0"],
+  "http_req_duration{scenario:pms}": __ENV.SLO_P95_MS
+    ? [`p(95)<${Number(__ENV.SLO_P95_MS)}`]
+    : ["max>=0"],
   // One iteration = one user action; for globalSearch, one keystroke (all its requests).
   "iteration_duration{scenario:pms}": ["max>=0"],
   "http_reqs{scenario:pms}": ["count>=0"],
-  "http_req_failed{scenario:pms}": ["rate>=0"],
+  "http_req_failed{scenario:pms}": __ENV.SLO_ERROR_RATE
+    ? [`rate<${Number(__ENV.SLO_ERROR_RATE)}`]
+    : ["rate>=0"],
 };
+if (__ENV.SLO_DROPPED !== undefined) {
+  thresholds.dropped_iterations = [`count<=${Number(__ENV.SLO_DROPPED)}`];
+}
 for (const source of [
   "reservationSearch",
   "guestSearch",
@@ -384,7 +403,10 @@ function requestFor(name, data, n) {
 }
 
 function choose(n) {
-  let r = (n * 2654435761) % totalWeight;
+  // Modular product of the reduced factors: n * 2654435761 itself exceeds 2^53 once
+  // __VU > 33, and the rounded float skewed the mix (writes almost vanished) — see
+  // docs/SCALABILITY.md §40.
+  let r = ((n % totalWeight) * (2654435761 % totalWeight)) % totalWeight;
   if (r < 0) r += totalWeight;
   for (const [name, weight] of classes) {
     if (r < weight) return name;
@@ -455,10 +477,19 @@ function roomStatusChange(data, n, user) {
   if (res.status === 409) roomConflicts.add(1);
 }
 
+// Distributed runs: this generator's disjoint share of the signed-in users.
+let ownUsers = null;
+
 export default function pmsIteration(data) {
-  const n = __VU * 100003 + __ITER;
+  // GEN shifts the sequence so generators do not send identical requests in lockstep.
+  const n = (__VU + GEN * 1000003) * 100003 + __ITER;
   const name = choose(n);
-  const user = data.users[n % data.users.length];
+  if (!ownUsers) {
+    ownUsers = GENS > 1 ? data.users.filter((_, i) => i % GENS === GEN) : data.users;
+    if (ownUsers.length === 0)
+      throw new Error(`GEN ${GEN}: no users (TOKENS has ${data.users.length})`);
+  }
+  const user = ownUsers[n % ownUsers.length];
   if (name === "globalSearch") {
     const p = pick(data.properties, n);
     const term = FIXED_TERM || pick(SEARCH_TERMS, n);

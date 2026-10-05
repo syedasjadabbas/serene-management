@@ -46,7 +46,7 @@ export function LoginForm({ next }: { next: string }) {
   }
 
   return (
-    <form onSubmit={onSubmit} noValidate className="flex flex-col gap-5">
+    <form method="post" onSubmit={onSubmit} noValidate className="flex flex-col gap-5">
       {apiError ? (
         <Alert tone="danger">
           {apiError.code === "RATE_LIMITED"
