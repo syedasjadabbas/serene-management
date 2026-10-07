@@ -3,9 +3,20 @@
 import { useState } from "react";
 import { cn } from "./cn";
 
-/** Up to two initials ("Syed Asjad Abbas" → "SA"; "Farooq, Daniyal" → "FD"). */
+/**
+ * Up to two initials ("Syed Asjad Abbas" → "SA"; "Farooq, Daniyal" → "FD").
+ * A parenthesised suffix is a note, not part of the name ("Imran Ali
+ * (Housekeeping)" → "IA", not "I("), and only words that start with a letter
+ * or digit count.
+ */
 export function initials(name: string): string {
-  const parts = name.replace(/,/g, " ").trim().split(/\s+/).filter(Boolean);
+  const words = (source: string) =>
+    source
+      .replace(/[,;/]/g, " ")
+      .split(/\s+/)
+      .filter((word) => /^[\p{L}\p{N}]/u.test(word));
+  let parts = words(name.replace(/\([^)]*\)?/g, " "));
+  if (parts.length === 0) parts = words(name.replace(/[()]/g, " "));
   const letters = parts.length > 1 ? [parts[0], parts[parts.length - 1]] : parts;
   return letters.map((part) => part!.charAt(0).toUpperCase()).join("") || "?";
 }

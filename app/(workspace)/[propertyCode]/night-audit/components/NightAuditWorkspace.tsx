@@ -26,6 +26,7 @@ import { formatDate, formatDateTime } from "@/lib/utils/format";
 import type { CheckOutcome } from "@/modules/night-audit/night-audit.policy";
 import type { CheckItem, CheckResult, RunListItem } from "@/modules/night-audit/night-audit.types";
 import { Table, Th, THead, Td, Tr } from "@/components/ui/Table";
+import { randomId } from "@/lib/utils/random-id";
 
 export const OUTCOME_TONE: Record<CheckOutcome, BadgeTone> = {
   PASSED: "success",
@@ -250,7 +251,7 @@ function RunDialog({ businessDate, onClose }: { businessDate: string; onClose: (
   const property = useProperty();
   const router = useRouter();
   const [reason, setReason] = useState("End of day");
-  const [idempotencyKey] = useState(() => crypto.randomUUID());
+  const [idempotencyKey] = useState(randomId);
   const [start, { isLoading, error, data }] = useStartNightAuditMutation();
   const apiError = toClientApiError(error);
 

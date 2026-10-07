@@ -316,6 +316,59 @@ describe("check-out → housekeeping", () => {
 });
 
 describe("housekeeping tasks", () => {
+  it("completion makes the room clean; it is ready at once only when nothing asks for inspection (QA report)", async () => {
+    const run = async (roomId: string, taskTypeId: string) => {
+      const task = await createTask(roomId, { taskTypeId });
+      const started = await startTask(sup, task.id, { version: task.version });
+      return completeTask(sup, task.id, { version: started.body.data.version });
+    };
+    // Departure clean (requires inspection): clean, not yet ready.
+    const dep = takeRoom("KNG");
+    await setRoom(dep, "DIRTY");
+    const depDone = await run(dep, invA.taskTypes.DEP!);
+    expect(depDone.body.data).toMatchObject({
+      status: "COMPLETED",
+      awaitingInspection: true,
+      room: { housekeepingStatus: "CLEAN", readiness: "NOT_INSPECTED" },
+    });
+
+    // Stayover clean on a property that does not require inspection: ready at once.
+    await prisma.propertyConfiguration.update({
+      where: { propertyId: A },
+      data: { requireInspectedForCheckIn: false },
+    });
+    try {
+      const stay = takeRoom("KNG");
+      await setRoom(stay, "DIRTY");
+      const stayDone = await run(stay, invA.taskTypes.STAY!);
+      expect(stayDone.body.data).toMatchObject({
+        status: "COMPLETED",
+        awaitingInspection: false,
+        room: { housekeepingStatus: "CLEAN", readiness: "READY" },
+      });
+      // Repeating the completion is refused and changes nothing.
+      const again = await completeTask(sup, stayDone.body.data.id, {
+        version: stayDone.body.data.version,
+      });
+      expect(again.status).toBe(422);
+      expect((await roomRow(stay)).housekeepingStatus).toBe("CLEAN");
+
+      // A room that is already clean stays clean (no status change, no history row).
+      const clean = takeRoom("KNG");
+      await setRoom(clean, "CLEAN");
+      const before = await prisma.roomStatusHistory.count({ where: { roomId: clean } });
+      expect((await run(clean, invA.taskTypes.STAY!)).body.data.room.housekeepingStatus).toBe(
+        "CLEAN",
+      );
+      expect(await prisma.roomStatusHistory.count({ where: { roomId: clean } })).toBe(before);
+    } finally {
+      await prisma.propertyConfiguration.update({
+        where: { propertyId: A },
+        data: { requireInspectedForCheckIn: true },
+      });
+    }
+  });
+
   it("runs assign → start → complete → inspect and only then makes the room ready", async () => {
     const roomId = takeRoom("KNG");
     await setRoom(roomId, "DIRTY");

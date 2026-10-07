@@ -22,6 +22,7 @@ import {
 import { toClientApiError } from "@/lib/api/errors";
 import { addDays } from "@/modules/business-date/business-date.policy";
 import type { BlockView, GroupDetail } from "@/modules/groups/groups.types";
+import { randomId } from "@/lib/utils/random-id";
 
 const digits = (value: string) => value.replace(/\D/g, "");
 const toInt = (value: string) => Number.parseInt(value || "0", 10);
@@ -360,7 +361,7 @@ export function ReleaseDialog({ block, onClose }: { block: BlockView; onClose: (
   const property = useProperty();
   const [release, state] = useReleaseBlockMutation();
   // One key per dialog: a retried submit replays instead of releasing twice.
-  const [idempotencyKey] = useState(() => crypto.randomUUID());
+  const [idempotencyKey] = useState(randomId);
   const lastNight = addDays(block.endDate, -1);
   const [roomTypeId, setRoomTypeId] = useState("");
   const [from, setFrom] = useState(block.startDate);
@@ -452,7 +453,7 @@ export function ReleaseDialog({ block, onClose }: { block: BlockView; onClose: (
 export function PickupDialog({ block, onClose }: { block: BlockView; onClose: () => void }) {
   const property = useProperty();
   const [pickup, state] = usePickupMutation();
-  const [idempotencyKey] = useState(() => crypto.randomUUID());
+  const [idempotencyKey] = useState(randomId);
   const [guest, setGuest] = useState<{ id: string; label: string } | null>(null);
   const [roomTypeId, setRoomTypeId] = useState(block.roomTypes[0]?.roomType.id ?? "");
   const [arrival, setArrival] = useState(block.startDate);

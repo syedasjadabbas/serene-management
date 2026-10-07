@@ -27,14 +27,19 @@ export async function findUsersPage(
   organizationId: string,
   page: { page: number; pageSize: number; q?: string },
 ) {
+  // Every word must appear in the name or the e-mail, in any order and case:
+  // "Ahmed Bilal" and "bilal  ahmed" find "Bilal Ahmed (Front Office Manager)".
+  const words = (page.q ?? "").trim().split(/\s+/).filter(Boolean).slice(0, 8);
   const where: Prisma.UserWhereInput = {
     organizationId,
-    ...(page.q
+    ...(words.length > 0
       ? {
-          OR: [
-            { displayName: { contains: page.q, mode: "insensitive" } },
-            { email: { contains: page.q.toLowerCase() } },
-          ],
+          AND: words.map((word) => ({
+            OR: [
+              { displayName: { contains: word, mode: "insensitive" as const } },
+              { email: { contains: word.toLowerCase() } },
+            ],
+          })),
         }
       : {}),
   };

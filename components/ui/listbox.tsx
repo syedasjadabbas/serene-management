@@ -186,6 +186,39 @@ export function OptionRow({
 }
 
 /**
+ * Fixed-position style of a top-layer popup anchored to `anchor`: below it,
+ * or above when there is more room there, clamped inside the viewport.
+ *
+ * All four offsets every time, never the `inset` shorthand: the popover UA
+ * style is `inset: 0`, and mixing the shorthand with a top/bottom that flips
+ * between renders let React drop the offset that mattered, so the panel
+ * jumped to the top-left of the viewport (QA report, Housekeeping floor filter).
+ */
+export function anchoredPopoverStyle(
+  anchor: { left: number; top: number; bottom: number; width: number },
+  viewport: { width: number; height: number },
+  { minWidth = 224, maxHeight = 320 }: { minWidth?: number; maxHeight?: number } = {},
+): CSSProperties {
+  const gutter = 8;
+  const width = Math.min(Math.max(anchor.width, minWidth), viewport.width - gutter * 2);
+  const left = Math.min(Math.max(anchor.left, gutter), viewport.width - width - gutter);
+  const below = viewport.height - anchor.bottom - gutter;
+  const above = anchor.top - gutter;
+  const openBelow = below >= Math.min(maxHeight, 240) || below >= above;
+  const room = Math.max(160, (openBelow ? below : above) - 4);
+  return {
+    position: "fixed",
+    margin: 0,
+    left,
+    right: "auto",
+    top: openBelow ? anchor.bottom + 4 : "auto",
+    bottom: openBelow ? "auto" : viewport.height - anchor.top + 4,
+    width,
+    maxHeight: Math.min(maxHeight + 64, room),
+  };
+}
+
+/**
  * Places a popup in the browser's top layer (Popover API), anchored to
  * `anchorRef`: below it, or above when there is more room there, clamped
  * inside the viewport and never clipped by scrolling containers or covered
@@ -202,23 +235,13 @@ export function useAnchoredPopover(
   const place = useCallback(() => {
     const anchor = anchorRef.current;
     if (!anchor) return;
-    const rect = anchor.getBoundingClientRect();
-    const gutter = 8;
-    const width = Math.min(Math.max(rect.width, minWidth), window.innerWidth - gutter * 2);
-    const left = Math.min(Math.max(rect.left, gutter), window.innerWidth - width - gutter);
-    const below = window.innerHeight - rect.bottom - gutter;
-    const above = rect.top - gutter;
-    const openBelow = below >= Math.min(maxHeight, 240) || below >= above;
-    const room = Math.max(160, (openBelow ? below : above) - 4);
-    setStyle({
-      position: "fixed",
-      inset: "auto",
-      margin: 0,
-      left,
-      width,
-      maxHeight: Math.min(maxHeight + 64, room),
-      ...(openBelow ? { top: rect.bottom + 4 } : { bottom: window.innerHeight - rect.top + 4 }),
-    });
+    setStyle(
+      anchoredPopoverStyle(
+        anchor.getBoundingClientRect(),
+        { width: window.innerWidth, height: window.innerHeight },
+        { minWidth, maxHeight },
+      ),
+    );
   }, [anchorRef, minWidth, maxHeight]);
 
   useLayoutEffect(() => {

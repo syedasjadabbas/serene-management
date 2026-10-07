@@ -25,6 +25,7 @@ import {
 import { type ClientApiError, toClientApiError } from "@/lib/api/errors";
 import { formatCurrency, formatDate, pluralize } from "@/lib/utils/format";
 import { formatMoney, parseMoney } from "@/lib/utils/money";
+import { randomId } from "@/lib/utils/random-id";
 import type {
   ChargePreview,
   FolioAccountView,
@@ -40,7 +41,7 @@ import type {
  */
 
 function useIdempotencyKey() {
-  const [key] = useState(() => crypto.randomUUID());
+  const [key] = useState(randomId);
   return key;
 }
 

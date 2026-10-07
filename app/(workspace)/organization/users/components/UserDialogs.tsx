@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { FormDialog } from "@/components/ui/FormDialog";
 import { Select } from "@/components/ui/Select";
 import { TextArea } from "@/components/ui/TextArea";
@@ -133,7 +133,8 @@ function LinkResult({
   link: { url: string; expiresAt: string };
   onClose: () => void;
 }) {
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<"yes" | "manual" | null>(null);
+  const linkRef = useRef<HTMLTextAreaElement>(null);
   return (
     <FormDialog
       title={title}
@@ -144,7 +145,7 @@ function LinkResult({
       pending={false}
       error={null}
     >
-      <TextArea label="One-time link" value={link.url} readOnly rows={3} />
+      <TextArea ref={linkRef} label="One-time link" value={link.url} readOnly rows={3} />
       <p className="text-xs text-fg-secondary">
         Expires {new Date(link.expiresAt).toLocaleString()}. It works once.
       </p>
@@ -152,11 +153,23 @@ function LinkResult({
         type="button"
         className="self-start text-sm font-medium text-brand underline-offset-2 hover:underline"
         onClick={async () => {
-          await navigator.clipboard.writeText(link.url);
-          setCopied(true);
+          // The Clipboard API exists only in secure contexts (HTTPS, localhost) and
+          // may be refused; then the link is selected for a manual copy.
+          try {
+            await navigator.clipboard.writeText(link.url);
+            setCopied("yes");
+          } catch {
+            linkRef.current?.focus();
+            linkRef.current?.select();
+            setCopied("manual");
+          }
         }}
       >
-        {copied ? "Copied" : "Copy link"}
+        {copied === "yes"
+          ? "Copied"
+          : copied === "manual"
+            ? "Link selected: press Ctrl+C to copy"
+            : "Copy link"}
       </button>
     </FormDialog>
   );

@@ -19,6 +19,7 @@ import { toClientApiError } from "@/lib/api/errors";
 import { formatCurrency, formatDate, pluralize } from "@/lib/utils/format";
 import { nightCount } from "@/modules/reservations/reservations.policy";
 import { useBookingDraft } from "../store/bookingDraft.store";
+import { randomId } from "@/lib/utils/random-id";
 
 /** Step 4: review and create. The server re-checks availability, price and permissions. */
 export function StepReview() {
@@ -45,7 +46,7 @@ export function StepReview() {
   const error = created.error ?? walkedIn.error;
   // One Idempotency-Key per review screen: a retry after a lost response returns the first
   // booking. A failed attempt stores nothing, so a corrected resubmission books normally.
-  const [idempotencyKey] = useState(() => crypto.randomUUID());
+  const [idempotencyKey] = useState(randomId);
   const [override, setOverride] = useState(false);
   const [reason, setReason] = useState("");
   const apiError = toClientApiError(error);

@@ -10,6 +10,7 @@ import { FormDialog } from "@/components/ui/FormDialog";
 import { Select } from "@/components/ui/Select";
 import { StatusPanel } from "@/components/ui/StatusPanel";
 import { TextField } from "@/components/ui/TextField";
+import { highlight } from "@/components/ui/listbox";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useProperty } from "@/hooks/useProperty";
@@ -124,14 +125,20 @@ export function GuestsPanel() {
                 className="grid min-h-14 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-0.5 px-4 py-2.5 hover:bg-surface-sunken md:grid-cols-[minmax(0,2fr)_minmax(0,2fr)_9rem]"
               >
                 <span className="min-w-0">
-                  <span className="block truncate font-medium">{guest.fullName}</span>
+                  <span className="block truncate font-medium">
+                    {searching ? highlight(guest.fullName, term) : guest.fullName}
+                  </span>
                   <span className="text-xs text-fg-muted">
-                    {guest.profileNumber}
+                    {searching ? highlight(guest.profileNumber, term) : guest.profileNumber}
                     {guest.nationalityCode ? ` · ${guest.nationalityCode}` : ""}
                   </span>
                 </span>
                 <span className="col-span-2 min-w-0 truncate text-sm text-fg-secondary md:col-span-1">
-                  {[guest.email, guest.phone].filter(Boolean).join(" · ") || "—"}
+                  {(() => {
+                    const contact = [guest.email, guest.phone].filter(Boolean).join(" · ");
+                    if (!contact) return "—";
+                    return searching ? highlight(contact, term) : contact;
+                  })()}
                 </span>
                 <span className="col-span-2 flex gap-1 md:col-span-1 md:justify-self-end">
                   {guest.vip ? <Badge tone="brand">{guest.vip.code}</Badge> : null}

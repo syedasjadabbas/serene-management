@@ -3,7 +3,7 @@ import { POST as loginRoute } from "@/app/api/v1/auth/login/route";
 import { POST as resetCompleteRoute } from "@/app/api/v1/auth/password/reset/route";
 import { GET as meRoute } from "@/app/api/v1/me/route";
 import { POST as resetIssueRoute } from "@/app/api/v1/users/[userId]/password-reset/route";
-import { POST as inviteRoute } from "@/app/api/v1/users/route";
+import { GET as usersRoute, POST as inviteRoute } from "@/app/api/v1/users/route";
 import { prisma } from "@/lib/db/prisma";
 import { type FixtureOrg, TEST_PASSWORD, createFixtureOrg, createUser } from "./support/fixtures";
 import { type CookieJar, call, loginAs } from "./support/http";
@@ -187,5 +187,45 @@ describe("inviting a user", () => {
       body: { token: tokenOf(first.setupUrl), newPassword: NEW_PASSWORD },
     });
     expect(old.status).toBe(400);
+  });
+});
+
+describe("searching users (QA report: Organization > Users & roles)", () => {
+  it("matches every word of the query in any order, ignoring case and extra spaces", async () => {
+    const address = email("bilal.ahmed");
+    const created = await invite(adminJar, {
+      email: address,
+      displayName: "Bilal Ahmed (Front Office Manager)",
+      role: {
+        scope: "PROPERTY",
+        roleId: org.roleIds.FRONT_DESK_AGENT,
+        propertyId: org.properties.A!.id,
+      },
+      reason: "Search regression",
+    });
+    expect(created.status).toBe(201);
+    const search = async (q: string) => {
+      const r = await call(usersRoute, {
+        path: `/api/v1/users?page=1&pageSize=50&q=${encodeURIComponent(q)}`,
+        jar: adminJar,
+      });
+      expect(r.status).toBe(200);
+      return (r.body.data as { email: string }[]).some((u) => u.email === address);
+    };
+    for (const q of [
+      "Bilal Ahmed",
+      "bilal",
+      "BILAL AHMED",
+      "Ahmed Bilal",
+      "bilal   ahmed",
+      "Office Bilal",
+      address,
+      "bilal.ahmed",
+    ]) {
+      expect(await search(q), q).toBe(true);
+    }
+    // A different spelling is a different name: no false positive.
+    expect(await search("Bilal Ahmad")).toBe(false);
+    expect(await search("zzqx")).toBe(false);
   });
 });
