@@ -23,7 +23,7 @@ const nextConfig: NextConfig = {
   devIndicators: false,
   // LAN testing from another laptop: `next dev` blocks its dev-only resources (HMR) for
   // any other hostname, so the page never hydrates. Development only; ignored by builds.
-  allowedDevOrigins: ["192.168.19.173"],
+  allowedDevOrigins: ["192.168.18.170"],
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];
   },
