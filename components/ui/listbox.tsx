@@ -20,21 +20,55 @@ import { cn } from "./cn";
  * top-layer positioning. One look, one set of keys everywhere.
  */
 
-/** Wraps the first case-insensitive occurrence of `query` in a brand mark. */
+/**
+ * Ranges of `text` to mark for `query`: the whole query where it occurs,
+ * else every occurrence of each of its words (searches match word by word,
+ * in any order, so "Mansoori Ahmed" must still light up both names).
+ * Sorted, non-overlapping [start, end) pairs, case-insensitive.
+ */
+export function highlightRanges(text: string, query: string): Array<[number, number]> {
+  const q = query.trim().toLowerCase();
+  if (q.length === 0) return [];
+  const haystack = text.toLowerCase();
+  const whole = haystack.indexOf(q);
+  if (whole !== -1) return [[whole, whole + q.length]];
+  const ranges: Array<[number, number]> = [];
+  for (const word of new Set(q.split(/\s+/))) {
+    for (
+      let at = haystack.indexOf(word);
+      at !== -1;
+      at = haystack.indexOf(word, at + word.length)
+    ) {
+      ranges.push([at, at + word.length]);
+    }
+  }
+  ranges.sort((a, b) => a[0] - b[0] || b[1] - a[1]);
+  const merged: Array<[number, number]> = [];
+  for (const range of ranges) {
+    const last = merged.at(-1);
+    if (last && range[0] <= last[1]) last[1] = Math.max(last[1], range[1]);
+    else merged.push([...range]);
+  }
+  return merged;
+}
+
+/** Wraps the matches of `query` in `text` (see highlightRanges) in a brand mark. */
 export function highlight(text: string, query: string): ReactNode {
-  const q = query.trim();
-  if (q.length === 0) return text;
-  const index = text.toLowerCase().indexOf(q.toLowerCase());
-  if (index === -1) return text;
-  return (
-    <>
-      {text.slice(0, index)}
-      <mark className="rounded-[3px] bg-brand-subtle px-px font-semibold text-brand">
-        {text.slice(index, index + q.length)}
-      </mark>
-      {text.slice(index + q.length)}
-    </>
-  );
+  const ranges = highlightRanges(text, query);
+  if (ranges.length === 0) return text;
+  const parts: ReactNode[] = [];
+  let from = 0;
+  for (const [start, end] of ranges) {
+    parts.push(text.slice(from, start));
+    parts.push(
+      <mark key={start} className="rounded-[3px] bg-brand-subtle px-px font-semibold text-brand">
+        {text.slice(start, end)}
+      </mark>,
+    );
+    from = end;
+  }
+  parts.push(text.slice(from));
+  return <>{parts}</>;
 }
 
 /** True when every word of `query` appears in one of the texts. */

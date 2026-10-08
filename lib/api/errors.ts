@@ -29,12 +29,44 @@ export function toClientApiError(
       details: (envelope?.details as Record<string, unknown> | undefined) ?? {},
     };
   }
+  // The server answered, but not with the API envelope (an HTML error page,
+  // e.g. a 404 from a dev server whose route table went stale). The request
+  // did reach it, so "cannot reach the server" would send people chasing
+  // their Wi-Fi (QA report, "Take & start").
+  if ("status" in error && error.status === "PARSING_ERROR") {
+    return {
+      ...EMPTY,
+      code: "INTERNAL_ERROR",
+      message: `The server returned an unexpected response (HTTP ${error.originalStatus}). Reload the page and try again; if it keeps happening, contact your administrator.`,
+      status: error.originalStatus,
+    };
+  }
+  if ("status" in error && error.status === "TIMEOUT_ERROR") {
+    return {
+      ...EMPTY,
+      message: "The server took too long to answer. Check your connection and try again.",
+    };
+  }
+  if ("status" in error && error.status === "FETCH_ERROR") {
+    return {
+      ...EMPTY,
+      message: "Cannot reach the server. Check your connection and try again.",
+    };
+  }
+  // A SerializedError: the request was never sent because code in this page
+  // failed while preparing it. That is not a connection problem either.
   return {
-    code: "NETWORK_ERROR",
-    message: "Cannot reach the server. Check your connection and try again.",
-    status: null,
-    requestId: null,
-    fieldErrors: {},
-    details: {},
+    ...EMPTY,
+    code: "INTERNAL_ERROR",
+    message: "Something went wrong on this page. Reload the page and try again.",
   };
 }
+
+const EMPTY: ClientApiError = {
+  code: "NETWORK_ERROR",
+  message: "",
+  status: null,
+  requestId: null,
+  fieldErrors: {},
+  details: {},
+};

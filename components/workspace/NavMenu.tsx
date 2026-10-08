@@ -4,7 +4,15 @@ import { ChevronDown } from "lucide-react";
 import Link from "next/link";
 import type { Route } from "next";
 import { usePathname } from "next/navigation";
-import { type KeyboardEvent, type MouseEvent, useEffect, useId, useRef, useState } from "react";
+import {
+  type KeyboardEvent,
+  type MouseEvent,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { cn } from "@/components/ui/cn";
 import type { NavLinkItem } from "./nav";
 
@@ -16,6 +24,24 @@ export function navItemClass(active: boolean) {
       ? "bg-brand-subtle font-semibold text-brand"
       : "font-medium text-fg-secondary hover:bg-surface-sunken hover:text-fg",
   );
+}
+
+/**
+ * Which edge of its button a menu panel lines up with: the left edge (panel
+ * extends right) when it fits there, else the right edge, else the left.
+ * Decided from the space on screen, not from the item's place in the bar: a
+ * role that sees only "Dashboard · Rooms" has Rooms last but near the left
+ * edge, and a right-aligned panel ran off the screen (QA report, accounts 6/8).
+ */
+export function navMenuSide(
+  anchor: { left: number; right: number },
+  panelWidth: number,
+  viewportWidth: number,
+  gutter = 16,
+): "left" | "right" {
+  if (anchor.left + panelWidth <= viewportWidth - gutter) return "left";
+  if (anchor.right - panelWidth >= gutter) return "right";
+  return "left";
 }
 
 /**
@@ -31,12 +57,10 @@ export function NavMenu({
   label,
   heading,
   items,
-  align = "start",
 }: {
   label: string;
   heading?: string;
   items: NavLinkItem[];
-  align?: "start" | "end";
 }) {
   const pathname = usePathname();
   // Open only on the page it was opened on: navigating closes it.
@@ -45,12 +69,22 @@ export function NavMenu({
   const id = useId();
   const rootRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [side, setSide] = useState<"left" | "right">("left");
   const focusFirst = useRef(false);
   const active = items.some((item) => item.active);
 
   const links = () => [
     ...(rootRef.current?.querySelectorAll<HTMLAnchorElement>("[data-nav-link]") ?? []),
   ];
+
+  // Before paint, so the panel never flashes on the wrong side.
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+    const panel = panelRef.current;
+    if (!open || !root || !panel) return;
+    setSide(navMenuSide(root.getBoundingClientRect(), panel.offsetWidth, window.innerWidth));
+  }, [open]);
 
   useEffect(() => {
     const root = rootRef.current;
@@ -132,12 +166,13 @@ export function NavMenu({
         />
       </button>
       <div
+        ref={panelRef}
         id={id}
         hidden={!open}
         className={cn(
           "absolute top-full z-(--z-popover) mt-2 w-80 max-w-[calc(100vw-2rem)] rounded-lg border border-border-subtle bg-surface-raised p-2 shadow-overlay",
           "transition-[opacity,translate] duration-150 ease-out-quart motion-reduce:transition-none starting:-translate-y-1 starting:opacity-0",
-          align === "end" ? "end-0" : "start-0",
+          side === "right" ? "right-0" : "left-0",
         )}
       >
         {heading ? <p className="px-2.5 pt-1 pb-2 label-caps">{heading}</p> : null}

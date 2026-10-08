@@ -9,14 +9,14 @@ import { NavMenu, navItemClass } from "./NavMenu";
  * The workspace's primary navigation bar (lg and up), under the global
  * header: direct links for the daily destinations and a small menu per
  * domain. The current page's item (or the domain holding it) is a mint pill
- * in brand green. Menus in the second half of the bar open towards the end
- * so they never run off the screen.
+ * in brand green. Each menu opens on the side of its button that has room
+ * (NavMenu), so it never runs off the screen.
  */
 export function PrimaryNav({ label, entries }: { label: string; entries: NavEntry[] }) {
   return (
     <nav aria-label={label}>
       <ul className="flex items-center gap-1">
-        {entries.map((entry, index) => (
+        {entries.map((entry) => (
           <li key={entry.kind === "link" ? entry.href : entry.id}>
             {entry.kind === "link" ? (
               <Link
@@ -27,12 +27,7 @@ export function PrimaryNav({ label, entries }: { label: string; entries: NavEntr
                 {entry.label}
               </Link>
             ) : (
-              <NavMenu
-                label={entry.label}
-                heading={entry.heading}
-                items={entry.items}
-                align={index >= entries.length / 2 ? "end" : "start"}
-              />
+              <NavMenu label={entry.label} heading={entry.heading} items={entry.items} />
             )}
           </li>
         ))}
