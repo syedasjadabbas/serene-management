@@ -23,7 +23,8 @@ async function main() {
     const summary = await seedReferenceData(prisma);
     console.warn(
       `Seeded ${summary.currencies} currencies, ${summary.permissions} permissions, ` +
-        `${summary.roles} system roles.`,
+        `${summary.roles} system roles; ${summary.organizationGrantsAdded} template permissions ` +
+        `added to organization roles.`,
     );
     if (demo.run) await seedDemo(demo.password);
   } finally {

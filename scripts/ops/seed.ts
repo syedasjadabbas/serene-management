@@ -18,7 +18,8 @@ async function main() {
     const summary = await seedReferenceData(prisma);
     console.log(
       `Reference data up to date: ${summary.currencies} currencies, ` +
-        `${summary.permissions} permissions, ${summary.roles} role templates.`,
+        `${summary.permissions} permissions, ${summary.roles} role templates, ` +
+        `${summary.organizationGrantsAdded} template permissions added to organization roles.`,
     );
   } finally {
     await prisma.$disconnect();

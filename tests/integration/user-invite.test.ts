@@ -215,17 +215,48 @@ describe("searching users (QA report: Organization > Users & roles)", () => {
     for (const q of [
       "Bilal Ahmed",
       "bilal",
+      "ahmed",
       "BILAL AHMED",
+      "  Bilal Ahmed  ",
       "Ahmed Bilal",
       "bilal   ahmed",
       "Office Bilal",
+      "Bil",
       address,
       "bilal.ahmed",
+      // QA report: "Bilal Ahmad" must find "Bilal Ahmed" (same name, other spelling).
+      "Bilal Ahmad",
+      "ahmad",
+      "Ahmad Bilal",
     ]) {
       expect(await search(q), q).toBe(true);
     }
-    // A different spelling is a different name: no false positive.
-    expect(await search("Bilal Ahmad")).toBe(false);
+    // Spelling tolerance compares consonants, never invents a name.
+    expect(await search("Bilal Ahmadzai")).toBe(false);
+    expect(await search("Bilal Khan")).toBe(false);
     expect(await search("zzqx")).toBe(false);
+  });
+
+  it("never returns users of another organization, and counts every match", async () => {
+    const other = await createFixtureOrg({ properties: [{ key: "A", timezone: "Asia/Karachi" }] });
+    const outsider = await prisma.user.create({
+      data: {
+        organizationId: other.organizationId,
+        email: `bilal.outsider.${other.suffix.toLowerCase()}@serene.test`,
+        displayName: "Bilal Ahmed (other organization)",
+        status: "ACTIVE",
+      },
+      select: { email: true },
+    });
+    const r = await call(usersRoute, {
+      path: `/api/v1/users?page=1&pageSize=1&q=${encodeURIComponent("bilal ahmad")}`,
+      jar: adminJar,
+    });
+    expect(r.status).toBe(200);
+    const rows = r.body.data as { email: string }[];
+    expect(rows.some((u) => u.email === outsider.email)).toBe(false);
+    // Page size 1 still reports the total, so paging cannot hide a match.
+    expect((r.body.meta as { total: number }).total).toBeGreaterThanOrEqual(1);
+    expect(rows).toHaveLength(1);
   });
 });

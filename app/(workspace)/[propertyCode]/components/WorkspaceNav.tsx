@@ -30,12 +30,13 @@ import { MobileNav } from "@/components/workspace/MobileNav";
 import { PrimaryNav } from "@/components/workspace/PrimaryNav";
 import { type NavEntry, type NavLinkItem, withoutEmptyGroups } from "@/components/workspace/nav";
 import {
-  ORGANIZATION_SECTIONS,
   PROPERTY_NAV,
   type PropertyNavItem,
-  canUseOrganizationWorkspace,
+  type PropertyNavNode,
+  organizationSections,
   propertyNavItemActive,
   propertySection,
+  visiblePropertyNav,
 } from "@/components/workspace/sections";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useProperty } from "@/hooks/useProperty";
@@ -79,8 +80,7 @@ const ORGANIZATION_ICONS: Record<string, LucideIcon> = {
  * The property workspace navigation, rendered as the top bar (`variant="bar"`,
  * lg and up) or the mobile panel (`variant="panel"`). Items the user cannot
  * use are not shown and empty groups disappear; the server still enforces
- * every route. "More" leads to the organization workspace for users who may
- * use it.
+ * every route. "More" lists the organization sections the user may open.
  */
 export function WorkspaceNav({ variant }: { variant: "bar" | "panel" }) {
   const property = useProperty();
@@ -90,11 +90,6 @@ export function WorkspaceNav({ variant }: { variant: "bar" | "panel" }) {
   const { can } = usePermissions(property.id);
   const base = `/${property.code}`;
 
-  const allowed = (item: PropertyNavItem) => {
-    const permission =
-      item.permission !== undefined ? item.permission : propertySection(item.segment).permission;
-    return permission === null || can(permission);
-  };
   const toLink = (item: PropertyNavItem, siblings: PropertyNavItem[]): NavLinkItem => {
     const path = item.segment ? `${base}/${item.segment}` : base;
     const key = item.tab ? `${item.segment}:${item.tab}` : item.segment;
@@ -107,26 +102,32 @@ export function WorkspaceNav({ variant }: { variant: "bar" | "panel" }) {
     };
   };
 
-  const entries: NavEntry[] = PROPERTY_NAV.map((node): NavEntry | null => {
-    if (node.kind === "link")
-      return allowed(node) ? { kind: "link", ...toLink(node, [node]) } : null;
+  // Sibling lists for "current tab" come from the full definition, so a
+  // hidden tab never changes which visible tab is current.
+  const full = (id: string) =>
+    PROPERTY_NAV.find((n) => n.kind === "group" && n.id === id) as
+      Extract<PropertyNavNode, { kind: "group" }> | undefined;
+  const entries: NavEntry[] = visiblePropertyNav(can).map((node): NavEntry => {
+    if (node.kind === "link") return { kind: "link", ...toLink(node, [node]) };
     return {
       kind: "group",
       id: node.id,
       label: node.label,
       icon: GROUP_ICONS[node.id] ?? LayoutDashboard,
-      items: node.items.filter(allowed).map((item) => toLink(item, node.items)),
+      items: node.items.map((item) => toLink(item, full(node.id)?.items ?? node.items)),
     };
-  }).filter((entry): entry is NavEntry => entry !== null);
+  });
 
-  if (me && canUseOrganizationWorkspace(me)) {
+  // "More" holds the organization sections this user may open; it is shown
+  // whenever there is at least one (withoutEmptyGroups drops it otherwise).
+  if (me) {
     entries.push({
       kind: "group",
       id: "more",
       label: "More",
       icon: Ellipsis,
       heading: "Organization",
-      items: ORGANIZATION_SECTIONS.filter((s) => s.visible(me)).map((s) => ({
+      items: organizationSections(me).map((s) => ({
         href: s.segment ? `/organization/${s.segment}` : "/organization",
         label: s.segment ? s.label : "Organization overview",
         icon: ORGANIZATION_ICONS[s.segment] ?? Building2,

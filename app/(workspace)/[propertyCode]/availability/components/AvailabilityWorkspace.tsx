@@ -182,6 +182,13 @@ export function AvailabilityWorkspace() {
       ) : (
         <>
           <AvailabilitySummary view={view} />
+          {can("reservations:create") ? null : (
+            // Read-only roles (Auditor, Accountant) see the inventory but cannot
+            // book; say so instead of leaving the Book column silently empty.
+            <p className="text-sm text-fg-secondary">
+              View only: booking a room type needs permission to create reservations.
+            </p>
+          )}
           <AvailabilityResults
             view={view}
             renderRateAction={(roomType, rate) =>

@@ -23,7 +23,21 @@ const nextConfig: NextConfig = {
   devIndicators: false,
   // LAN testing from another laptop: `next dev` blocks its dev-only resources (HMR) for
   // any other hostname, so the page never hydrates. Development only; ignored by builds.
-  allowedDevOrigins: ["192.168.18.170"],
+  // Any address on the home/office network (192.168.x.y), so a new DHCP lease
+  // on this PC does not silently stop the LAN laptop's pages from hydrating.
+  // Next matches it label by label from the right, so it accepts only the
+  // literal IPv4 form, never a rebinding name like 192.168.18.92.evil.example;
+  // API writes follow the same allowlist (isTrustedDevHostname, lib/http/route.ts).
+  allowedDevOrigins: ["192.168.*.*"],
+  experimental: {
+    // Development only. Turbopack's on-disk dev cache (.next/dev/cache, on by
+    // default since 16.1) came back after restarts with a route table that
+    // lacked the deepest API routes: every 8-segment route (housekeeping
+    // task actions, charge preview, …) answered with the HTML 404 page, which
+    // the UI showed as a failed "Take & start" (QA report). A cold compile on
+    // each `next dev` start is slower but always matches the files on disk.
+    turbopackFileSystemCacheForDev: false,
+  },
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];
   },

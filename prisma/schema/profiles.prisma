@@ -143,6 +143,7 @@ model Guest {
   @@index([organizationId, lastName, firstName])
   @@index([searchName(ops: raw("gin_trgm_ops"))], type: Gin, map: "guests_search_name_trgm_idx")
   @@index([organizationId, primaryEmail])
+  @@index([primaryEmail(ops: raw("gin_trgm_ops"))], type: Gin, map: "guests_primary_email_trgm_idx")
   @@index([organizationId, primaryPhone])
   @@index([phoneDigits(ops: raw("gin_trgm_ops"))], type: Gin, map: "guests_phone_digits_trgm_idx")
   @@map("guests")

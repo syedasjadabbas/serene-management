@@ -1,6 +1,7 @@
 import "server-only";
 import { Prisma } from "@/generated/prisma/client";
 import type { Tx } from "@/lib/db/prisma";
+import { consonantSkeleton } from "@/lib/utils/text-match";
 
 const assignmentSelect = {
   id: true,
@@ -29,19 +30,30 @@ export async function findUsersPage(
 ) {
   // Every word must appear in the name or the e-mail, in any order and case:
   // "Ahmed Bilal" and "bilal  ahmed" find "Bilal Ahmed (Front Office Manager)".
+  // A name word also matches with other vowels ("Bilal Ahmad" finds "Bilal
+  // Ahmed", QA report): transliterated names are spelled several ways, so
+  // its consonants are compared too (consonantSkeleton, 3+ consonants).
   const words = (page.q ?? "").trim().split(/\s+/).filter(Boolean).slice(0, 8);
+  const conditions: Prisma.UserWhereInput[] = [];
+  for (const word of words) {
+    const skeleton = consonantSkeleton(word);
+    const loose = skeleton
+      ? await tx.$queryRaw<{ id: string }[]>`
+          SELECT id FROM users
+          WHERE organization_id = ${organizationId}::uuid
+            AND strpos(regexp_replace(lower(display_name), '[^[:alnum:]]|[aeiouy]', '', 'g'), ${skeleton}) > 0`
+      : [];
+    conditions.push({
+      OR: [
+        { displayName: { contains: word, mode: "insensitive" as const } },
+        { email: { contains: word.toLowerCase() } },
+        ...(loose.length > 0 ? [{ id: { in: loose.map((row) => row.id) } }] : []),
+      ],
+    });
+  }
   const where: Prisma.UserWhereInput = {
     organizationId,
-    ...(words.length > 0
-      ? {
-          AND: words.map((word) => ({
-            OR: [
-              { displayName: { contains: word, mode: "insensitive" as const } },
-              { email: { contains: word.toLowerCase() } },
-            ],
-          })),
-        }
-      : {}),
+    ...(conditions.length > 0 ? { AND: conditions } : {}),
   };
   const [rows, total] = await Promise.all([
     tx.user.findMany({

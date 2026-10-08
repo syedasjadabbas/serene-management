@@ -5,6 +5,7 @@ import type { Prisma } from "@/generated/prisma/client";
 import { prisma, type Tx } from "@/lib/db/prisma";
 import {
   type GuestSearchTerms,
+  emailFragment,
   guestSummarySelect,
   searchGuests,
 } from "@/modules/guests/guests.repository";
@@ -49,6 +50,10 @@ function previousSearch(
       const email = terms.raw.toLowerCase();
       or.push({ primaryEmail: email });
       or.push({ contacts: { some: { type: "EMAIL", value: email } } });
+    }
+    // Added with partial e-mail search (QA report): the same rule as the statement.
+    if (emailFragment(terms.raw)) {
+      or.push({ primaryEmail: { contains: terms.raw.trim().toLowerCase() } });
     }
     if (terms.digits.length >= 4) or.push({ phoneDigits: { contains: terms.digits } });
     or.push({ profileNumber: terms.raw.toUpperCase() });
@@ -403,5 +408,78 @@ describe("guest search through the API", () => {
     expect((await find(gm, "k")).status).toBe(400);
     expect((await find(gm, "khan", "&cursor=garbage")).status).toBe(400);
     expect((await find(gm, "khan", `&limit=${randomUUID().length + 100}`)).status).toBe(400);
+  });
+});
+
+describe("guest search requirements (QA report: Guests > Guests list)", () => {
+  let jar: CookieJar;
+  let mansoori: string;
+  let profileNumber: string;
+  const names = async (q: string) => {
+    const r = await call(searchRoute as Handler, {
+      path: `/api/v1/guests?q=${encodeURIComponent(q)}&limit=50`,
+      jar,
+    });
+    expect(r.status, q).toBe(200);
+    return (r.body.data as { id: string }[]).map((g) => g.id);
+  };
+
+  beforeAll(async () => {
+    jar = await loginAs(
+      (await createUser(org, "gs-qa", [{ role: "FRONT_OFFICE_MANAGER", property: "A" }])).email,
+      TEST_PASSWORD,
+    );
+    mansoori = await guest(org, "Ahmed", "Al Mansoori", {
+      primaryEmail: "ahmed.almansoori@qa-report.test",
+    });
+    profileNumber = (
+      await prisma.guest.findUniqueOrThrow({
+        where: { id: mansoori },
+        select: { profileNumber: true },
+      })
+    ).profileNumber;
+    await guest(other, "Ahmed", "Al Mansoori", { primaryEmail: "ahmed.almansoori@qa-report.test" });
+  });
+
+  it("finds the guest by full, partial, single-word and reversed names, in any case and spacing", async () => {
+    for (const q of [
+      "Ahmed Al Mansoori",
+      "Mansoori Ahmed",
+      "mansoori",
+      "Mans",
+      "AHMED AL MANSOORI",
+      "  ahmed   mansoori  ",
+    ]) {
+      expect(await names(q), q).toContain(mansoori);
+    }
+  });
+
+  it("finds the guest by full or partial e-mail and by profile number", async () => {
+    for (const q of [
+      "ahmed.almansoori@qa-report.test",
+      "AHMED.ALMANSOORI@QA-REPORT.TEST",
+      "ahmed.almansoori",
+      "@qa-report.test",
+      profileNumber,
+      profileNumber.toLowerCase(),
+    ]) {
+      expect(await names(q), q).toEqual([mansoori]);
+    }
+  });
+
+  it("filters: unrelated guests are left out, and a miss returns nothing", async () => {
+    const found = await names("Mansoori Ahmed");
+    expect(found).not.toContain(ids.vip);
+    expect(found.length).toBeLessThan(5);
+    expect(await names("Mansoori Zzqx")).toEqual([]);
+    expect(await names("nobody@qa-report.test")).toEqual([]);
+  });
+
+  it("treats LIKE wildcards in an e-mail fragment literally", async () => {
+    expect(emailFragment("first_last@x.test")).toBe(String.raw`first\_last@x.test`);
+    expect(emailFragment("50%.off")).toBe(String.raw`50\%.off`);
+    expect(emailFragment("ahmed mansoori")).toBeNull();
+    expect(emailFragment("ab")).toBeNull();
+    expect(await names("%@qa-report.test")).toEqual([]);
   });
 });

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { initials } from "@/components/ui/Avatar";
 import { anchoredPopoverStyle, highlightRanges } from "@/components/ui/listbox";
 import { navMenuSide } from "@/components/workspace/NavMenu";
-import { toClientApiError } from "@/lib/api/errors";
+import { statusFallback, toClientApiError } from "@/lib/api/errors";
 import { randomId } from "@/lib/utils/random-id";
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -127,7 +127,7 @@ describe("toClientApiError (QA report 2: 'Take & start' said 'Cannot reach the s
       error: "SyntaxError",
     });
     expect(e?.status).toBe(404);
-    expect(e?.code).toBe("INTERNAL_ERROR");
+    expect(e?.code).toBe("NOT_FOUND");
     expect(e?.message).toContain("HTTP 404");
     expect(e?.message).not.toMatch(/cannot reach/i);
   });
@@ -155,6 +155,49 @@ describe("toClientApiError (QA report 2: 'Take & start' said 'Cannot reach the s
       code: "NOT_FOUND",
       message: "Housekeeping task not found",
       status: 404,
+    });
+  });
+});
+
+describe("error kinds are told apart (QA report 3: never 'Cannot reach the server' for an HTTP reply)", () => {
+  const cases: [number, string, RegExp][] = [
+    [400, "VALIDATION_FAILED", /rejected the request/],
+    [422, "VALIDATION_FAILED", /rejected the request/],
+    [401, "UNAUTHENTICATED", /session has ended/],
+    [403, "FORBIDDEN", /permission/],
+    [404, "NOT_FOUND", /could not find/],
+    [409, "CONFLICT", /changed this record/],
+    [429, "RATE_LIMITED", /Too many requests/],
+    [500, "INTERNAL_ERROR", /server had a problem/],
+    [502, "INTERNAL_ERROR", /server had a problem/],
+  ];
+  it.each(cases)("HTTP %i without an envelope → %s", (status, code, message) => {
+    for (const error of [
+      { status, data: "<html>" },
+      { status: "PARSING_ERROR" as const, originalStatus: status, data: "<html>", error: "x" },
+    ]) {
+      const e = toClientApiError(error);
+      expect(e).toMatchObject({ code, status });
+      expect(e?.message).toMatch(message);
+      expect(e?.message).not.toMatch(/cannot reach/i);
+    }
+    expect(statusFallback(status).code).toBe(code);
+  });
+
+  it("prefers the server's own message when the reply has the envelope", () => {
+    const e = toClientApiError({
+      status: 403,
+      data: {
+        error: {
+          code: "FORBIDDEN",
+          message: "Missing permission: housekeeping:update",
+          requestId: "r",
+        },
+      },
+    });
+    expect(e).toMatchObject({
+      code: "FORBIDDEN",
+      message: "Missing permission: housekeeping:update",
     });
   });
 });

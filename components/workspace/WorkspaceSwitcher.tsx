@@ -8,11 +8,15 @@ import { type ReactNode, useState } from "react";
 import { highlight, matches } from "@/components/ui/listbox";
 import { useMeQuery } from "@/lib/api/endpoints/session.api";
 import { Disclosure } from "./Disclosure";
-import { canUseOrganizationWorkspace, switchHref } from "./sections";
+import { canUseOrganizationWorkspace, organizationHomeHref, switchHref } from "./sections";
 
 /**
  * Switches between the organization workspace and the user's properties.
  * Switching is plain navigation; the server re-authorizes the new URL.
+ * The list is exactly `GET /me`: the properties the user's role assignments
+ * reach, plus the organization workspace when any of its sections is
+ * permitted. It always opens (QA report: a static pill read as broken); with
+ * a single destination it says so instead of offering nothing.
  * Between properties the current section is kept when the user may use it
  * in the target property (Phase 9), otherwise the target's overview opens.
  */
@@ -48,8 +52,9 @@ export function WorkspaceSwitcher({
   const pill =
     "h-10 rounded-md border border-border bg-surface px-2.5 text-sm shadow-card hover:bg-surface-sunken sm:px-3";
 
-  if (!me || (properties.length <= 1 && !organization))
+  if (!me)
     return <div className={pill + " flex min-w-0 items-center hover:bg-surface"}>{label}</div>;
+  const destinations = properties.length + (organization ? 1 : 0);
 
   const searchable = properties.length > 6;
   const itemClass =
@@ -64,7 +69,7 @@ export function WorkspaceSwitcher({
                 {organization ? (
                   <li className="mb-1 border-b border-border-subtle pb-1">
                     <Link
-                      href={"/organization" as Route}
+                      href={organizationHomeHref(me) as Route}
                       onClick={close}
                       aria-current={current === null ? "page" : undefined}
                       className={itemClass}
@@ -95,6 +100,12 @@ export function WorkspaceSwitcher({
                     </li>
                   ))}
               </ul>
+              {destinations <= 1 ? (
+                <p className="max-w-64 border-t border-border-subtle px-2.5 pt-2 pb-1 text-xs text-fg-muted">
+                  This is the only property assigned to you. An administrator can give you access to
+                  more under Organization › Users &amp; roles.
+                </p>
+              ) : null}
             </nav>
           )}
         </PropertyList>

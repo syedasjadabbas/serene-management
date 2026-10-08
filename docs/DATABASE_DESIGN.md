@@ -298,7 +298,7 @@ Migration `20261015090000_multi_property_foundation`:
 
 ### Phase 10 notes (indexes, batches 4+5)
 
-Nine indexes, each built with `CREATE INDEX CONCURRENTLY` in its own migration (`20261110090000` … `0800`, OPERATIONS.md §3.3):
+Ten indexes, each built with `CREATE INDEX CONCURRENTLY` in its own migration (`20261110090000` … `0800`, and `20261225090000` for guest e-mail search; OPERATIONS.md §3.3):
 
 | Index                                                                    | Serves                                           |
 | ------------------------------------------------------------------------ | ------------------------------------------------ |
@@ -311,6 +311,7 @@ Nine indexes, each built with `CREATE INDEX CONCURRENTLY` in its own migration (
 | `folios_open_balance_idx` (partial, `balance <> 0`)                      | open-balance totals and folio list               |
 | `loyalty_memberships_program_id_enrolled_at_idx`                         | member list, newest first                        |
 | `reservations_confirmation_number_trgm_idx` (GIN, `gin_trgm_ops`)        | confirmation search: prefix, contains, ends-with |
+| `guests_primary_email_trgm_idx` (GIN, `gin_trgm_ops`)                    | guest search by part of an e-mail address        |
 
 ### Scalability phase 2 notes
 

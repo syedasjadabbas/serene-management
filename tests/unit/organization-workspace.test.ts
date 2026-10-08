@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { useBookingDraft } from "@/app/(workspace)/[propertyCode]/reservations/new/store/bookingDraft.store";
-import { canUseOrganizationWorkspace, switchHref } from "@/components/workspace/sections";
+import {
+  canUseOrganizationWorkspace,
+  organizationHomeHref,
+  organizationSections,
+  switchHref,
+} from "@/components/workspace/sections";
 import { mapWithConcurrency } from "@/lib/utils/concurrency";
 import type { Permission } from "@/lib/permissions/catalog";
 import type { MeView } from "@/modules/access/access.types";
@@ -51,12 +56,19 @@ describe("property switcher (Phase 9)", () => {
     expect(switchHref(user, user.properties[1]!, "/SMR/unknown-section")).toBe("/SDX");
   });
 
-  it("offers the organization workspace to multi-property and organization-scope users only", () => {
+  it("offers the organization workspace when at least one of its sections is permitted", () => {
     expect(canUseOrganizationWorkspace(me())).toBe(true);
+    // A single-property user holding a section's permission (organization
+    // reports here) gets More; the server serves that section to them.
     const single = me({ properties: [property("a", "SMR", ["reports:read"])] });
-    expect(canUseOrganizationWorkspace(single)).toBe(false);
+    expect(canUseOrganizationWorkspace(single)).toBe(true);
+    expect(organizationSections(single).map((s) => s.segment)).toEqual(["reports"]);
+    expect(organizationHomeHref(single)).toBe("/organization/reports");
+    // Nothing permitted inside More: no More.
+    const housekeeper = me({ properties: [property("a", "SMR", ["housekeeping:read"])] });
+    expect(canUseOrganizationWorkspace(housekeeper)).toBe(false);
     expect(
-      canUseOrganizationWorkspace({ ...single, organizationPermissions: ["audit:read"] }),
+      canUseOrganizationWorkspace({ ...housekeeper, organizationPermissions: ["audit:read"] }),
     ).toBe(true);
   });
 });

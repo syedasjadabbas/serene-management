@@ -154,6 +154,28 @@ export const PROPERTY_NAV: PropertyNavNode[] = [
   { kind: "link", segment: "reports" },
 ];
 
+/** The permission an item needs: its own override, else its section's. */
+export function navItemPermission(item: PropertyNavItem): Permission | null {
+  return item.permission !== undefined ? item.permission : propertySection(item.segment).permission;
+}
+
+/**
+ * The property navigation one user sees, from the same `can` the pages use:
+ * items they may open, groups that still have items. Pure, so every role's
+ * navigation is testable (tests/unit/navigation-roles.test.ts).
+ */
+export function visiblePropertyNav(can: (permission: Permission) => boolean): PropertyNavNode[] {
+  const allowed = (item: PropertyNavItem) => {
+    const permission = navItemPermission(item);
+    return permission === null || can(permission);
+  };
+  return PROPERTY_NAV.flatMap((node): PropertyNavNode[] => {
+    if (node.kind === "link") return allowed(node) ? [node] : [];
+    const items = node.items.filter(allowed);
+    return items.length > 0 ? [{ ...node, items }] : [];
+  });
+}
+
 /** The PROPERTY_SECTIONS row of a segment (label, default permission). */
 export function propertySection(segment: string) {
   const section = PROPERTY_SECTIONS.find((s) => s.segment === segment);
@@ -204,11 +226,11 @@ export function switchHref(me: MeView, target: MeProperty, pathname: string): st
 }
 
 /**
- * The organization workspace is for users who look across properties:
- * organization-scope grants or more than one property. What they then see
- * is still limited to the properties they can access.
+ * Users who look across properties: organization-scope grants or more than
+ * one property. They get the organization overview and property list, and
+ * land in the organization workspace when they have no default property.
  */
-export function canUseOrganizationWorkspace(me: MeView): boolean {
+export function worksAcrossProperties(me: MeView): boolean {
   return me.user.isSuperAdmin || me.organizationPermissions.length > 0 || me.properties.length > 1;
 }
 
@@ -221,13 +243,18 @@ export function holdsAnywhere(me: MeView, permission: Permission): boolean {
   );
 }
 
-/** Sections of the organization workspace; `visible` mirrors the server's checks. */
+/**
+ * Sections of the organization workspace ("More" in a property). `visible`
+ * mirrors the server's own check for the section's data, which accepts the
+ * permission at any accessible property (`hasPermissionAnywhere`), so a
+ * single-property manager holding `users:manage` sees Users & roles.
+ */
 export const ORGANIZATION_SECTIONS: {
   segment: string;
   label: string;
   visible: (me: MeView) => boolean;
 }[] = [
-  { segment: "", label: "Overview", visible: () => true },
+  { segment: "", label: "Overview", visible: worksAcrossProperties },
   { segment: "reports", label: "Reports", visible: (me) => holdsAnywhere(me, "reports:read") },
   {
     segment: "availability",
@@ -240,5 +267,30 @@ export const ORGANIZATION_SECTIONS: {
     label: "Users & roles",
     visible: (me) => holdsAnywhere(me, "users:read") || holdsAnywhere(me, "users:manage"),
   },
-  { segment: "properties", label: "Properties", visible: () => true },
+  {
+    segment: "properties",
+    label: "Properties",
+    visible: (me) => worksAcrossProperties(me) || holdsAnywhere(me, "properties:manage"),
+  },
 ];
+
+/** The organization sections this user may open, in navigation order. */
+export function organizationSections(me: MeView) {
+  return ORGANIZATION_SECTIONS.filter((section) => section.visible(me));
+}
+
+/**
+ * Whether the organization workspace ("More") is offered: when at least one
+ * of its sections is. Before, it needed organization grants or two
+ * properties, which hid More (and Users & roles) from single-property
+ * managers the server would serve (QA report, accounts 2, 3, 4, 10).
+ */
+export function canUseOrganizationWorkspace(me: MeView): boolean {
+  return organizationSections(me).length > 0;
+}
+
+/** Where the organization workspace opens for this user: its first permitted section. */
+export function organizationHomeHref(me: MeView): string {
+  const first = organizationSections(me)[0];
+  return first?.segment ? `/organization/${first.segment}` : "/organization";
+}

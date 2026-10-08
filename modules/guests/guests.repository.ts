@@ -28,10 +28,23 @@ export interface GuestSearchTerms {
 }
 
 /**
+ * The LIKE pattern body for a query that looks like part of an e-mail
+ * address (one word with "@" or ".", 3+ characters), lower-cased with LIKE
+ * wildcards escaped ("_" is common in addresses); null otherwise.
+ */
+export function emailFragment(raw: string): string | null {
+  const q = raw.trim().toLowerCase();
+  if (q.length < 3 || /\s/.test(q) || !/[@.]/.test(q)) return null;
+  return q.replace(/[\\%_]/g, (c) => `\\${c}`);
+}
+
+/**
  * Organization-scoped guest search / list, keyset-paginated on
  * (last name, first name, id). Name words use the trigram index on
  * search_name (every word must appear, any order); e-mail is exact (primary
- * or any listed e-mail); phone digits use the trigram index on phone_digits.
+ * or any listed e-mail) or, for part of an address, a contains match on the
+ * primary e-mail (trigram index); phone digits use the trigram index on
+ * phone_digits.
  *
  * With search terms the page comes from one statement that picks the
  * cheapest of three exact ways (scalability phase 8, docs/SCALABILITY.md §36):
@@ -110,6 +123,14 @@ export async function searchGuests(
         Prisma.sql`c."type" = 'EMAIL' AND c."value" = ${email}`,
       ),
     );
+  }
+  const fragment = emailFragment(terms.raw);
+  if (fragment) {
+    // Part of an e-mail address ("ahmed.almansoori", "@example.com"): the
+    // trigram index on primary_email serves the contains match.
+    const partial = Prisma.sql`g."primary_email" LIKE ${`%${fragment}%`}`;
+    or.push(partial);
+    branches.push(branch(guests, partial));
   }
   if (terms.digits.length >= 4) {
     const phone = Prisma.sql`g."phone_digits" LIKE ${`%${terms.digits}%`}`;

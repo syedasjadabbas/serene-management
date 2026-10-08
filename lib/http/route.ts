@@ -366,23 +366,70 @@ function requestMeta(request: NextRequest): RequestMeta {
 }
 
 /**
+ * Hostnames whose own origin development and tests accept for writes, on any
+ * port: loopback (`localhost`, `*.localhost`, `127.0.0.1`, `[::1]`) and
+ * private LAN IPv4 literals `192.168.x.y` (testing from a second machine;
+ * the PC's DHCP address changes). Only literal addresses and loopback names:
+ * a DNS-rebinding page is served under the attacker's own hostname, which
+ * never matches, whatever address it resolves to. Never used in production.
+ */
+export function isTrustedDevHostname(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1");
+  if (host === "localhost" || host.endsWith(".localhost")) return true;
+  if (host === "127.0.0.1" || host === "::1") return true;
+  const lan = /^192\.168\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  return lan !== null && Number(lan[1]) <= 255 && Number(lan[2]) <= 255;
+}
+
+/**
  * CSRF defence for cookie-authenticated writes: the Origin must be our own.
  * In production that is APP_URL only (L3): the request's own Host-derived
  * origin is not trusted there, since a rebinding hostname would match itself.
- * Development and tests also accept the Host origin (any local port).
+ * Development and tests also accept the request's own origin, but only when
+ * its hostname is on the development allowlist (isTrustedDevHostname): the
+ * Host header is chosen by whoever sends the request, so on its own it
+ * proves nothing (a rebinding page sends Origin and Host both evil.example).
  */
 export function allowedOrigins(
   env: { APP_URL: string; NODE_ENV: string },
   requestOrigin: string,
 ): Set<string> {
   const allowed = new Set([new URL(env.APP_URL).origin]);
-  if (env.NODE_ENV !== "production") allowed.add(requestOrigin);
+  if (env.NODE_ENV === "production") return allowed;
+  let own: URL;
+  try {
+    own = new URL(requestOrigin);
+  } catch {
+    return allowed;
+  }
+  if (
+    (own.protocol === "http:" || own.protocol === "https:") &&
+    isTrustedDevHostname(own.hostname)
+  ) {
+    allowed.add(own.origin);
+  }
   return allowed;
+}
+
+/**
+ * The origin the browser addressed, for the development rule above: the
+ * `Host` it sent, not `nextUrl`, which carries the bind address. Under
+ * `next dev --hostname 0.0.0.0` (LAN testing) `nextUrl.origin` is
+ * `http://0.0.0.0:3000`, so writes from `http://192.168.x.y:3000` only
+ * passed while APP_URL named that exact address and broke when the PC's
+ * IP changed (QA report). It is a candidate only: allowedOrigins accepts it
+ * just for allowlisted hostnames. Production never uses it (APP_URL only).
+ */
+export function requestOwnOrigin(url: { protocol: string; origin: string }, host: string | null) {
+  return host ? `${url.protocol}//${host}` : url.origin;
 }
 
 function assertSameOrigin(request: NextRequest) {
   const origin = request.headers.get("origin");
-  const allowed = allowedOrigins(serverEnv(), request.nextUrl.origin);
+  const allowed = allowedOrigins(
+    serverEnv(),
+    requestOwnOrigin(request.nextUrl, request.headers.get("host")),
+  );
   if (!origin || !allowed.has(origin)) {
     throw new AppError("FORBIDDEN", "Cross-origin request rejected");
   }

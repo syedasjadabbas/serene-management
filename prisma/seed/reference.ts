@@ -6,9 +6,14 @@
  *
  * Note: permission keys removed from the catalog are deleted, which also
  * removes them from organizations' custom roles; system role templates are
- * rewritten from lib/permissions/roles.ts.
+ * rewritten from lib/permissions/roles.ts, and each organization's copy of a
+ * template gains the permissions the template gained since it was copied
+ * (additive only: nothing an organization holds is ever removed). Without
+ * that, a permission added to a template later (`loyalty:read`, Phase 7)
+ * never reached the users, whose roles are the organization copies, and
+ * there is no role editor to grant it by hand (docs/RBAC.md §2).
  */
-import type { Db } from "../../lib/db/prisma";
+import type { Db, Tx } from "../../lib/db/prisma";
 import { ALL_PERMISSIONS, PERMISSIONS, isHighRisk } from "../../lib/permissions/catalog";
 import { ROLE_TEMPLATES } from "../../lib/permissions/roles";
 
@@ -28,9 +33,12 @@ export interface ReferenceSeedSummary {
   currencies: number;
   permissions: number;
   roles: number;
+  /** Template permissions newly granted to organization copies of the templates. */
+  organizationGrantsAdded: number;
 }
 
 export async function seedReferenceData(db: Db): Promise<ReferenceSeedSummary> {
+  let organizationGrantsAdded = 0;
   await db.$transaction(
     async (tx) => {
       for (const currency of CURRENCIES) {
@@ -67,6 +75,8 @@ export async function seedReferenceData(db: Db): Promise<ReferenceSeedSummary> {
           data: template.permissions.map((permissionKey) => ({ roleId: role.id, permissionKey })),
         });
       }
+
+      organizationGrantsAdded = await syncOrganizationRoleCopies(tx);
     },
     // A remote database needs more than Prisma's 5 s default for ~100 upserts.
     { maxWait: 15_000, timeout: 120_000 },
@@ -75,5 +85,35 @@ export async function seedReferenceData(db: Db): Promise<ReferenceSeedSummary> {
     currencies: CURRENCIES.length,
     permissions: ALL_PERMISSIONS.length,
     roles: Object.keys(ROLE_TEMPLATES).length,
+    organizationGrantsAdded,
   };
+}
+
+/**
+ * Adds to organization copies of the role templates the permissions their
+ * template gained since they were copied; never removes one. `organizationId`
+ * limits it to one organization (tests); the seed syncs every organization.
+ * Returns the number of grants added.
+ */
+export async function syncOrganizationRoleCopies(tx: Tx, organizationId?: string): Promise<number> {
+  const copies = await tx.role.findMany({
+    where: {
+      organizationId: organizationId ?? { not: null },
+      code: { in: Object.keys(ROLE_TEMPLATES) },
+    },
+    select: { id: true, code: true, permissions: { select: { permissionKey: true } } },
+  });
+  let added = 0;
+  for (const copy of copies) {
+    const held = new Set(copy.permissions.map((p) => p.permissionKey));
+    const template = ROLE_TEMPLATES[copy.code as keyof typeof ROLE_TEMPLATES];
+    const missing = template.permissions.filter((key) => !held.has(key));
+    if (missing.length === 0) continue;
+    const { count } = await tx.rolePermission.createMany({
+      data: missing.map((permissionKey) => ({ roleId: copy.id, permissionKey })),
+      skipDuplicates: true,
+    });
+    added += count;
+  }
+  return added;
 }

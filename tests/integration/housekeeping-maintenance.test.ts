@@ -483,6 +483,44 @@ describe("housekeeping tasks", () => {
     expect(mine.body.data.map((t: { id: string }) => t.id)).toContain(task.id);
   });
 
+  it("Take & start by a single-property manager persists and shows in My tasks (QA report)", async () => {
+    // Accounts 2 and 10 are general managers of one property clicking "Take & start".
+    const gmA = await loginAs(
+      (await createUser(org, "hk-gm-a", [{ role: "GENERAL_MANAGER", property: "A" }])).email,
+      TEST_PASSWORD,
+    );
+    const roomId = takeRoom("KNG");
+    await setRoom(roomId, "DIRTY");
+    const task = await createTask(roomId);
+    // Validation: the version is required; a stale version is a conflict.
+    expect((await startTask(gmA, task.id, {})).status).toBe(400);
+    expect((await startTask(gmA, task.id, { version: task.version + 7 })).status).toBe(409);
+    expect(await freshTask(task.id)).toMatchObject({ status: "PENDING", version: task.version });
+    // Authorization: the front desk has no housekeeping:update.
+    const refused = await startTask(agent, task.id, { version: task.version });
+    expect(refused.status).toBe(403);
+    expect(refused.body.error.code).toBe("FORBIDDEN");
+    // Unknown task: a JSON 404 from the API, not an HTML page.
+    const missing = await startTask(gmA, "01a0d9a6-5310-70fa-adbc-2550b8afb576", { version: 1 });
+    expect(missing.status).toBe(404);
+    expect(missing.body.error.code).toBe("NOT_FOUND");
+
+    const started = await startTask(gmA, task.id, { version: task.version });
+    expect(started.status).toBe(200);
+    expect(started.body.data).toMatchObject({ status: "IN_PROGRESS", mine: true });
+    // Persisted: a fresh read and the database agree, and it is in My tasks.
+    const row = await freshTask(task.id);
+    expect(row.status).toBe("IN_PROGRESS");
+    expect(row.startedAt).not.toBeNull();
+    expect(row.attendantId).not.toBeNull();
+    const mine = await get(tasksRoute, gmA, "/housekeeping/tasks?view=mine");
+    expect(mine.body.data.map((t: { id: string }) => t.id)).toContain(task.id);
+    const open = await get(tasksRoute, gmA, "/housekeeping/tasks?view=open");
+    expect(
+      open.body.data.find((t: { id: string }) => t.id === task.id)?.status ?? "IN_PROGRESS",
+    ).toBe("IN_PROGRESS");
+  });
+
   it("serializes concurrent assignment and concurrent completion", async () => {
     const roomId = takeRoom("KNG");
     await setRoom(roomId, "DIRTY");
