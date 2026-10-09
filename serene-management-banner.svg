@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="340" viewBox="0 0 1200 340" role="img" aria-labelledby="title desc">
+  <title id="title">SERENE MANAGEMENT</title>
+  <desc id="desc">A minimal deep-green banner for SERENE MANAGEMENT, a hotel property management system.</desc>
+  <rect width="1200" height="340" rx="18" fill="#0b2d20"/>
+  <rect x="0" y="0" width="14" height="340" rx="7" fill="#107c41"/>
+  <g opacity="0.20" fill="none" stroke="#92c8a5" stroke-width="1.5">
+    <path d="M730 0V340M790 0V340M850 0V340M910 0V340M970 0V340M1030 0V340M1090 0V340M1150 0V340"/>
+    <path d="M690 50H1200M690 110H1200M690 170H1200M690 230H1200M690 290H1200"/>
+  </g>
+  <g transform="translate(790 55)" fill="none" stroke="#4caf75" stroke-width="4">
+    <rect x="0" y="0" width="310" height="230" rx="8"/>
+    <path d="M36 230V52H144V230M180 230V88H274V230"/>
+    <path d="M58 76H78M101 76H121M58 106H78M101 106H121M58 136H78M101 136H121M58 166H78M101 166H121" stroke-width="7" stroke-linecap="round"/>
+    <path d="M202 112H220M238 112H256M202 144H220M238 144H256M202 176H220M238 176H256" stroke-width="7" stroke-linecap="round"/>
+    <path d="M150 0V-26H185V0"/>
+  </g>
+  <g transform="translate(72 76)">
+    <rect x="0" y="0" width="54" height="54" rx="12" fill="#107c41"/>
+    <path d="M15 39V14H22L38 33V14H45V39H38L22 20V39Z" fill="#ffffff"/>
+    <text x="0" y="116" fill="#ffffff" font-family="Inter, Geist, Arial, sans-serif" font-size="44" font-weight="750" letter-spacing="1.5">SERENE</text>
+    <text x="0" y="162" fill="#bde3c9" font-family="Inter, Geist, Arial, sans-serif" font-size="25" font-weight="600" letter-spacing="6">MANAGEMENT</text>
+    <rect x="0" y="190" width="74" height="4" rx="2" fill="#4caf75"/>
+    <text x="0" y="230" fill="#e5f3e9" font-family="Inter, Geist, Arial, sans-serif" font-size="18" font-weight="450">Hotel Property Management System</text>
+  </g>
+  <text x="1130" y="315" text-anchor="end" fill="#bde3c9" font-family="Inter, Geist, Arial, sans-serif" font-size="12" letter-spacing="2">FRONT OFFICE · ROOMS · REVENUE · REPORTING</text>
+</svg>
