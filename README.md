@@ -1,6 +1,6 @@
 <div align="center">
-  <img src="docs/assets/serene-management-banner.svg" alt="SERENE MANAGEMENT — Hotel Property Management System" width="100%" />
-
+<img src="./serene-management-banner.svg" alt="SERENE MANAGEMENT — Hotel Property Management System" width="100%" />
+  
   <p><strong>A unified operations workspace for modern hospitality teams.</strong></p>
 
   <p>
