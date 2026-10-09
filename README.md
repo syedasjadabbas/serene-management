@@ -1,6 +1,6 @@
 <div align="center">
 <img src="./serene-management-banner.svg" alt="SERENE MANAGEMENT — Hotel Property Management System" width="100%" />
-  
+
   <p><strong>A unified operations workspace for modern hospitality teams.</strong></p>
 
   <p>
@@ -106,17 +106,17 @@ flowchart LR
 
 ## Technology stack
 
-| Layer | Technologies |
-|---|---|
-| Web application | Next.js 16 App Router, React 19, TypeScript strict mode |
-| Styling and UI | Tailwind CSS v4, shared UI primitives, Lucide icons |
-| State and data fetching | Redux Toolkit / RTK Query, Zustand |
-| Validation | Zod |
-| Database | PostgreSQL 17+ (tested with PostgreSQL 18) |
-| ORM / migrations | Prisma 7 with `@prisma/adapter-pg` |
-| Authentication | Server-validated sessions/tokens, secure-cookie behavior in production, Argon2 password hashing |
-| Testing | Vitest, database-rule tests, API integration tests, browser QA |
-| Operations | Compiled operational scripts for migrations, seed/bootstrap, backups, maintenance, posture checks, and workers |
+| Layer                   | Technologies                                                                                                   |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Web application         | Next.js 16 App Router, React 19, TypeScript strict mode                                                        |
+| Styling and UI          | Tailwind CSS v4, shared UI primitives, Lucide icons                                                            |
+| State and data fetching | Redux Toolkit / RTK Query, Zustand                                                                             |
+| Validation              | Zod                                                                                                            |
+| Database                | PostgreSQL 17+ (tested with PostgreSQL 18)                                                                     |
+| ORM / migrations        | Prisma 7 with `@prisma/adapter-pg`                                                                             |
+| Authentication          | Server-validated sessions/tokens, secure-cookie behavior in production, Argon2 password hashing                |
+| Testing                 | Vitest, database-rule tests, API integration tests, browser QA                                                 |
+| Operations              | Compiled operational scripts for migrations, seed/bootstrap, backups, maintenance, posture checks, and workers |
 
 ## Architecture principles
 
@@ -186,25 +186,25 @@ This runs type generation/typecheck, lint, automated tests, and a production bui
 
 ## Useful scripts
 
-| Command | Purpose |
-|---|---|
-| `npm run dev` | Start the Next.js development server |
-| `npm run build` | Build the web application and operational scripts |
-| `npm run start` | Start the application using the lifecycle-aware launcher |
-| `npm run typecheck` | Generate route types and run TypeScript checks |
-| `npm run lint` | Run ESLint and architecture-boundary rules |
-| `npm run test` | Run the Vitest suites |
-| `npm run verify` | Typecheck → lint → tests → production build |
-| `npm run db:setup` | Prepare the native PostgreSQL role and local databases |
-| `npm run db:deploy` | Apply existing migrations |
-| `npm run db:seed` | Seed development/reference data |
-| `npm run db:validate` | Validate the Prisma schema |
-| `npm run ops:seed` | Seed production reference data from compiled ops scripts |
-| `npm run ops:bootstrap` | Create the first organization and administrator during deployment setup |
-| `npm run ops:db-check` | Check database posture and integrity settings |
-| `npm run ops:backup` | Create, verify, list, and restore database backups |
-| `npm run ops:maintenance` | Prune expired operational records |
-| `npm run worker` | Run the durable background-job worker |
+| Command                   | Purpose                                                                 |
+| ------------------------- | ----------------------------------------------------------------------- |
+| `npm run dev`             | Start the Next.js development server                                    |
+| `npm run build`           | Build the web application and operational scripts                       |
+| `npm run start`           | Start the application using the lifecycle-aware launcher                |
+| `npm run typecheck`       | Generate route types and run TypeScript checks                          |
+| `npm run lint`            | Run ESLint and architecture-boundary rules                              |
+| `npm run test`            | Run the Vitest suites                                                   |
+| `npm run verify`          | Typecheck → lint → tests → production build                             |
+| `npm run db:setup`        | Prepare the native PostgreSQL role and local databases                  |
+| `npm run db:deploy`       | Apply existing migrations                                               |
+| `npm run db:seed`         | Seed development/reference data                                         |
+| `npm run db:validate`     | Validate the Prisma schema                                              |
+| `npm run ops:seed`        | Seed production reference data from compiled ops scripts                |
+| `npm run ops:bootstrap`   | Create the first organization and administrator during deployment setup |
+| `npm run ops:db-check`    | Check database posture and integrity settings                           |
+| `npm run ops:backup`      | Create, verify, list, and restore database backups                      |
+| `npm run ops:maintenance` | Prune expired operational records                                       |
+| `npm run worker`          | Run the durable background-job worker                                   |
 
 ## Authentication, roles, and tenant boundaries
 
@@ -243,21 +243,21 @@ Deployment reference: [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) · Operations: 
 
 ## Documentation map
 
-| Document | What it covers |
-|---|---|
-| [`docs/CLIENT_HANDOVER.md`](docs/CLIENT_HANDOVER.md) | User roles, setup order, daily operations, business rules, limitations, and dependencies |
-| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Application architecture, runtime, boundaries, and design decisions |
-| [`docs/DOMAIN_MODEL.md`](docs/DOMAIN_MODEL.md) | Domain entities, relationships, and state machines |
-| [`docs/DATABASE_DESIGN.md`](docs/DATABASE_DESIGN.md) | PostgreSQL/Prisma conventions and data-integrity rules |
-| [`docs/PMS_WORKFLOWS.md`](docs/PMS_WORKFLOWS.md) | End-to-end hotel operational workflows |
-| [`docs/API_CONVENTIONS.md`](docs/API_CONVENTIONS.md) | API shape, validation, errors, and conventions |
-| [`docs/RBAC.md`](docs/RBAC.md) | Roles and permission catalog |
-| [`docs/IMPLEMENTATION_ROADMAP.md`](docs/IMPLEMENTATION_ROADMAP.md) | Development phases and completion criteria |
-| [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) | Environment setup, deployment, migrations, and bootstrap |
-| [`docs/OPERATIONS.md`](docs/OPERATIONS.md) | Backups, restore drills, maintenance, monitoring, and runbooks |
-| [`docs/PRODUCTION_READINESS.md`](docs/PRODUCTION_READINESS.md) | Production-readiness findings, prerequisites, and known risks |
-| [`docs/SECURITY.md`](docs/SECURITY.md) | Security model and controls |
-| [`docs/OFFLINE_ARCHITECTURE.md`](docs/OFFLINE_ARCHITECTURE.md) | Offline data scope, expiry, and security behavior |
+| Document                                                           | What it covers                                                                           |
+| ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
+| [`docs/CLIENT_HANDOVER.md`](docs/CLIENT_HANDOVER.md)               | User roles, setup order, daily operations, business rules, limitations, and dependencies |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)                     | Application architecture, runtime, boundaries, and design decisions                      |
+| [`docs/DOMAIN_MODEL.md`](docs/DOMAIN_MODEL.md)                     | Domain entities, relationships, and state machines                                       |
+| [`docs/DATABASE_DESIGN.md`](docs/DATABASE_DESIGN.md)               | PostgreSQL/Prisma conventions and data-integrity rules                                   |
+| [`docs/PMS_WORKFLOWS.md`](docs/PMS_WORKFLOWS.md)                   | End-to-end hotel operational workflows                                                   |
+| [`docs/API_CONVENTIONS.md`](docs/API_CONVENTIONS.md)               | API shape, validation, errors, and conventions                                           |
+| [`docs/RBAC.md`](docs/RBAC.md)                                     | Roles and permission catalog                                                             |
+| [`docs/IMPLEMENTATION_ROADMAP.md`](docs/IMPLEMENTATION_ROADMAP.md) | Development phases and completion criteria                                               |
+| [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)                         | Environment setup, deployment, migrations, and bootstrap                                 |
+| [`docs/OPERATIONS.md`](docs/OPERATIONS.md)                         | Backups, restore drills, maintenance, monitoring, and runbooks                           |
+| [`docs/PRODUCTION_READINESS.md`](docs/PRODUCTION_READINESS.md)     | Production-readiness findings, prerequisites, and known risks                            |
+| [`docs/SECURITY.md`](docs/SECURITY.md)                             | Security model and controls                                                              |
+| [`docs/OFFLINE_ARCHITECTURE.md`](docs/OFFLINE_ARCHITECTURE.md)     | Offline data scope, expiry, and security behavior                                        |
 
 ## Project structure
 
