@@ -7,7 +7,7 @@
     <a href="https://github.com/syedasjadabbas/serene-management/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/syedasjadabbas/serene-management/ci.yml?branch=main&label=CI&logo=github" alt="CI status" /></a>
     <img src="https://img.shields.io/badge/Next.js-16-black?logo=next.js" alt="Next.js 16" />
     <img src="https://img.shields.io/badge/React-19-149eca?logo=react" alt="React 19" />
-    <img src="https://img.shields.io/badge/TypeScript-Strict-3178c6?logo=typescript" alt="TypeScript strict" />
+    <img src="https://img.shields.io/badge/TypeScript-Strict-3178C6?logo=typescript" alt="TypeScript strict" />
     <img src="https://img.shields.io/badge/PostgreSQL-18-4169e1?logo=postgresql" alt="PostgreSQL 18" />
     <img src="https://img.shields.io/badge/Prisma-7-2d3748?logo=prisma" alt="Prisma 7" />
     <img src="https://img.shields.io/badge/Tailwind_CSS-4-06b6d4?logo=tailwindcss" alt="Tailwind CSS 4" />
