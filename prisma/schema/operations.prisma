@@ -133,6 +133,10 @@ model HousekeepingTask {
   credits       Decimal                @default(1) @db.Decimal(6, 2)
   /// Stay that generated the task (departure / stayover).
   stayId        String?                @map("stay_id") @db.Uuid
+  /// What to do, for tasks added by hand ("Replace the curtains"); the type says what kind.
+  description   String?                @db.VarChar(200)
+  /// Target time on the business date, property-local "HH:MM" (CHECK in migration; docs/DATABASE_DESIGN.md §5).
+  scheduledTime String?                @map("scheduled_time") @db.VarChar(5)
   notes         String?                @db.VarChar(2000)
   startedAt     DateTime?              @map("started_at") @db.Timestamptz(3)
   completedAt   DateTime?              @map("completed_at") @db.Timestamptz(3)

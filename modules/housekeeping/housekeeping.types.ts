@@ -24,6 +24,12 @@ export interface TaskView {
   mine: boolean;
   arrivingToday: boolean;
   awaitingInspection: boolean;
+  /** What to do (tasks added by hand); null for automatic tasks. */
+  description: string | null;
+  /** Target time on the task's business date, property-local "HH:MM". */
+  scheduledTime: string | null;
+  /** Dated after the business date: waits in the Scheduled view, cannot be worked yet. */
+  scheduledAhead: boolean;
   notes: string | null;
   startedAt: string | null;
   completedAt: string | null;
@@ -51,6 +57,8 @@ export interface HousekeepingSummary {
     completedToday: number;
     mine: number;
     unassigned: number;
+    /** Open tasks added for a later business date (Scheduled view). */
+    scheduled: number;
   };
 }
 

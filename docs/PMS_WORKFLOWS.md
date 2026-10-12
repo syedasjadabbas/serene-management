@@ -231,6 +231,8 @@ Scheduled check-out executes §12 automatically at a time when the folio is sett
 - **Transaction**: one Tx per task transition (task + room status + history + outbox).
 - **Failure**: rollback; the task and room keep their previous status.
 
+**Add task (manual tasks).** Housekeeping → _Add task_ (and a room's detail dialog) creates a task for one room: type, optional description, priority, assignee (a user with `housekeeping:update` at the property), date and optional target time, notes. Permission `housekeeping:assign` (the room list needs `rooms:read`); audit `housekeeping.task_create` with every entered field. The date is the business date or up to 30 business dates ahead (`scheduleProblem`); one live task per room, type and date. A task dated ahead waits in the _Scheduled_ view: it is not on the room board, cannot be started, completed or skipped before its date (`TASK_NOT_DUE`), and can be assigned or cancelled. On its date it is ordinary work: night audit, inspection and room readiness treat it like any other task. Rooms only: public areas have no housekeeping task (maintenance requests take a location).
+
 ### 4.1 Confirm (tentative / waitlisted → confirmed) — Phase 2
 
 - **Entities**: ReservationRoom, ReservationType, RoomTypeInventory.

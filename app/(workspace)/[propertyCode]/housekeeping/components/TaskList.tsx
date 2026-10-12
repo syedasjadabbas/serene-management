@@ -42,12 +42,17 @@ const EMPTY: Record<string, string> = {
   open: "No open housekeeping tasks.",
   inspections: "No cleaned rooms are waiting for inspection.",
   all: "No housekeeping tasks for the business date.",
+  scheduled: "No tasks are scheduled for later dates.",
 };
 
 type DialogState = { kind: "assign" | "skip" | "cancel" | "inspect"; task: TaskView } | null;
 
 /** Cursor-paged task cards (phone friendly) with the actions the server allows. */
-export function TaskList({ view }: { view: "mine" | "open" | "inspections" | "all" }) {
+export function TaskList({
+  view,
+}: {
+  view: "mine" | "open" | "inspections" | "all" | "scheduled";
+}) {
   const [cursors, setCursors] = useState<{ view: string; list: (string | undefined)[] }>({
     view,
     list: [undefined],
@@ -189,12 +194,19 @@ function TaskCard({ task, onDialog }: { task: TaskView; onDialog: (state: Dialog
         {task.room.housekeepingStatus.toLowerCase()}
         <RoomReadinessBadge readiness={task.room.readiness} />
       </p>
+      {task.description ? <p className="text-sm font-medium">{task.description}</p> : null}
       <p className="text-xs text-fg-secondary">
         {task.attendant
           ? `Attendant: ${task.attendant.name}${task.mine ? " (you)" : ""}`
           : "Unassigned"}
         {task.businessDate !== undefined ? ` · for ${formatShortDate(task.businessDate)}` : ""}
+        {task.scheduledTime ? ` at ${task.scheduledTime}` : ""}
       </p>
+      {task.scheduledAhead ? (
+        <p className="text-xs text-fg-muted">
+          Scheduled ahead: it can be started on {formatShortDate(task.businessDate)}.
+        </p>
+      ) : null}
       {task.completedAt ? (
         <p className="text-xs text-fg-muted">
           Cleaned {formatDateTime(task.completedAt, property.timezone)}

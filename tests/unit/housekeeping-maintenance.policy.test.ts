@@ -6,6 +6,9 @@ import {
   priorityLabel,
   taskActorProblem,
   taskTransition,
+  MAX_SCHEDULE_DAYS,
+  isScheduledAhead,
+  scheduleProblem,
 } from "@/modules/housekeeping/housekeeping.policy";
 import { inspectRoomSchema } from "@/modules/housekeeping/housekeeping.schema";
 import {
@@ -199,5 +202,29 @@ describe("contracts", () => {
         blockRoom: { kind: "OUT_OF_ORDER", to: "2026-10-12", reasonCodeId: ID },
       }).success,
     ).toBe(false); // blocking needs a reason
+  });
+});
+
+describe("scheduling a task by hand (Add task)", () => {
+  const D = "2026-09-25";
+  const max = "2026-10-25";
+
+  it("accepts the business date up to MAX_SCHEDULE_DAYS ahead, inclusive", () => {
+    expect(MAX_SCHEDULE_DAYS).toBe(30);
+    expect(scheduleProblem(D, D, max)).toBeNull();
+    expect(scheduleProblem("2026-09-26", D, max)).toBeNull();
+    expect(scheduleProblem(max, D, max)).toBeNull();
+  });
+
+  it("refuses closed dates and dates past the window", () => {
+    expect(scheduleProblem("2026-09-24", D, max)).toMatch(/business date/);
+    expect(scheduleProblem("2026-10-26", D, max)).toMatch(/at most 30 days/);
+  });
+
+  it("treats only later dates as scheduled ahead", () => {
+    expect(isScheduledAhead("2026-09-26", D)).toBe(true);
+    expect(isScheduledAhead(D, D)).toBe(false);
+    // Carried over from earlier dates is today's work, not scheduled.
+    expect(isScheduledAhead("2026-09-24", D)).toBe(false);
   });
 });

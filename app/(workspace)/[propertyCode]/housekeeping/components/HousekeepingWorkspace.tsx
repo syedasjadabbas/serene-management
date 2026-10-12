@@ -2,10 +2,12 @@
 
 import { ToggleGroup } from "@/components/ui/ToggleGroup";
 import { ViewNav, type ViewNavItem } from "@/components/ui/ViewNav";
-import { BedDouble } from "lucide-react";
+import { BedDouble, Plus } from "lucide-react";
 import type { Route } from "next";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useState } from "react";
 import { RoomBoardPanel } from "@/components/rooms/RoomBoardPanel";
+import { Button } from "@/components/ui/Button";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { StatusPanel } from "@/components/ui/StatusPanel";
 import { PageSkeleton } from "@/components/ui/PageSkeleton";
@@ -15,11 +17,12 @@ import { useProperty } from "@/hooks/useProperty";
 import { useHousekeepingSummaryQuery } from "@/lib/api/endpoints/housekeeping.api";
 import { toClientApiError } from "@/lib/api/errors";
 import { formatDate } from "@/lib/utils/format";
+import { AddTaskDialog } from "./AddTaskDialog";
 import { TaskList } from "./TaskList";
 
-type View = "board" | "mine" | "open" | "inspections" | "all";
+type View = "board" | "mine" | "open" | "inspections" | "all" | "scheduled";
 
-const VIEWS: View[] = ["board", "mine", "open", "inspections", "all"];
+const VIEWS: View[] = ["board", "mine", "open", "inspections", "all", "scheduled"];
 
 const BOARD_FILTERS = [
   { value: "all", label: "All rooms" },
@@ -40,7 +43,9 @@ const BOARD_FILTERS = [
 /**
  * Housekeeping workspace for the business date: the room board (most urgent
  * rooms first), the caller's tasks, open tasks, rooms waiting for inspection
- * and all of today's tasks. View and board filter live in the URL.
+ * and all of today's tasks, plus tasks scheduled for later dates. View and
+ * board filter live in the URL. Users with `housekeeping:assign` (and the
+ * room list, `rooms:read`) add tasks by hand from the header.
  */
 export function HousekeepingWorkspace() {
   const property = useProperty();
@@ -49,6 +54,8 @@ export function HousekeepingWorkspace() {
   const router = useRouter();
   const pathname = usePathname();
   const allowed = can("housekeeping:read");
+  const canAdd = can("housekeeping:assign") && can("rooms:read");
+  const [adding, setAdding] = useState(false);
   const summary = useHousekeepingSummaryQuery(property.id, {
     skip: !allowed,
     pollingInterval: useLivePolling("housekeeping", 60_000),
@@ -112,7 +119,9 @@ export function HousekeepingWorkspace() {
     { key: "open", label: "Open tasks", count: counts?.open },
     { key: "inspections", label: "Inspections", count: counts?.awaitingInspection },
     { key: "all", label: "All today", count: undefined },
+    { key: "scheduled", label: "Scheduled", count: counts?.scheduled },
   ];
+  const businessDate = summary.data?.businessDate ?? null;
 
   return (
     <div className="flex flex-col gap-6">
@@ -123,6 +132,14 @@ export function HousekeepingWorkspace() {
           { label: "Housekeeping" },
         ]}
         title="Housekeeping"
+        actions={
+          canAdd ? (
+            <Button disabled={!businessDate} onClick={() => setAdding(true)}>
+              <Plus aria-hidden="true" className="size-4" />
+              Add task
+            </Button>
+          ) : null
+        }
         description={
           <>
             Business date {summary.data ? formatDate(summary.data.businessDate) : "…"}
@@ -153,6 +170,18 @@ export function HousekeepingWorkspace() {
       ) : (
         <TaskList view={view} />
       )}
+
+      {adding && businessDate ? (
+        <AddTaskDialog
+          businessDate={businessDate}
+          onClose={() => setAdding(false)}
+          onCreated={(task) => {
+            setAdding(false);
+            // Show the new task where it lives: today's open tasks, or Scheduled.
+            navigate({ view: task.scheduledAhead ? "scheduled" : "open" });
+          }}
+        />
+      ) : null}
     </div>
   );
 }

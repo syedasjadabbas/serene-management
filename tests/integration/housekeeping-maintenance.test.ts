@@ -5,7 +5,9 @@ import { POST as assignTaskRoute } from "@/app/api/v1/properties/[propertyId]/ho
 import { POST as cancelTaskRoute } from "@/app/api/v1/properties/[propertyId]/housekeeping/tasks/[taskId]/cancel/route";
 import { POST as completeTaskRoute } from "@/app/api/v1/properties/[propertyId]/housekeeping/tasks/[taskId]/complete/route";
 import { GET as taskRoute } from "@/app/api/v1/properties/[propertyId]/housekeeping/tasks/[taskId]/route";
+import { POST as skipTaskRoute } from "@/app/api/v1/properties/[propertyId]/housekeeping/tasks/[taskId]/skip/route";
 import { POST as startTaskRoute } from "@/app/api/v1/properties/[propertyId]/housekeeping/tasks/[taskId]/start/route";
+import { GET as summaryRoute } from "@/app/api/v1/properties/[propertyId]/housekeeping/summary/route";
 import {
   GET as tasksRoute,
   POST as createTaskRoute,
@@ -1013,5 +1015,178 @@ describe("room board", () => {
     expect(hkRow.inHouse).toMatchObject({ guestName: null, stayId: null, departingToday: true });
     expect(hkBoard.body.data.counts.total).toBeGreaterThan(0);
     expect((await get(boardRoute, gmB, "/rooms/board")).status).toBe(403);
+  });
+});
+
+describe("Add task: manual housekeeping tasks (feature request)", () => {
+  const add = (jar: CookieJar, body: Record<string, unknown>, propertyId = A) =>
+    post(createTaskRoute, jar, "/housekeeping/tasks", {}, body, propertyId);
+  const ids = async (jar: CookieJar, view: string) =>
+    (await get(tasksRoute, jar, `/housekeeping/tasks?view=${view}&limit=200`)).body.data.map(
+      (t: { id: string }) => t.id,
+    );
+
+  it("creates a described, assigned, timed task that appears at once, persists and is audited", async () => {
+    const roomId = takeRoom("KNG");
+    await setRoom(roomId, "DIRTY");
+    const r = await add(sup, {
+      roomId,
+      taskTypeId: invA.taskTypes.SPEC!,
+      description: "  Replace the curtains  ",
+      priority: "PRIORITY",
+      assigneeId: hkUserId,
+      scheduledTime: "10:30",
+      notes: "Curtains are in the linen room",
+    });
+    expect(r.status).toBe(201);
+    const task = r.body.data;
+    expect(task).toMatchObject({
+      status: "PENDING",
+      priority: "PRIORITY",
+      businessDate: D,
+      description: "Replace the curtains",
+      scheduledTime: "10:30",
+      scheduledAhead: false,
+      notes: "Curtains are in the linen room",
+      type: { code: "SPEC" },
+      attendant: { userId: hkUserId },
+    });
+    // The list updates: today's open tasks, and My tasks of the assignee.
+    expect(await ids(sup, "open")).toContain(task.id);
+    expect(await ids(hk, "mine")).toContain(task.id);
+    // Persisted: a fresh read and the row agree.
+    const again = await get(taskRoute, sup, `/housekeeping/tasks/${task.id}`, { taskId: task.id });
+    expect(again.body.data).toMatchObject({
+      description: "Replace the curtains",
+      scheduledTime: "10:30",
+    });
+    expect(await freshTask(task.id)).toMatchObject({
+      description: "Replace the curtains",
+      scheduledTime: "10:30",
+      status: "PENDING",
+    });
+    // Audited with what was entered.
+    const logs = await auditLogsFor(task.id);
+    const created = logs.find((l) => l.action === "housekeeping.task_create");
+    expect(created?.after).toMatchObject({
+      taskType: "SPEC",
+      description: "Replace the curtains",
+      priority: "PRIORITY",
+      scheduledDate: D,
+      scheduledTime: "10:30",
+    });
+    // It joins the normal workflow: the assignee starts and completes it,
+    // and SPEC requires inspection before the room is ready again.
+    const started = await startTask(hk, task.id, { version: task.version });
+    expect(started.status).toBe(200);
+    const done = await completeTask(hk, task.id, { version: started.body.data.version });
+    expect(done.status).toBe(200);
+    expect(done.body.data.awaitingInspection).toBe(true);
+  });
+
+  it("schedules a task for a later date: Scheduled view only, not workable early, can be cancelled", async () => {
+    const roomId = takeRoom("KNG");
+    const later = addDays(D, 2);
+    const r = await add(sup, { roomId, taskTypeId: invA.taskTypes.TURN!, scheduledDate: later });
+    expect(r.status).toBe(201);
+    const task = r.body.data;
+    expect(task).toMatchObject({ businessDate: later, scheduledAhead: true, status: "PENDING" });
+    expect(task.allowedActions).toMatchObject({
+      start: false,
+      complete: false,
+      skip: false,
+      cancel: true,
+    });
+    expect(await ids(sup, "scheduled")).toContain(task.id);
+    expect(await ids(sup, "open")).not.toContain(task.id);
+    expect(await ids(sup, "all")).not.toContain(task.id);
+    const summary = await get(summaryRoute, sup, "/housekeeping/summary");
+    expect(summary.body.data.tasks.scheduled).toBeGreaterThanOrEqual(1);
+    // The room board shows today's work only.
+    const board = await get(boardRoute, sup, "/rooms/board?filter=all&limit=200");
+    const row = board.body.data.items.find((i: { id: string }) => i.id === roomId);
+    expect(row).toBeDefined();
+    expect(row?.task?.id ?? null).not.toBe(task.id);
+    // Not due yet: start and skip are refused, the state is unchanged.
+    const early = await startTask(sup, task.id, { version: task.version });
+    expect(early.status).toBe(422);
+    expect(early.body.error.details.reason).toBe("TASK_NOT_DUE");
+    const skip = await post(
+      skipTaskRoute,
+      sup,
+      `/housekeeping/tasks/${task.id}/skip`,
+      { taskId: task.id },
+      { version: task.version, reason: "Guest declined" },
+    );
+    expect(skip.status).toBe(422);
+    expect(await freshTask(task.id)).toMatchObject({ status: "PENDING", version: task.version });
+    // The same type on the same later date is a duplicate; today is not.
+    const dup = await add(sup, { roomId, taskTypeId: invA.taskTypes.TURN!, scheduledDate: later });
+    expect(dup.status).toBe(409);
+    expect((await add(sup, { roomId, taskTypeId: invA.taskTypes.TURN! })).status).toBe(201);
+    const cancelled = await cancelTask(sup, task.id, {
+      version: task.version,
+      reason: "Plans changed",
+    });
+    expect(cancelled.status).toBe(200);
+    expect(await ids(sup, "scheduled")).not.toContain(task.id);
+  });
+
+  it("rejects invalid input with the field that is wrong", async () => {
+    const roomId = takeRoom("KNG");
+    const base = { roomId, taskTypeId: invA.taskTypes.TURN! };
+    const invalid: [Record<string, unknown>, string | null][] = [
+      [{ taskTypeId: base.taskTypeId }, "roomId"],
+      [{ roomId }, "taskTypeId"],
+      [{ ...base, scheduledTime: "25:00" }, "scheduledTime"],
+      [{ ...base, scheduledTime: "9:5" }, "scheduledTime"],
+      [{ ...base, scheduledDate: "2026-02-30" }, "scheduledDate"],
+      [{ ...base, scheduledDate: addDays(D, -1) }, "scheduledDate"],
+      [{ ...base, scheduledDate: addDays(D, 31) }, "scheduledDate"],
+      [{ ...base, description: "ab" }, "description"],
+      [{ ...base, description: "x".repeat(201) }, "description"],
+      [{ ...base, priority: "LOW" }, "priority"],
+      [{ ...base, assigneeId: techUserId }, "assigneeId"],
+      [{ ...base, unexpected: true }, null],
+    ];
+    for (const [body, field] of invalid) {
+      const r = await add(sup, body);
+      expect(r.status, JSON.stringify(body)).toBe(400);
+      expect(r.body.error.code).toBe("VALIDATION_FAILED");
+      if (field) {
+        expect(Object.keys(r.body.error.details.fields ?? {}), JSON.stringify(body)).toContain(
+          field,
+        );
+      }
+    }
+    // Unknown room or type: not found, nothing created.
+    const unknown = "01a0d9a6-5310-70fa-adbc-2550b8afb576";
+    expect((await add(sup, { ...base, roomId: unknown })).status).toBe(404);
+    expect((await add(sup, { ...base, taskTypeId: unknown })).status).toBe(404);
+    expect(await prisma.housekeepingTask.count({ where: { propertyId: A, roomId } })).toBe(0);
+    // The last day of the window is accepted.
+    expect((await add(sup, { ...base, scheduledDate: addDays(D, 30) })).status).toBe(201);
+  });
+
+  it("is refused without housekeeping:assign and across properties", async () => {
+    const roomId = takeRoom("KNG");
+    const body = { roomId, taskTypeId: invA.taskTypes.TURN! };
+    for (const jar of [hk, agent, tech]) {
+      const r = await add(jar, body);
+      expect(r.status).toBe(403);
+      expect(r.body.error.code).toBe("FORBIDDEN");
+    }
+    // A manager of property B cannot add tasks at A,
+    expect((await add(gmB, body)).status).toBe(403);
+    // a room of B is not a room of A (scope comes from the URL),
+    const roomOfB = await prisma.room.findFirstOrThrow({
+      where: { propertyId: B },
+      select: { id: true },
+    });
+    expect((await add(sup, { ...body, roomId: roomOfB.id })).status).toBe(404);
+    // and a task type of A is not a task type of B.
+    const typeOfA = { roomId: roomOfB.id, taskTypeId: invA.taskTypes.TURN! };
+    expect((await add(gmB, typeOfA, B)).status).toBe(404);
+    expect(await prisma.housekeepingTask.count({ where: { propertyId: A, roomId } })).toBe(0);
   });
 });

@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { cursorPageQuerySchema, idSchema } from "@/lib/validation/common";
+import {
+  cursorPageQuerySchema,
+  idSchema,
+  isoDateSchema,
+  localTimeSchema,
+} from "@/lib/validation/common";
 import { TASK_PRIORITIES, TASK_STATUSES, TASK_VIEWS } from "./housekeeping.policy";
 
 export const taskParamsSchema = z.object({ propertyId: idSchema, taskId: idSchema }).strict();
@@ -18,12 +23,21 @@ export const tasksQuerySchema = cursorPageQuerySchema
   .strict();
 export type TasksQuery = z.infer<typeof tasksQuerySchema>;
 
+/**
+ * A task added by hand (Housekeeping → Add task, or from a room). The date
+ * defaults to the business date; the service checks it against the open
+ * business date (scheduleProblem). `description` says what to do,
+ * `notes` carries any further instructions.
+ */
 export const createTaskSchema = z
   .object({
     roomId: idSchema,
     taskTypeId: idSchema,
+    description: z.string().trim().min(3).max(200).optional(),
     priority: z.enum(TASK_PRIORITIES).default("NORMAL"),
     assigneeId: idSchema.optional(),
+    scheduledDate: isoDateSchema.optional(),
+    scheduledTime: localTimeSchema.optional(),
     notes,
   })
   .strict();

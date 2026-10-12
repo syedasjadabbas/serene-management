@@ -318,6 +318,8 @@ export function findRoomBoard(
       SELECT t."id", t."status", t."priority", t."task_type_id", t."attendant_id"
       FROM "housekeeping_tasks" t
       WHERE t."property_id" = r."property_id" AND t."room_id" = r."id"
+        -- A task scheduled for a later business date is not today's work yet.
+        AND t."business_date" <= ${businessDate}::date
         AND (t."status" IN ('PENDING', 'IN_PROGRESS', 'PAUSED', 'FAILED_INSPECTION')
              OR (t."status" = 'COMPLETED' AND t."business_date" = ${businessDate}::date))
       ORDER BY (t."status" = 'COMPLETED'), t."priority", t."created_at" LIMIT 1) task ON TRUE

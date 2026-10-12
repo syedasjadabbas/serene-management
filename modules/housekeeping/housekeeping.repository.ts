@@ -150,6 +150,8 @@ const taskSelect = {
   businessDate: true,
   status: true,
   priority: true,
+  description: true,
+  scheduledTime: true,
   notes: true,
   startedAt: true,
   completedAt: true,
@@ -256,5 +258,9 @@ export async function countTasks(
   const mine = attendantId
     ? await tx.housekeepingTask.count({ where: { ...carried, status: open, attendantId } })
     : 0;
-  return { grouped, unassigned, mine };
+  // Added by hand for a later business date (the Scheduled view).
+  const scheduled = await tx.housekeepingTask.count({
+    where: { propertyId, businessDate: { gt: businessDate }, status: open },
+  });
+  return { grouped, unassigned, mine, scheduled };
 }

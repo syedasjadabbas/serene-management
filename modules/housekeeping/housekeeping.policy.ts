@@ -122,5 +122,29 @@ export function cleaningPriority(input: {
   return "NORMAL";
 }
 
-export const TASK_VIEWS = ["all", "mine", "inspections", "open"] as const;
+export const TASK_VIEWS = ["all", "mine", "inspections", "open", "scheduled"] as const;
 export type TaskView = (typeof TASK_VIEWS)[number];
+
+/** How far ahead a task can be scheduled by hand (business dates, inclusive). */
+export const MAX_SCHEDULE_DAYS = 30;
+
+/**
+ * Why a task cannot be scheduled for `date` (YYYY-MM-DD) when the property's
+ * business date is `businessDate`, or null. Dates compare as strings: both
+ * are ISO calendar dates. A task is due on its date: earlier dates are closed
+ * by night audit, and later than MAX_SCHEDULE_DAYS is planning, not work.
+ */
+export function scheduleProblem(
+  date: string,
+  businessDate: string,
+  maxDate: string,
+): string | null {
+  if (date < businessDate) return `Choose the business date (${businessDate}) or a later one`;
+  if (date > maxDate) return `Schedule at most ${MAX_SCHEDULE_DAYS} days ahead (until ${maxDate})`;
+  return null;
+}
+
+/** A task dated after the business date waits: it cannot be worked or skipped yet. */
+export function isScheduledAhead(taskDate: string, businessDate: string): boolean {
+  return taskDate > businessDate;
+}

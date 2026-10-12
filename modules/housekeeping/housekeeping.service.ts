@@ -8,7 +8,7 @@ import type { Permission } from "@/lib/permissions/catalog";
 import { hasPermission } from "@/lib/permissions/evaluate";
 import { userHasPermission, usersWithPermission } from "@/modules/access/access.service";
 import { recordAudit, userDisplayNames } from "@/modules/audit/audit.service";
-import { fromDateOnly, toDateOnly } from "@/modules/business-date/business-date.policy";
+import { addDays, fromDateOnly, toDateOnly } from "@/modules/business-date/business-date.policy";
 import { requireOpenBusinessDate } from "@/modules/business-date/business-date.service";
 import { frontOfficeRules } from "@/modules/properties/properties.service";
 import {
@@ -20,14 +20,17 @@ import {
 import { changeRoomStatus, lockRoomsForUpdate } from "@/modules/rooms/rooms.service";
 import type { CursorPageMeta } from "@/types/api";
 import {
+  MAX_SCHEDULE_DAYS,
   OPEN_TASK_STATUSES,
   PRIORITY_VALUES,
   type TaskAction,
   cleaningPriority,
+  isScheduledAhead,
   type TaskPriority,
   type TaskStatus,
   needsInspection,
   priorityLabel,
+  scheduleProblem,
   taskActorProblem,
   taskTransition,
 } from "./housekeeping.policy";
@@ -248,6 +251,16 @@ export async function queueCleaningInTx(
 
 // --- Task commands ------------------------------------------------------------------------
 
+/** Work on a task dated after the business date waits for its date. */
+function assertTaskDue(task: { business_date: Date }, businessDate: string) {
+  const taskDate = toDateOnly(task.business_date);
+  if (isScheduledAhead(taskDate, businessDate)) {
+    throw new AppError("BUSINESS_RULE_VIOLATION", `This task is scheduled for ${taskDate}`, {
+      reason: "TASK_NOT_DUE",
+    });
+  }
+}
+
 export async function createTask(ctx: PropertyContext, input: CreateTaskInput): Promise<TaskView> {
   requirePermission(ctx, "housekeeping:assign");
   const taskId = await runInTransaction(async (tx) => {
@@ -257,11 +270,22 @@ export async function createTask(ctx: PropertyContext, input: CreateTaskInput): 
     if (!room.active) throw notFound("Room");
     const type = await findTaskType(tx, ctx.propertyId, { id: input.taskTypeId });
     if (!type) throw notFound("Task type");
-    const date = fromDateOnly(businessDate);
+    const scheduledDate = input.scheduledDate ?? businessDate;
+    const problem = scheduleProblem(
+      scheduledDate,
+      businessDate,
+      addDays(businessDate, MAX_SCHEDULE_DAYS),
+    );
+    if (problem) {
+      throw new AppError("VALIDATION_FAILED", problem, { fields: { scheduledDate: [problem] } });
+    }
+    const date = fromDateOnly(scheduledDate);
     if (await findLiveTask(tx, ctx.propertyId, room.id, date, type.id)) {
       throw new AppError(
         "CONFLICT",
-        `Room ${room.number} already has a ${type.name.toLowerCase()} task today`,
+        scheduledDate === businessDate
+          ? `Room ${room.number} already has a ${type.name.toLowerCase()} task today`
+          : `Room ${room.number} already has a ${type.name.toLowerCase()} task on ${scheduledDate}`,
         { reason: "TASK_EXISTS" },
       );
     }
@@ -274,6 +298,8 @@ export async function createTask(ctx: PropertyContext, input: CreateTaskInput): 
       priority: PRIORITY_VALUES[input.priority],
       credits: type.credits,
       attendantId: attendant?.id ?? null,
+      description: input.description || null,
+      scheduledTime: input.scheduledTime ?? null,
       notes: input.notes || null,
     });
     await audit(tx, ctx, businessDate, {
@@ -284,8 +310,12 @@ export async function createTask(ctx: PropertyContext, input: CreateTaskInput): 
         roomId: room.id,
         roomNumber: room.number,
         taskType: type.code,
+        description: input.description ?? null,
         priority: input.priority,
         attendant: attendant?.name ?? null,
+        scheduledDate,
+        scheduledTime: input.scheduledTime ?? null,
+        notes: input.notes ?? null,
       },
       permission: "housekeeping:assign",
     });
@@ -347,6 +377,7 @@ export async function workTask(
     const room = rooms.get(ref.roomId)!;
     const task = await lockTaskOrThrow(tx, ctx, taskId, input.version);
     const next = assertTaskTransition(action, task.status);
+    assertTaskDue(task, businessDate);
     const problem = taskActorProblem(
       action,
       { assigneeUserId: task.attendant_user_id },
@@ -424,6 +455,8 @@ export async function closeTask(
     const businessDate = await requireOpenBusinessDate(tx, ctx.propertyId);
     const task = await lockTaskOrThrow(tx, ctx, taskId, input.version);
     const next = assertTaskTransition(action, task.status);
+    // A scheduled task can be cancelled ahead of its date, not skipped.
+    if (action === "skip") assertTaskDue(task, businessDate);
     if (action === "skip") {
       const problem = taskActorProblem(
         "skip",
@@ -581,9 +614,11 @@ async function toTaskViews(
   return rows.map((row) => {
     const status = row.status as TaskStatus;
     const mine = row.attendant?.userId === ctx.userId;
+    const ahead = isScheduledAhead(toDateOnly(row.businessDate), businessDate);
     const allowed = (action: TaskAction) => "next" in taskTransition(action, status);
     const worker = (action: "start" | "pause" | "complete" | "skip") =>
       update &&
+      !ahead &&
       allowed(action) &&
       taskActorProblem(
         action,
@@ -627,6 +662,9 @@ async function toTaskViews(
       mine,
       arrivingToday: arrivals.has(row.room.id),
       awaitingInspection,
+      description: row.description,
+      scheduledTime: row.scheduledTime,
+      scheduledAhead: ahead,
       notes: row.notes,
       startedAt: row.startedAt?.toISOString() ?? null,
       completedAt: row.completedAt?.toISOString() ?? null,
@@ -665,7 +703,9 @@ export async function listTasks(
     propertyId: ctx.propertyId,
     ...(query.view === "inspections"
       ? {}
-      : { OR: [{ businessDate: date }, { businessDate: { lt: date }, status: open }] }),
+      : query.view === "scheduled"
+        ? { businessDate: { gt: date }, status: open }
+        : { OR: [{ businessDate: date }, { businessDate: { lt: date }, status: open }] }),
     ...(query.roomId ? { roomId: query.roomId } : {}),
   };
   const and: Prisma.HousekeepingTaskWhereInput[] = [];
@@ -708,7 +748,7 @@ export async function getTask(ctx: PropertyContext, taskId: string): Promise<Tas
 export async function getHousekeepingSummary(ctx: PropertyContext): Promise<HousekeepingSummary> {
   const businessDate = requireBusinessDate(ctx);
   const attendant = await findAttendantByUser(prisma, ctx.propertyId, ctx.userId);
-  const { grouped, unassigned, mine } = await countTasks(
+  const { grouped, unassigned, mine, scheduled } = await countTasks(
     prisma,
     ctx.propertyId,
     fromDateOnly(businessDate),
@@ -732,6 +772,7 @@ export async function getHousekeepingSummary(ctx: PropertyContext): Promise<Hous
       completedToday: count("COMPLETED") + count("INSPECTED"),
       mine,
       unassigned,
+      scheduled,
     },
   };
 }
