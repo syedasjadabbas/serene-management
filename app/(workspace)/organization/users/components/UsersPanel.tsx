@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/Button";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { StatusPanel } from "@/components/ui/StatusPanel";
 import { TextField } from "@/components/ui/TextField";
+import { useHydrated } from "@/hooks/useHydrated";
 import { useRolesQuery, useUsersQuery } from "@/lib/api/endpoints/organization.api";
 import { useMeQuery } from "@/lib/api/endpoints/session.api";
 import { toClientApiError } from "@/lib/api/errors";
@@ -38,7 +39,11 @@ const STATUS_LABEL = {
  * set-password link the administrator hands over (no e-mail service, D47).
  */
 export function UsersPanel() {
-  const { data: me } = useMeQuery();
+  // Not before hydration ends (as usePermissions): /me is often already
+  // cached when this page hydrates, and "Add user" then rendered on the client
+  // but not in the server HTML (React hydration error #418).
+  const { data } = useMeQuery();
+  const me = useHydrated() ? data : undefined;
   const [q, setQ] = useState("");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
@@ -274,28 +279,38 @@ export function UsersPanel() {
         </section>
       ) : null}
 
-      <section
-        aria-labelledby="roles-heading"
-        className="rounded-lg border border-border-subtle bg-surface shadow-card"
-      >
-        <h2 id="roles-heading" className="border-b border-border-subtle px-4 py-2.5 font-semibold">
-          Roles
-        </h2>
-        {roles.data ? (
-          <ul className="grid gap-x-6 px-4 py-2 text-sm sm:grid-cols-2 lg:grid-cols-3">
-            {roles.data.map((role) => (
-              <li key={role.id} className="flex items-baseline gap-2 py-1">
-                <span className="font-medium">{role.name}</span>
-                <span className="text-xs text-fg-muted">{role.permissions.length} permissions</span>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="px-4 py-3 text-sm text-fg-muted">
-            {roles.isLoading ? "Loading roles…" : "Roles are not available."}
-          </p>
-        )}
-      </section>
+      {/* Below the users list: shown once the first page of users has arrived
+          (or failed), so the short loading panel above never pushes it down
+          (layout shift 0.12–0.26 on load, client-readiness audit). */}
+      {users.data !== undefined || error ? (
+        <section
+          aria-labelledby="roles-heading"
+          className="rounded-lg border border-border-subtle bg-surface shadow-card"
+        >
+          <h2
+            id="roles-heading"
+            className="border-b border-border-subtle px-4 py-2.5 font-semibold"
+          >
+            Roles
+          </h2>
+          {roles.data ? (
+            <ul className="grid gap-x-6 px-4 py-2 text-sm sm:grid-cols-2 lg:grid-cols-3">
+              {roles.data.map((role) => (
+                <li key={role.id} className="flex items-baseline gap-2 py-1">
+                  <span className="font-medium">{role.name}</span>
+                  <span className="text-xs text-fg-muted">
+                    {role.permissions.length} permissions
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="px-4 py-3 text-sm text-fg-muted">
+              {roles.isLoading ? "Loading roles…" : "Roles are not available."}
+            </p>
+          )}
+        </section>
+      ) : null}
 
       {dialog ? (
         <UserDialogs

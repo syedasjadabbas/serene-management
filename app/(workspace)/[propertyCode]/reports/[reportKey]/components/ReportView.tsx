@@ -141,7 +141,9 @@ export function ReportView({ reportKey }: { reportKey: string }) {
   }
 
   const title = meta?.title ?? "Report";
-  const showRoomTypeSelect = offersRoomType && !!options.data;
+  // Same conditions as before, except it no longer waits for the list: the
+  // select shows disabled while room types load (see the form below).
+  const showRoomTypeSelect = offersRoomType && can("reservations:read") && !options.isError;
   const hiddenRoomTypeFilter = !!query.roomTypeId && !showRoomTypeSelect;
   const showForm = meta
     ? meta.ranged || meta.roomTypeFilter || meta.riskFilter
@@ -236,15 +238,19 @@ export function ReportView({ reportKey }: { reportKey: string }) {
               </>
             )
           ) : null}
-          {showRoomTypeSelect && options.data ? (
+          {showRoomTypeSelect ? (
+            // Rendered at once (disabled until the room types arrive) so the
+            // filter row has its final size on first paint: appearing later it
+            // wrapped the row on phones and pushed the results down (CLS 0.09–0.19).
             <Select
               label="Room type"
               placeholder="All room types"
-              options={options.data.roomTypes.map((rt) => ({
+              options={(options.data?.roomTypes ?? []).map((rt) => ({
                 value: rt.id,
                 label: `${rt.code} · ${rt.name}`,
               }))}
               value={roomTypeId}
+              disabled={!options.data}
               onChange={(e) => setField("roomTypeId", e.target.value)}
             />
           ) : null}

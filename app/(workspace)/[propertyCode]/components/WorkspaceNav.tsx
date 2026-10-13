@@ -38,6 +38,7 @@ import {
   propertySection,
   visiblePropertyNav,
 } from "@/components/workspace/sections";
+import { useHydrated } from "@/hooks/useHydrated";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useProperty } from "@/hooks/useProperty";
 import { useMeQuery } from "@/lib/api/endpoints/session.api";
@@ -86,7 +87,12 @@ export function WorkspaceNav({ variant }: { variant: "bar" | "panel" }) {
   const property = useProperty();
   const pathname = usePathname();
   const tab = useSearchParams().get("tab");
-  const { data: me } = useMeQuery();
+  // The bar hydrates inside its own Suspense boundary, often after the shell
+  // has already fetched /me; reading it before hydration ends rendered "More"
+  // on the client but not in the server HTML (React hydration error #418).
+  // Same gate as usePermissions: no session data until hydration is done.
+  const { data } = useMeQuery();
+  const me = useHydrated() ? data : undefined;
   const { can } = usePermissions(property.id);
   const base = `/${property.code}`;
 

@@ -96,7 +96,13 @@ export function AppShell({
 
       <div className="flex min-h-screen flex-col">
         <div className="sticky top-0 z-(--z-sticky) border-b border-border-subtle bg-surface print:hidden">
-          <header className={`${FRAME} flex h-16 items-center gap-1.5 sm:gap-3`}>
+          {/* Below 375 px the header items need more room than there is: the
+              spacing tightens, and below 360 px the brand mark (also in the
+              drawer) gives way, so the property switcher is never crushed
+              under the search button (responsive audit, 320–360 px). */}
+          <header
+            className={`${FRAME} flex h-16 items-center gap-1.5 max-[374px]:gap-1 max-[374px]:px-2 sm:gap-3`}
+          >
             <IconButton
               label="Open navigation"
               variant="secondary"
@@ -109,7 +115,7 @@ export function AppShell({
             <Link
               href={home as Route}
               aria-label="SERENE MANAGEMENT home"
-              className="flex shrink-0 items-center rounded-md"
+              className="flex shrink-0 items-center rounded-md max-[359px]:hidden"
             >
               <SereneMark className="size-8 sm:hidden" />
               <span className="hidden sm:block">

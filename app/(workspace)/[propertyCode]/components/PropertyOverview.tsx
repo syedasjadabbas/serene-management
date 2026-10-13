@@ -109,6 +109,10 @@ export function PropertyOverview() {
   const permissionCount = me?.properties.find((p) => p.id === property.id)?.permissions.length ?? 0;
   const status = bd ? STATUS_BADGE[bd.status] : null;
 
+  const settling =
+    (dashboardAllowed && dashboard.isLoading) ||
+    (frontDeskAllowed && frontDesk.isLoading) ||
+    (maintenanceAllowed && maintenance.isLoading);
   const attention: AttentionItem[] = [];
   if (bd?.status === "NOT_INITIALIZED") {
     attention.push({
@@ -267,9 +271,13 @@ export function PropertyOverview() {
         }
       />
 
-      <AttentionCard items={attention} />
+      {/* Until the summaries that feed "Needs attention" have answered, the
+          body is one placeholder with nothing below it: lines then appear in
+          their final place instead of being inserted above content already on
+          screen (dashboard layout shift up to 0.11, client-readiness audit). */}
+      {settling ? <StatSkeletons /> : <AttentionCard items={attention} />}
 
-      {dashboardAllowed ? (
+      {settling ? null : dashboardAllowed ? (
         dashboard.isLoading ? (
           <StatSkeletons />
         ) : view ? (
@@ -293,9 +301,7 @@ export function PropertyOverview() {
         )
       ) : null}
 
-      {rows.map((row, index) => (
-        <DashboardRow key={index} cells={row} />
-      ))}
+      {settling ? null : rows.map((row, index) => <DashboardRow key={index} cells={row} />)}
     </div>
   );
 }

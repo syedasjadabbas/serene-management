@@ -254,7 +254,7 @@ export function PostChargeDialog({
         }
         errors={error?.fieldErrors.transactionCodeId}
       />
-      <div className="grid grid-cols-[6rem_1fr] gap-3">
+      <div className="grid grid-cols-[6rem_minmax(0,1fr)] gap-3">
         <TextField
           label="Quantity"
           inputMode="numeric"
