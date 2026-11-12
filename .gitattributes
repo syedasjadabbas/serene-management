@@ -1,0 +1,13 @@
+# Keep LF line endings in the working tree on every OS (Prettier, the CI workflow test and
+# Prisma migration checksums all expect LF). Without this, core.autocrlf=true on Windows
+# rewrites files with CRLF on checkout.
+* text=auto eol=lf
+
+# Binary assets
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.ico binary
+*.woff binary
+*.woff2 binary
