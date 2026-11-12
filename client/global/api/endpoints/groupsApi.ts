@@ -17,6 +17,7 @@ import type {
 } from "@serene/shared/modules/groups/groups.types";
 import type { ApiSuccess, CursorPageMeta } from "@serene/shared/types/api";
 import { baseApi } from "../baseApi";
+import { optionsTag } from "./optionsTags";
 
 /**
  * Groups, blocks and pickup (Phase 6). Pickup counts and remaining rooms
@@ -35,6 +36,7 @@ export const groupsApi = baseApi.injectEndpoints({
     groupOptions: build.query<GroupOptions, string>({
       query: (propertyId) => `/properties/${propertyId}/groups/options`,
       transformResponse: (response: ApiSuccess<GroupOptions>) => response.data,
+      providesTags: (_r, _e, propertyId) => [optionsTag(propertyId)],
       keepUnusedDataFor: 300,
     }),
     groups: build.query<

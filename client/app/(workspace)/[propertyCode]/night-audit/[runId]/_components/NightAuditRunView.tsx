@@ -17,7 +17,7 @@ import { useProperty } from "@/global/hooks/useProperty";
 import { useDispatch } from "react-redux";
 import type { AppDispatch } from "@/global/api/store";
 import {
-  NIGHT_AUDIT_ROLLED_TAGS,
+  nightAuditRolledTags,
   nightAuditApi,
   useNightAuditRunQuery,
   useRecoverNightAuditMutation,
@@ -78,10 +78,10 @@ export function NightAuditRunView({ runId }: { runId: string }) {
     // Finished while this page watched: the date rolled (or reopened), so
     // every operational list and the business date are stale.
     if (previous.current === "RUNNING" && status !== "RUNNING") {
-      dispatch(nightAuditApi.util.invalidateTags([...NIGHT_AUDIT_ROLLED_TAGS]));
+      dispatch(nightAuditApi.util.invalidateTags(nightAuditRolledTags(property.id)));
     }
     previous.current = status;
-  }, [status, dispatch]);
+  }, [status, dispatch, property.id]);
 
   if (permissionsLoading) return <PageSkeleton title="Loading the run" layout="detail" />;
   if (!allowed) {

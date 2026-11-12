@@ -19,6 +19,7 @@ import type {
 } from "@serene/shared/modules/billing/billing.types";
 import type { ApiSuccess, CursorPageMeta } from "@serene/shared/types/api";
 import { baseApi } from "../baseApi";
+import { optionsTag } from "./optionsTags";
 
 /**
  * Folios, postings and payments (Phase 5). Financial commands carry an
@@ -84,6 +85,7 @@ export const billingApi = baseApi.injectEndpoints({
     billingOptions: build.query<BillingOptions, string>({
       query: (propertyId) => `/properties/${propertyId}/billing/options`,
       transformResponse: (response: ApiSuccess<BillingOptions>) => response.data,
+      providesTags: (_r, _e, propertyId) => [optionsTag(propertyId)],
       keepUnusedDataFor: 300,
     }),
     folios: build.query<

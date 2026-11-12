@@ -5,6 +5,7 @@ import type {
 } from "@serene/shared/modules/night-audit/night-audit.types";
 import type { ApiSuccess, CursorPageMeta } from "@serene/shared/types/api";
 import { baseApi } from "../baseApi";
+import { optionsTag } from "./optionsTags";
 
 /**
  * Night audit (Phase 8). Starting a run carries an Idempotency-Key chosen
@@ -14,6 +15,12 @@ import { baseApi } from "../baseApi";
  * refetched (NIGHT_AUDIT_ROLLED_TAGS) — at the start too, as the date is
  * then IN_AUDIT.
  */
+
+/** The roll also changes the business date that group and billing options carry. */
+export const nightAuditRolledTags = (propertyId: string) => [
+  ...NIGHT_AUDIT_ROLLED_TAGS,
+  optionsTag(propertyId),
+];
 
 export const NIGHT_AUDIT_ROLLED_TAGS = [
   "BusinessDate",
@@ -67,7 +74,7 @@ export const nightAuditApi = baseApi.injectEndpoints({
         headers: { "Idempotency-Key": idempotencyKey },
       }),
       transformResponse: (response: ApiSuccess<RunView>) => response.data,
-      invalidatesTags: [...NIGHT_AUDIT_ROLLED_TAGS],
+      invalidatesTags: (_r, _e, { propertyId }) => nightAuditRolledTags(propertyId),
     }),
     recoverNightAudit: build.mutation<
       RunView,
@@ -79,7 +86,11 @@ export const nightAuditApi = baseApi.injectEndpoints({
         body: { reason },
       }),
       transformResponse: (response: ApiSuccess<RunView>) => response.data,
-      invalidatesTags: ["NightAudit", "BusinessDate"],
+      invalidatesTags: (_r, _e, { propertyId }) => [
+        "NightAudit",
+        "BusinessDate",
+        optionsTag(propertyId),
+      ],
     }),
   }),
 });

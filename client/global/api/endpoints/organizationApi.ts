@@ -18,6 +18,7 @@ import type {
 } from "@serene/shared/modules/users/users.types";
 import type { ApiSuccess, CursorPageMeta, OffsetPageMeta } from "@serene/shared/types/api";
 import { baseApi } from "../baseApi";
+import { assigneeOptionsTag, optionsTag } from "./optionsTags";
 
 /**
  * Organization workspace (Phase 9): overview, reports, central availability,
@@ -104,7 +105,7 @@ export const organizationApi = baseApi.injectEndpoints({
         body,
       }),
       transformResponse: (response: ApiSuccess<UserView>) => response.data,
-      invalidatesTags: ["User", "AuditLog"],
+      invalidatesTags: ["User", "AuditLog", assigneeOptionsTag()],
     }),
     revokeRole: build.mutation<UserView, { userId: string; assignmentId: string; reason: string }>({
       query: ({ userId, assignmentId, reason }) => ({
@@ -113,7 +114,7 @@ export const organizationApi = baseApi.injectEndpoints({
         body: { reason },
       }),
       transformResponse: (response: ApiSuccess<UserView>) => response.data,
-      invalidatesTags: ["User", "AuditLog"],
+      invalidatesTags: ["User", "AuditLog", assigneeOptionsTag()],
     }),
     userStatus: build.mutation<
       UserView,
@@ -125,13 +126,13 @@ export const organizationApi = baseApi.injectEndpoints({
         body: { reason },
       }),
       transformResponse: (response: ApiSuccess<UserView>) => response.data,
-      invalidatesTags: ["User", "AuditLog"],
+      invalidatesTags: ["User", "AuditLog", assigneeOptionsTag()],
     }),
     /** Adds an INVITED user with a first role; returns the one-time set-password link. */
     inviteUser: build.mutation<UserInvited, InviteUserInput>({
       query: (body) => ({ url: "/users", method: "POST", body }),
       transformResponse: (response: ApiSuccess<UserInvited>) => response.data,
-      invalidatesTags: ["User", "AuditLog"],
+      invalidatesTags: ["User", "AuditLog", assigneeOptionsTag()],
     }),
     issuePasswordReset: build.mutation<PasswordResetIssued, { userId: string; reason: string }>({
       query: ({ userId, reason }) => ({
@@ -161,7 +162,12 @@ export const organizationApi = baseApi.injectEndpoints({
     >({
       query: (body) => ({ url: "/properties", method: "POST", body }),
       transformResponse: (response: ApiSuccess<PropertyView>) => response.data,
-      invalidatesTags: ["Property", "Me", "AuditLog"],
+      invalidatesTags: (result) => [
+        "Property",
+        "Me",
+        "AuditLog",
+        ...(result ? [optionsTag(result.id)] : []),
+      ],
     }),
     copyPropertySetup: build.mutation<
       PropertySetupCopyResult,
@@ -173,7 +179,7 @@ export const organizationApi = baseApi.injectEndpoints({
         body: { reason },
       }),
       transformResponse: (response: ApiSuccess<PropertySetupCopyResult>) => response.data,
-      invalidatesTags: ["Property", "AuditLog"],
+      invalidatesTags: (_r, _e, { targetId }) => ["Property", "AuditLog", optionsTag(targetId)],
     }),
   }),
 });

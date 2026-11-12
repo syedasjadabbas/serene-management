@@ -11,6 +11,7 @@ import type {
 import type { ApiSuccess } from "@serene/shared/types/api";
 import { baseApi } from "../baseApi";
 import { operationsTags } from "./operationsTags";
+import { optionsTag } from "./optionsTags";
 
 /**
  * Rooms: the shared room board, room detail, out-of-order / out-of-service
@@ -51,6 +52,7 @@ export const roomsApi = baseApi.injectEndpoints({
     roomPicker: build.query<RoomPickerItem[], string>({
       query: (propertyId) => `/properties/${propertyId}/rooms/picker`,
       transformResponse: (response: ApiSuccess<RoomPickerItem[]>) => response.data,
+      providesTags: (_r, _e, propertyId) => [optionsTag(propertyId)],
       keepUnusedDataFor: 300,
     }),
     roomBoardView: build.query<
@@ -84,6 +86,7 @@ export const roomsApi = baseApi.injectEndpoints({
           blockReasons: (Code & { category: string })[];
         }>,
       ) => response.data,
+      providesTags: (_r, _e, propertyId) => [optionsTag(propertyId)],
       keepUnusedDataFor: 300,
     }),
     room: build.query<RoomDetail, { propertyId: string; roomId: string }>({

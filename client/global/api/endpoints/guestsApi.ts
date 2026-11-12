@@ -1,4 +1,5 @@
 import { baseApi } from "../baseApi";
+import { orgOptionsTag } from "./optionsTags";
 import type {
   CreateGuestInput,
   CreateGuestNoteInput,
@@ -54,6 +55,7 @@ export const bookingGuestsApi = baseApi.injectEndpoints({
     guestOptions: build.query<GuestOptions, void>({
       query: () => "/guests/options",
       transformResponse: (response: ApiSuccess<GuestOptions>) => response.data,
+      providesTags: () => [orgOptionsTag()],
       keepUnusedDataFor: 300,
     }),
     guest: build.query<GuestProfileView, string>({

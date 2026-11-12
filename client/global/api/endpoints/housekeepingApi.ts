@@ -13,6 +13,7 @@ import type {
 import type { ApiSuccess, CursorPageMeta } from "@serene/shared/types/api";
 import { baseApi } from "../baseApi";
 import { operationsTags } from "./operationsTags";
+import { assigneeOptionsTag, optionsTag } from "./optionsTags";
 
 /** Housekeeping tasks (Phase 4). Shared by the housekeeping workspace and room dialogs. */
 
@@ -48,6 +49,7 @@ export const housekeepingApi = baseApi.injectEndpoints({
       transformResponse: (
         response: ApiSuccess<{ taskTypes: TaskTypeView[]; assignees: AssigneeView[] }>,
       ) => response.data,
+      providesTags: (_r, _e, propertyId) => [optionsTag(propertyId), assigneeOptionsTag()],
       keepUnusedDataFor: 300,
     }),
     housekeepingTasks: build.query<

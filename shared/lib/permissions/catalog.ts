@@ -9,6 +9,12 @@ interface PermissionDefinition {
   description: string;
   /** High-risk actions require a reason code/comment and write a HIGH audit record. */
   highRisk?: boolean;
+  /**
+   * Granted by role templates; no feature checks it yet. The server unit test
+   * (permissions.test.ts) keeps this flag accurate: a reserved key must not be
+   * checked anywhere, and every other key must be checked somewhere.
+   */
+  reserved?: boolean;
 }
 
 export const PERMISSIONS = {
@@ -27,6 +33,7 @@ export const PERMISSIONS = {
   },
   "reservations:no_show": { description: "Mark reservations as no-show manually", highRisk: true },
   "reservations:override_rate": {
+    reserved: true,
     description: "Override the calculated rate or apply discounts",
     highRisk: true,
   },
@@ -54,13 +61,21 @@ export const PERMISSIONS = {
   "frontdesk:checkin": { description: "Check guests in (including walk-ins)" },
   "frontdesk:checkout": { description: "Check guests out" },
   "frontdesk:reverse_checkin": { description: "Reverse a same-day check-in", highRisk: true },
-  "frontdesk:reinstate_checkout": { description: "Reinstate a same-day check-out", highRisk: true },
-  "frontdesk:messages": { description: "Manage guest messages, traces and wake-up calls" },
+  "frontdesk:reinstate_checkout": {
+    reserved: true,
+    description: "Reinstate a same-day check-out",
+    highRisk: true,
+  },
+  "frontdesk:messages": {
+    reserved: true,
+    description: "Manage guest messages, traces and wake-up calls",
+  },
 
   // Rooms
   "rooms:read": { description: "View rooms and the room rack" },
   "rooms:assign": { description: "Assign, unassign and move rooms" },
   "rooms:upgrade": {
+    reserved: true,
     description: "Assign a room of a different type without charge change",
     highRisk: true,
   },
@@ -69,8 +84,8 @@ export const PERMISSIONS = {
     description: "Place rooms out of order or out of service",
     highRisk: true,
   },
-  "rooms:hold": { description: "Place and release room holds" },
-  "rooms:override_hold": { description: "Assign a room held by another user" },
+  "rooms:hold": { reserved: true, description: "Place and release room holds" },
+  "rooms:override_hold": { reserved: true, description: "Assign a room held by another user" },
 
   // Guests & profiles
   "guests:read": { description: "View guest profiles" },
@@ -80,8 +95,9 @@ export const PERMISSIONS = {
     description: "View identity documents and restricted notes",
     highRisk: true,
   },
-  "guests:merge": { description: "Merge duplicate profiles", highRisk: true },
+  "guests:merge": { reserved: true, description: "Merge duplicate profiles", highRisk: true },
   "guests:privacy": {
+    reserved: true,
     description: "Export or anonymize personal data (privacy requests)",
     highRisk: true,
   },
@@ -91,14 +107,14 @@ export const PERMISSIONS = {
   // Groups
   "groups:read": { description: "View groups and blocks" },
   "groups:manage": { description: "Create and change groups, blocks and allocations" },
-  "groups:rooming_list": { description: "Import and manage rooming lists" },
+  "groups:rooming_list": { reserved: true, description: "Import and manage rooming lists" },
 
   // Housekeeping & maintenance
   "housekeeping:read": { description: "View the housekeeping board and task sheets" },
   "housekeeping:update": { description: "Update task progress and room cleaning status" },
   "housekeeping:assign": { description: "Generate task sheets and assign attendants" },
   "housekeeping:inspect": { description: "Inspect rooms and pass/fail cleaning" },
-  "housekeeping:lost_found": { description: "Manage lost and found" },
+  "housekeeping:lost_found": { reserved: true, description: "Manage lost and found" },
   "maintenance:read": { description: "View maintenance requests" },
   "maintenance:create": { description: "Report maintenance requests" },
   "maintenance:update": { description: "Work on and resolve maintenance requests" },
@@ -109,15 +125,26 @@ export const PERMISSIONS = {
   "billing:post": { description: "Post charges to folios" },
   "billing:adjust": { description: "Adjust or reverse postings", highRisk: true },
   "billing:transfer": { description: "Transfer or split postings between folios" },
-  "billing:routing": { description: "Manage routing instructions" },
-  "billing:invoice": { description: "Issue invoices and folio documents" },
-  "billing:credit_note": { description: "Issue credit notes against invoices", highRisk: true },
-  "payments:read": { description: "View payments" },
+  "billing:routing": { reserved: true, description: "Manage routing instructions" },
+  "billing:invoice": { reserved: true, description: "Issue invoices and folio documents" },
+  "billing:credit_note": {
+    reserved: true,
+    description: "Issue credit notes against invoices",
+    highRisk: true,
+  },
+  "payments:read": { reserved: true, description: "View payments" },
   "payments:create": { description: "Take payments and deposits" },
   "payments:refund": { description: "Refund payments", highRisk: true },
   "payments:void": { description: "Void payments", highRisk: true },
-  "cashier:operate": { description: "Open and close own cashier shift, cash drops and paid-outs" },
-  "cashier:manage": { description: "Review and close any cashier shift", highRisk: true },
+  "cashier:operate": {
+    reserved: true,
+    description: "Open and close own cashier shift, cash drops and paid-outs",
+  },
+  "cashier:manage": {
+    reserved: true,
+    description: "Review and close any cashier shift",
+    highRisk: true,
+  },
 
   // Night audit & business date
   "nightaudit:read": { description: "View night audit status and results" },
@@ -129,8 +156,12 @@ export const PERMISSIONS = {
   "reports:export": { description: "Export and schedule reports" },
 
   // Commercial
-  "commissions:read": { description: "View commissions" },
-  "commissions:manage": { description: "Approve, hold and pay commissions", highRisk: true },
+  "commissions:read": { reserved: true, description: "View commissions" },
+  "commissions:manage": {
+    reserved: true,
+    description: "Approve, hold and pay commissions",
+    highRisk: true,
+  },
   "loyalty:read": { description: "View loyalty memberships" },
   "loyalty:manage": { description: "Enrol members and adjust points", highRisk: true },
 
@@ -153,6 +184,15 @@ export const ALL_PERMISSIONS = Object.keys(PERMISSIONS) as Permission[];
 
 export function isPermission(value: string): value is Permission {
   return Object.hasOwn(PERMISSIONS, value);
+}
+
+/** Keys granted by templates but not yet checked by any feature (see `reserved` above). */
+export const RESERVED_PERMISSIONS: ReadonlySet<Permission> = new Set(
+  ALL_PERMISSIONS.filter((key) => "reserved" in PERMISSIONS[key]),
+);
+
+export function isReservedPermission(permission: Permission): boolean {
+  return RESERVED_PERMISSIONS.has(permission);
 }
 
 export function isHighRisk(permission: Permission): boolean {

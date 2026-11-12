@@ -14,6 +14,7 @@ import type {
 import type { PropertySetupView } from "@serene/shared/modules/setup/setup.types";
 import type { ApiSuccess } from "@serene/shared/types/api";
 import { baseApi } from "../baseApi";
+import { optionsTag } from "./optionsTags";
 
 /**
  * Property setup (room types, floors, rooms, taxes), operational settings and
@@ -26,6 +27,7 @@ type WithProperty<T> = { propertyId: string } & T;
 // Rooms and room types feed the room board, availability, rate screens and front desk.
 const setupTags = (propertyId: string) => [
   { type: "PropertySetup" as const, id: propertyId },
+  optionsTag(propertyId),
   { type: "Availability" as const, id: propertyId },
   "Room" as const,
   "RoomStatus" as const,
@@ -142,6 +144,7 @@ export const setupApi = baseApi.injectEndpoints({
       transformResponse: (response: ApiSuccess<PropertyConfigurationView>) => response.data,
       invalidatesTags: (_r, _e, { propertyId }) => [
         { type: "PropertyConfiguration", id: propertyId },
+        optionsTag(propertyId),
         "AuditLog",
       ],
     }),
@@ -159,6 +162,7 @@ export const setupApi = baseApi.injectEndpoints({
       invalidatesTags: (_r, _e, { propertyId }) => [
         { type: "BusinessDate", id: propertyId },
         { type: "PropertySetup", id: propertyId },
+        optionsTag(propertyId),
         "AuditLog",
       ],
     }),

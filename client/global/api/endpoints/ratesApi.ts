@@ -17,6 +17,7 @@ import type {
 } from "@serene/shared/modules/rates/rates.types";
 import type { ApiSuccess } from "@serene/shared/types/api";
 import { baseApi } from "../baseApi";
+import { optionsTag } from "./optionsTags";
 
 /**
  * Rate administration (Phase 6): rate plans, seasons, restrictions,
@@ -92,7 +93,7 @@ export const ratesApi = baseApi.injectEndpoints({
         body,
       }),
       transformResponse: (response: ApiSuccess<RatePlanDetail>) => response.data,
-      invalidatesTags: [...RATES],
+      invalidatesTags: (_r, _e, { propertyId }) => [...RATES, optionsTag(propertyId)],
     }),
     updateRatePlan: build.mutation<RatePlanDetail, PlanArg & { body: UpdateRatePlanInput }>({
       query: ({ propertyId, ratePlanId, body }) => ({
@@ -101,7 +102,7 @@ export const ratesApi = baseApi.injectEndpoints({
         body,
       }),
       transformResponse: (response: ApiSuccess<RatePlanDetail>) => response.data,
-      invalidatesTags: [...RATES],
+      invalidatesTags: (_r, _e, { propertyId }) => [...RATES, optionsTag(propertyId)],
     }),
     saveSeason: build.mutation<RatePlanDetail, PlanArg & { seasonId?: string; body: SeasonInput }>({
       query: ({ propertyId, ratePlanId, seasonId, body }) => ({

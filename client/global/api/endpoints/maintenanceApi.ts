@@ -15,6 +15,7 @@ import type {
 import type { ApiSuccess, CursorPageMeta } from "@serene/shared/types/api";
 import { baseApi } from "../baseApi";
 import { operationsTags } from "./operationsTags";
+import { assigneeOptionsTag, optionsTag } from "./optionsTags";
 
 /** Maintenance requests (Phase 4). */
 
@@ -61,6 +62,7 @@ export const maintenanceApi = baseApi.injectEndpoints({
     maintenanceOptions: build.query<MaintenanceOptions, string>({
       query: (propertyId) => `/properties/${propertyId}/maintenance/options`,
       transformResponse: (response: ApiSuccess<MaintenanceOptions>) => response.data,
+      providesTags: (_r, _e, propertyId) => [optionsTag(propertyId), assigneeOptionsTag()],
       keepUnusedDataFor: 300,
     }),
     maintenanceRequests: build.query<

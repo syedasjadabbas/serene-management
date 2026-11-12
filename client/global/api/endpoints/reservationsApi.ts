@@ -19,6 +19,7 @@ import type { StayChargeEstimate } from "@serene/shared/modules/billing/billing.
 import type { ReservationPackageInput } from "@serene/shared/modules/rates/rates.schema";
 import type { ApiSuccess, CursorPageMeta } from "@serene/shared/types/api";
 import { baseApi } from "../baseApi";
+import { optionsTag } from "./optionsTags";
 
 /**
  * Availability and reservation endpoints. Shared by the availability,
@@ -50,6 +51,7 @@ export const reservationsApi = baseApi.injectEndpoints({
     bookingOptions: build.query<BookingOptions, string>({
       query: (propertyId) => `/properties/${propertyId}/booking-options`,
       transformResponse: (response: ApiSuccess<BookingOptions>) => response.data,
+      providesTags: (_r, _e, propertyId) => [optionsTag(propertyId)],
       keepUnusedDataFor: 300,
     }),
     availableRooms: build.query<
