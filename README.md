@@ -7,6 +7,7 @@
     <a href="https://github.com/syedasjadabbas/serene-management/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/syedasjadabbas/serene-management/ci.yml?branch=main&label=CI&logo=github" alt="CI status" /></a>
     <img src="https://img.shields.io/badge/Next.js-16-black?logo=next.js" alt="Next.js 16" />
     <img src="https://img.shields.io/badge/React-19-149eca?logo=react" alt="React 19" />
+    <img src="https://img.shields.io/badge/Express-5-000000?logo=express" alt="Express 5" />
     <img src="https://img.shields.io/badge/TypeScript-Strict-3178C6?logo=typescript" alt="TypeScript strict" />
     <img src="https://img.shields.io/badge/PostgreSQL-18-4169e1?logo=postgresql" alt="PostgreSQL 18" />
     <img src="https://img.shields.io/badge/Prisma-7-2d3748?logo=prisma" alt="Prisma 7" />
@@ -44,7 +45,7 @@ The interface uses a clean, green-accented enterprise design system with respons
     </td>
     <td width="50%" valign="top">
       <h3>💳 Revenue & billing</h3>
-      Rate plans, seasonal rates, restrictions, packages, folio windows, charges, payments recorded by the system, adjustments, voids, refunds, and balances.
+      Rate plans, seasonal rates, restrictions, packages, folio windows, charges, payments and advance deposits recorded by the system (credit balances are refunded or settled before check-out), adjustments, voids, refunds, and balances.
     </td>
   </tr>
   <tr>
@@ -159,10 +160,21 @@ Edit `server/.env` locally. Set a valid `DATABASE_URL` for the local application
 
 ### 3. Prepare native PostgreSQL
 
-Run the database setup script once. It creates or updates the application role and the development/test databases, prompting for the PostgreSQL administrator password when required.
+Run the database setup script once. It creates or updates the application role and the development/test databases, prompting for the PostgreSQL administrator password when required. It requires a password of **at least 16 characters** for the application role in `DATABASE_URL`.
 
 ```powershell
 npm run db:setup
+```
+
+To use a shorter password locally, create the role and databases by hand instead, as the `postgres` superuser in `psql` (names must match `DATABASE_URL`):
+
+```sql
+CREATE ROLE serene LOGIN CREATEDB;
+\password serene
+CREATE DATABASE serene_management OWNER serene ENCODING 'UTF8' TEMPLATE template0;
+CREATE DATABASE serene_management_test OWNER serene ENCODING 'UTF8' TEMPLATE template0;
+REVOKE ALL ON DATABASE serene_management FROM PUBLIC;
+REVOKE ALL ON DATABASE serene_management_test FROM PUBLIC;
 ```
 
 ### 4. Apply migrations and seed reference data
@@ -172,7 +184,20 @@ npm run db:deploy
 npm run db:seed
 ```
 
-The `db:*` scripts run from the repository root and forward to the `server` workspace. `db:seed` loads reference data by default. To create the fictional demo organization locally, set `SEED_DEMO=true` and a strong `SEED_DEMO_PASSWORD` in `server/.env` before seeding. The demo seed is refused when `NODE_ENV=production`; do not use shared demo credentials for a public or production environment.
+The `db:*` scripts run from the repository root and forward to the `server` workspace. `db:seed` loads reference data by default. To create the fictional demo organization locally, set `SEED_DEMO=true` and a strong `SEED_DEMO_PASSWORD` (16+ characters, varied, not a placeholder) in `server/.env` before seeding. The demo seed is refused when `NODE_ENV=production`; do not use shared demo credentials for a public or production environment.
+
+The demo creates organization **SERENE** with two properties, **SMR** (Asia/Karachi, PKR) and **SDX** (Asia/Dubai, AED), rooms, rates, sample reservations, guests and a loyalty program, and these staff accounts, all signing in with `SEED_DEMO_PASSWORD`:
+
+| Account                                          | Role                                   |
+| ------------------------------------------------ | -------------------------------------- |
+| `admin@serene.test`                              | Organization Admin (both properties)   |
+| `gm.smr@serene.test`, `gm.sdx@serene.test`       | General Manager of SMR / SDX           |
+| `fom.smr@serene.test`, `agent.smr@serene.test`   | Front Office Manager, Front Desk Agent |
+| `hksup.smr@serene.test`, `hk.smr@serene.test`    | Housekeeping Manager, Housekeeper      |
+| `chief.smr@serene.test`, `maint.smr@serene.test` | Maintenance Manager, Maintenance Staff |
+| `auditor@serene.test`                            | Auditor (read-only, financial reports) |
+
+The seed sets the password only when it creates the accounts; changing `SEED_DEMO_PASSWORD` later does not change existing users.
 
 ### 5. Start the API server and the client
 
@@ -184,6 +209,17 @@ npm run dev:client   # Next.js client on http://localhost:3000
 ```
 
 Open [http://localhost:3000](http://localhost:3000). The client calls the API at `NEXT_PUBLIC_API_URL`; the server accepts browser calls from `CLIENT_ORIGINS` (default `http://localhost:3000`).
+
+If ports 3000 or 4000 are already in use, pick others and keep the three settings in step:
+
+```powershell
+# server/.env:        PORT=4100   and   CLIENT_ORIGINS="http://localhost:3001"
+# client/.env.local:  NEXT_PUBLIC_API_URL=http://localhost:4100/api/v1
+npm run dev:server
+npm run dev:client -- -p 3001
+```
+
+`NEXT_PUBLIC_API_URL` is read when the client starts or builds, so restart the client after changing it.
 
 ### 6. Run the full verification suite
 
@@ -226,6 +262,9 @@ Users are assigned role templates at organization or property scope. The client 
 - The property switcher is interactive when the account can access multiple properties; a single-property account may see a static property identity instead.
 - Do not broaden navigation or API permissions just to make two accounts look the same. Expected navigation differs by role.
 - High-risk operations may require a reason and create audit entries.
+- Sign-in issues a short-lived access token kept in memory and a rotating httpOnly refresh cookie; reloading the page restores the session from the cookie.
+- Each user has **one active session per platform** (web or mobile): signing in again on the same platform ends the previous session.
+- A few catalog permissions (cashiering, invoices, credit notes, folio routing, room upgrades and holds, guest merge and privacy, commissions, lost and found) are **reserved**: role templates grant them, but no feature uses them yet.
 
 See [`docs/RBAC.md`](docs/RBAC.md) for the authoritative permissions catalog.
 
@@ -293,6 +332,16 @@ docs/      Architecture, workflows, security, deployment, and handover
 ```
 
 Import rules: `client` and `server` never import each other; both import `shared`. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) section 3 and [`docs/SERVER_SPLIT_PLAN.md`](docs/SERVER_SPLIT_PLAN.md).
+
+## Troubleshooting
+
+| Symptom                                                           | Likely cause and fix                                                                                                                             |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Sign-in page says "Cannot reach the server"                       | The API is not running, or `NEXT_PUBLIC_API_URL` points at the wrong port. Check `GET <api>/api/health/live`, then restart `npm run dev:server`. |
+| API starts but `/api/health/ready` answers 503                    | The database is unreachable or rejects the login (`28P01` / `P1000` in the log): fix the password in `DATABASE_URL` or create the role (step 3). |
+| Browser console shows a CORS error                                | The client's origin is missing from `CLIENT_ORIGINS` in `server/.env`.                                                                           |
+| Dev server stopped with `Cannot find module` after a `git switch` | Files changed under the watcher mid-switch. Restart `npm run dev:server`.                                                                        |
+| `npm run db:setup` rejects the password                           | It needs 16+ characters; use a longer password or create the role by hand (step 3).                                                              |
 
 ## Contributing and change safety
 
