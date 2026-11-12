@@ -1,16 +1,16 @@
 # SERENE MANAGEMENT — API Conventions
 
-Applies to every route handler under `app/api/v1/`. Implemented foundations: `types/api.ts` (envelope, error codes), `lib/http/errors.ts`, `lib/http/response.ts`, `lib/validation/common.ts`. Route pipeline: `lib/http/route.ts` with three variants: `definePublicRoute` (login, refresh, logout, health: `/api/health/live`, `/api/health/ready`, alias `/api/health`, see DEPLOYMENT.md §6), `defineSessionRoute` (authenticated; optional organization-level permission), `definePropertyRoute` (authenticated; property id from the path, property-level permission). "defineRoute" below refers to these.
+Applies to every route of the Express API server (`server/modules/<feature>/<feature>.routes.ts`, mounted under `/api/v1` in `server/app.ts`). As of the server split (2026-11-12, [SERVER_SPLIT_PLAN.md](./SERVER_SPLIT_PLAN.md)) paths, methods, permissions and error codes are unchanged; what changed is the transport: a Bearer access token instead of cookies, a `{ success, message, data }` envelope, and CORS between the client and the API. Implemented foundations: `shared/types/api.ts` (envelope, error codes), `server/lib/{customError,response,validate,controller}.ts`, `server/middlewares/*` (the chain below), `shared/lib/validation/common.ts`. Wherever this document says "route handler" or `defineRoute`, read: the route's middleware chain (authenticate, scope, authorize, validate, idempotency, rate limit) followed by a controller that calls a service. Public routes (login, refresh, logout, password reset, health) skip the authentication steps; health is `/api/health/live`, `/api/health/ready` and alias `/api/health` (DEPLOYMENT.md §6).
 
 ---
 
 ## 1. Principles
 
-1. Route handlers are thin: **authenticate → authorize → validate → call service → respond** (Guide §39). No business logic, no Prisma calls in handlers (lint-enforced).
-2. The server is the authority: every request is authorized independently of the UI and of `proxy.ts`.
+1. Routes are thin: **authenticate → authorize → validate → call service → respond** (Guide §39). Routers declare the middleware chain, controllers call one service function; no business logic and no Prisma calls in either (lint-enforced).
+2. The server is the authority: every request is authorized independently of the UI. The client has no server-side auth gate; its `proxy.ts` only sets the CSP.
 3. The property scope comes **only from the URL path**, never from the body or a header.
 4. JSON in, JSON out. Money as decimal strings, dates as `YYYY-MM-DD`, instants as ISO-8601 UTC.
-5. Contracts are Zod schemas in `modules/<domain>/<domain>.schema.ts`, shared with the UI (forms and RTK Query types).
+5. Contracts are Zod schemas in `shared/modules/<domain>/<domain>.schema.ts` (import `@serene/shared/...`), used by the server validators and by the client (forms and RTK Query types).
 
 ## 2. Endpoint naming
 
@@ -291,40 +291,51 @@ Central availability never creates a reservation: "Book" opens `/[propertyCode]/
 Success:
 
 ```json
-{ "data": { "id": "0199…", "confirmationNumber": "100245", "status": "RESERVED" } }
+{
+  "success": true,
+  "message": "OK",
+  "data": { "id": "0199…", "confirmationNumber": "100245", "status": "RESERVED" }
+}
 ```
 
-Lists:
+Lists (`meta` only where the endpoint paginates):
 
 ```json
 {
+  "success": true,
+  "message": "OK",
   "data": [{ "id": "…" }],
   "meta": { "nextCursor": "eyJpZCI6…", "limit": 50 }
 }
 ```
 
+The client reduces this envelope to `{ data, meta? }` in `client/global/api/baseApi.ts`, so endpoint `transformResponse` functions read `data` and `meta`. Streams (SSE events, CSV exports, the avatar image) are written to the response directly and have no envelope.
+
 - `201 Created` for creations (body contains the created resource); `200` otherwise; `202 Accepted` when the work continues in a background job (the night audit start): the body is the resource being worked on (the RUNNING run) with its `job`. See §14.
 - Response DTOs are explicit (`<domain>.types.ts`); never return Prisma rows directly (no leaking internal columns, hashes or ciphertexts).
 - Money: `{ "amount": "1250.0000", "currency": "PKR" }` or `amount` + a sibling `currencyCode` on the resource.
-- Every response carries `x-request-id`: the caller's `X-Request-Id` when valid (8–64 letters, digits or `-`, e.g. set by the load balancer), else the trace id of a W3C `traceparent`, else a new UUID. The same id is written to error and slow-request logs, audit rows and queued jobs (OPERATIONS §11).
+- Every API response carries `cache-control: no-store` and `x-request-id`: the caller's `X-Request-Id` when valid (8–64 letters, digits or `-`, e.g. set by the load balancer), else the trace id of a W3C `traceparent`, else a new UUID. The same id is written to error and slow-request logs, audit rows and queued jobs (OPERATIONS §11).
 
 ## 5. Error structure
 
 ```json
 {
+  "success": false,
+  "message": "Reservation cannot move from CHECKED_OUT to CANCELLED",
   "error": {
     "code": "INVALID_STATE_TRANSITION",
-    "message": "Reservation cannot move from CHECKED_OUT to CANCELLED",
     "details": { "entity": "Reservation", "from": "CHECKED_OUT", "to": "CANCELLED" },
     "requestId": "0199a0f2-…"
   }
 }
 ```
 
+The human-readable `message` is at the top level (it was inside `error` before the split); `error` holds `code`, optional `details` and the `requestId`. Non-operational errors are logged server-side and answered as `INTERNAL_ERROR` with a generic message.
+
 | Code                       | HTTP | When                                                                              |
 | -------------------------- | ---- | --------------------------------------------------------------------------------- |
 | `VALIDATION_FAILED`        | 400  | Schema validation; `details.fields = { path: [messages] }`                        |
-| `UNAUTHENTICATED`          | 401  | Missing/expired/invalid access token (client refreshes once, then logs in)        |
+| `UNAUTHENTICATED`          | 401  | Missing, expired or invalid Bearer token, or ended session (`details.reason`, §9) |
 | `FORBIDDEN`                | 403  | Missing permission; `details.permission` names it                                 |
 | `NOT_FOUND`                | 404  | Absent **or belongs to a property/organization the caller cannot access**         |
 | `CONFLICT`                 | 409  | Unique violation, stale `version`, overlapping room assignment, concurrent change |
@@ -367,13 +378,17 @@ Rules: messages are safe to show; the client localizes by `code` (+ `details`), 
 
 ## 9. Authentication
 
-- Cookies (production names; development over http drops the prefixes, `lib/auth/cookies.ts`): `__Host-sm_at` (access JWT, 15 min, `httpOnly; Secure; SameSite=Lax; Path=/`), `__Secure-sm_rt` (refresh, 14 days, `httpOnly; Secure; SameSite=Strict; Path=/api/v1/auth`), `__Host-sm_s` (session marker, D56).
-- State-changing requests must carry an `Origin` equal to the origin of `APP_URL`. In production no other origin is accepted, not even the request's own `Host` (DNS rebinding, D56).
+- **Bearer access token.** Every authenticated request sends `Authorization: Bearer <access JWT>` (HS256, 15 min by default; claims `sub`, `org`, `sid`). The client keeps the token in memory only (Zustand `auth.store.ts`), never in storage or a cookie.
+- **Refresh cookie.** `POST /auth/login` returns `{ accessToken, expiresIn, user }` and sets the refresh cookie: `httpOnly; SameSite=Strict; Path=/api/v1/auth`, `Secure` in production (name `__Secure-sm_rt`; `sm_rt` over http in development). It is the only cookie the API sets. The old access cookie and session-marker cookie no longer exist. `POST /auth/refresh` (cookie) returns a new access token and rotates the refresh cookie; reuse detection is unchanged. `POST /auth/logout` revokes the session and clears the cookie. On page load the client calls refresh once to restore the session.
+- **One session per user per platform.** The client sends `X-Client-Platform: web | mobile` (default `web`). A new login revokes the user's other sessions on the same platform (`auth_sessions.platform`, migration `20261227090000_auth_session_platform`).
+- **401 reason codes.** `401 UNAUTHENTICATED` carries `error.details.reason`: `TOKEN_MISSING`, `TOKEN_INVALID`, `TOKEN_EXPIRED` (access token only: refresh and retry), `SESSION_EXPIRED`, `SESSION_REVOKED`, `ACCOUNT_DISABLED`. The `message` is safe to show on the login page.
+- **CSRF and CORS.** Bearer requests are not sent automatically by browsers, so they need no Origin check. Only the cookie endpoints (`/auth/refresh`, `/auth/logout`) check `Origin` against `CLIENT_ORIGINS` (this replaces `APP_URL`; in production no other origin is accepted). CORS allows only the `CLIENT_ORIGINS` origins, with credentials, the methods `GET POST PUT PATCH DELETE OPTIONS`, and the request headers `Authorization`, `Content-Type`, `Idempotency-Key`, `X-Client-Platform`, `X-Request-Id`; `Content-Disposition`, `X-Request-Id` and `Retry-After` are exposed to the browser.
+- Sessions and permissions are cached (session 30 s with Redis, 10 s without; permissions likewise) and invalidated on logout, revoke, password change or reset, user status change and role changes, so a revoked session stops working immediately on the instance that handled the change and within the TTL on others when Redis is not configured.
 - Endpoints: `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, `POST /auth/password/forgot`, `POST /auth/password/reset`, `GET /auth/sessions`, `DELETE /auth/sessions/{id}`.
 - **As implemented (Phase 10, batch 1)**: `POST /auth/password/forgot` (e-mail) is deferred. Implemented:
 
   ```text
-  POST /api/v1/auth/password                     { currentPassword, newPassword }  signed in; per-user 5/15 min; all sessions revoked, fresh cookies issued   (D47)
+  POST /api/v1/auth/password                     { currentPassword, newPassword }  signed in; per-user 5/15 min; all sessions revoked, fresh refresh cookie issued   (D47)
   POST /api/v1/auth/password/reset               { token, newPassword }            public; per trusted IP 10/min; single use; all sessions revoked
   POST /api/v1/users/{id}/password-reset         { reason }  → 201 { resetUrl, expiresAt, sessionsRevoked }  users:manage (org) + caller outranks target; 10/h per admin
   POST /api/v1/users/{id}/enable                 { reason }  DISABLED → ACTIVE; users:manage (org) + caller outranks target
@@ -382,7 +397,7 @@ Rules: messages are safe to show; the client localizes by `code` (+ `details`), 
 
   Errors: `TARGET_OUTRANKS_CALLER` (403, with `missingPermissions`), `LAST_ADMINISTRATOR`, `USER_NOT_DISABLED`, `USER_NOT_ACTIVE` (422), `RESET_TOKEN_INVALID` (400, same answer for unknown, used and expired tokens). Login answers `429 RATE_LIMITED` once the per-account budget is spent (D45); every other login failure is the same `401` message.
 
-- `401 UNAUTHENTICATED` → client performs one refresh (mutex-shared across concurrent requests) and retries; refresh failure → redirect to `/login?next=`.
+- `401 UNAUTHENTICATED` → on `TOKEN_EXPIRED` (or any 401 on a normal request) the client performs one refresh (single in-flight call shared by concurrent requests) and retries; if the refresh fails it redirects to `/login?reason=<code>` and shows the server's message. 429 and 503 responses are retried with backoff.
 
 ## 10. Authorization
 
@@ -427,25 +442,29 @@ Rules: messages are safe to show; the client localizes by `code` (+ `details`), 
 - `event: ready` `data: {"topics":[…],"live":true|false}`
 - `event: change` `data: {"t":["frontdesk","rooms",…],"x":"<txid>"}`: data of these topics changed. Refetch through the normal API (tag invalidation); the event is never the source of truth and carries no record data.
 - `event: degraded` / `event: live`: this instance stopped / resumed receiving notifications (poll meanwhile).
-- `event: reauth`: the stream ends (access changed or the token expires, at most 15 min); reconnect.
+- `event: reauth`: the stream ends (access changed or the token expires, at most 15 min); reconnect. The client reads the stream with `fetch` and sends the Bearer header (an `EventSource` cannot), so on a 401 it refreshes the session and reconnects.
 - `204`: live updates are switched off (`REALTIME_ENABLED=0`); keep polling. Reconnects: 30 per minute per user.
 
 Commands still write integration outbox events (D35) separately.
 
-## 16. Example handler (target shape, Phase 1)
+## 16. Example route (server/modules/reservations/reservations.routes.ts)
 
 ```ts
-// app/api/v1/properties/[propertyId]/folios/[folioId]/postings/route.ts
-import { defineRoute } from "@/lib/http/route";
-import { postChargeSchema, folioParamsSchema } from "@/modules/billing/billing.schema";
-import { billingService } from "@/modules/billing/billing.service";
+router.post(
+  "/properties/:propertyId/reservation-rooms/:reservationRoomId/cancel",
+  requireAuth, // Bearer JWT → session (cached) → req.ctx
+  propertyScope, // :propertyId uuid + canAccessProperty → PropertyContext
+  requirePermission("reservations:cancel"),
+  validateParams(reservationRoomParamsSchema),
+  validateBody(cancelReservationSchema), // schema from @serene/shared
+  requireReasonForHighRisk("reservations:cancel"),
+  controller.cancel,
+);
 
-export const POST = defineRoute({
-  permission: "billing:post",
-  params: folioParamsSchema,
-  body: postChargeSchema,
-  idempotent: true,
-  status: 201,
-  handler: ({ ctx, params, body }) => billingService.postCharge(ctx, params.folioId, body),
-});
+// reservations.controller.ts
+export const cancel = handleProperty((req) =>
+  service.cancelReservation(req.ctx, req.params.reservationRoomId, req.body),
+);
 ```
+
+Option mapping from the old `defineRoute`: `permission` → `requirePermission` / `requireOrgPermission`; `params`, `query`, `body` → `validateParams`, `validateQuery`, `validateBody`; `idempotent: true | "optional"` → `idempotency({ required })`, which sets `req.idempotency`; `rateLimit` → `rateLimit(rule)`; `status: 201` → `handle(fn, { status: 201 })`; `withMeta(data, meta)` → the `meta` of the envelope. The request id, global write limit (300/min per IP), CORS, 1 MiB JSON body limit and error handler are applied by `server/app.ts` for every route.

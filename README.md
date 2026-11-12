@@ -20,7 +20,7 @@
 
 **SERENE MANAGEMENT** is a web-based Property Management System (PMS) for hotel organizations operating one or multiple properties. It brings front-office operations, reservations, guest profiles, rooms, housekeeping, billing, rates, reporting, and night audit into one permission-aware workspace.
 
-The interface uses a clean, green-accented enterprise design system with responsive top navigation. The application is built around server-enforced permissions, property isolation, transaction-safe financial records, and an auditable operational history.
+The interface uses a clean, green-accented enterprise design system with responsive top navigation. The repository holds two applications that run as separate processes, a Next.js client and an Express API server (plus an optional background worker), sharing contracts through a workspace package. The system is built around server-enforced permissions, property isolation, transaction-safe financial records, and an auditable operational history.
 
 > **Project status:** Application code and workflows have been developed and tested. Hosting, DNS, TLS, production database operations, scheduled workers, backups, and monitoring must be configured for the target environment; this repository does not imply a publicly deployed service.
 
@@ -74,17 +74,17 @@ The interface uses a clean, green-accented enterprise design system with respons
 
 ```mermaid
 flowchart TB
-    Staff[Hotel staff / organization admins] --> Browser[Responsive Next.js application]
-    Browser --> Proxy[Request boundary / session validation]
-    Proxy --> API[App Router API routes]
-    API --> Access[Authorization + input validation]
+    Staff[Hotel staff / organization admins] --> Client[Next.js client]
+    Client -- "HTTPS, Bearer access token" --> API[Express API /api/v1]
+    API --> Access[Authentication, authorization, validation]
     Access --> Services[Domain services]
     Services --> DB[(PostgreSQL)]
     Services --> Queue[(Durable job queue)]
+    API -. optional .-> Redis[(Redis cache)]
     Worker[Background worker] --> Queue
     Worker --> DB
-    DB -. database notifications .-> Events[Realtime event listener]
-    Events -. authorized refresh hints .-> Browser
+    DB -. database notifications .-> Events[Realtime event stream, SSE]
+    Events -. authorized refresh hints .-> Client
 ```
 
 ### Typical hotel workflow
@@ -108,13 +108,15 @@ flowchart LR
 
 | Layer                   | Technologies                                                                                                   |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------- |
-| Web application         | Next.js 16 App Router, React 19, TypeScript strict mode                                                        |
+| Web client              | Next.js 16 App Router (pure client, no API routes), React 19, TypeScript strict mode                           |
+| API server              | Express 5 on Node.js, TypeScript, JWT via `jose`, Zod request validation                                       |
 | Styling and UI          | Tailwind CSS v4, shared UI primitives, Lucide icons                                                            |
 | State and data fetching | Redux Toolkit / RTK Query, Zustand                                                                             |
-| Validation              | Zod                                                                                                            |
+| Validation              | Zod (contracts shared by client and server in `@serene/shared`)                                                |
+| Cache (optional)        | Redis via `ioredis` for session and permission caches; in-process memory fallback when `REDIS_URL` is unset    |
 | Database                | PostgreSQL 17+ (tested with PostgreSQL 18)                                                                     |
 | ORM / migrations        | Prisma 7 with `@prisma/adapter-pg`                                                                             |
-| Authentication          | Server-validated sessions/tokens, secure-cookie behavior in production, Argon2 password hashing                |
+| Authentication          | Bearer access token (JWT) in client memory, rotated httpOnly refresh cookie, Argon2 password hashing           |
 | Testing                 | Vitest, database-rule tests, API integration tests, browser QA                                                 |
 | Operations              | Compiled operational scripts for migrations, seed/bootstrap, backups, maintenance, posture checks, and workers |
 
@@ -132,7 +134,8 @@ flowchart LR
 ### Prerequisites
 
 - Node.js **22.12 or newer**
-- Native PostgreSQL **17 or newer** with `psql` available
+- Native PostgreSQL **17 or newer** with `psql` available (`npm run verify` runs integration tests against it)
+- Redis is optional and not needed locally
 - Git
 - Windows PowerShell is supported for the native PostgreSQL setup workflow
 - **Docker is not required or used by the documented local setup**
@@ -143,13 +146,16 @@ flowchart LR
 npm ci
 ```
 
-### 2. Create your local environment file
+### 2. Create your local environment files
+
+Each workspace has its own example file (the root `.env.example` only points to them):
 
 ```powershell
-Copy-Item .env.example .env
+Copy-Item server\.env.example server\.env
+Copy-Item client\.env.example client\.env.local
 ```
 
-Edit `.env` locally. Set a valid `DATABASE_URL` for the local application role and generate distinct, strong authentication secrets. Never commit `.env` or paste secret values into issues, chat, or logs.
+Edit `server/.env` locally. Set a valid `DATABASE_URL` for the local application role and generate distinct, strong authentication secrets. `client/.env.local` only needs `NEXT_PUBLIC_API_URL` (default `http://localhost:4000/api/v1`). A root `.env` is still read by the server as a fallback, but new setups should use `server/.env`. Never commit `.env` or paste secret values into issues, chat, or logs.
 
 ### 3. Prepare native PostgreSQL
 
@@ -166,15 +172,18 @@ npm run db:deploy
 npm run db:seed
 ```
 
-`db:seed` loads reference data by default. To create the fictional demo organization locally, set `SEED_DEMO=true` and a strong `SEED_DEMO_PASSWORD` in `.env` before seeding. The demo seed is refused when `NODE_ENV=production`; do not use shared demo credentials for a public or production environment.
+The `db:*` scripts run from the repository root and forward to the `server` workspace. `db:seed` loads reference data by default. To create the fictional demo organization locally, set `SEED_DEMO=true` and a strong `SEED_DEMO_PASSWORD` in `server/.env` before seeding. The demo seed is refused when `NODE_ENV=production`; do not use shared demo credentials for a public or production environment.
 
-### 5. Start the development server
+### 5. Start the API server and the client
+
+Two processes, in two terminals:
 
 ```powershell
-npm run dev
+npm run dev:server   # Express API on http://localhost:4000 (health: /api/health)
+npm run dev:client   # Next.js client on http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000).
+Open [http://localhost:3000](http://localhost:3000). The client calls the API at `NEXT_PUBLIC_API_URL`; the server accepts browser calls from `CLIENT_ORIGINS` (default `http://localhost:3000`).
 
 ### 6. Run the full verification suite
 
@@ -182,33 +191,36 @@ Open [http://localhost:3000](http://localhost:3000).
 npm run verify
 ```
 
-This runs type generation/typecheck, lint, automated tests, and a production build. You can also run the individual scripts below.
+This runs typecheck, lint, unit and database-rule tests, integration tests (against the local `serene_management_test` PostgreSQL database), and production builds of the server and client. You can also run the individual scripts below.
 
 ## Useful scripts
 
-| Command                   | Purpose                                                                 |
-| ------------------------- | ----------------------------------------------------------------------- |
-| `npm run dev`             | Start the Next.js development server                                    |
-| `npm run build`           | Build the web application and operational scripts                       |
-| `npm run start`           | Start the application using the lifecycle-aware launcher                |
-| `npm run typecheck`       | Generate route types and run TypeScript checks                          |
-| `npm run lint`            | Run ESLint and architecture-boundary rules                              |
-| `npm run test`            | Run the Vitest suites                                                   |
-| `npm run verify`          | Typecheck → lint → tests → production build                             |
-| `npm run db:setup`        | Prepare the native PostgreSQL role and local databases                  |
-| `npm run db:deploy`       | Apply existing migrations                                               |
-| `npm run db:seed`         | Seed development/reference data                                         |
-| `npm run db:validate`     | Validate the Prisma schema                                              |
-| `npm run ops:seed`        | Seed production reference data from compiled ops scripts                |
-| `npm run ops:bootstrap`   | Create the first organization and administrator during deployment setup |
-| `npm run ops:db-check`    | Check database posture and integrity settings                           |
-| `npm run ops:backup`      | Create, verify, list, and restore database backups                      |
-| `npm run ops:maintenance` | Prune expired operational records                                       |
-| `npm run worker`          | Run the durable background-job worker                                   |
+| Command                    | Purpose                                                                                           |
+| -------------------------- | ------------------------------------------------------------------------------------------------- |
+| `npm run dev:server`       | Start the Express API in watch mode (port 4000)                                                   |
+| `npm run dev:client`       | Start the Next.js client dev server (port 3000)                                                   |
+| `npm run build`            | Build the server (API, worker, ops scripts) and the client                                        |
+| `npm run typecheck`        | Typecheck every workspace (the client also generates route types)                                 |
+| `npm run lint`             | Run ESLint and the per-workspace architecture-boundary rules                                      |
+| `npm run test`             | Run the unit and database-rule suites                                                             |
+| `npm run test:integration` | Run API integration tests against native PostgreSQL (`serene_management_test`)                    |
+| `npm run verify`           | Typecheck, lint, unit tests, integration tests, build                                             |
+| `npm run db:setup`         | Prepare the native PostgreSQL role and local databases                                            |
+| `npm run db:deploy`        | Apply existing migrations                                                                         |
+| `npm run db:seed`          | Seed development/reference data                                                                   |
+| `npm run db:validate`      | Validate the Prisma schema                                                                        |
+| `npm run ops:seed`         | Seed production reference data (dry run by default; write with `--apply --yes --database <name>`) |
+| `npm run ops:bootstrap`    | Create the first organization and administrator (same dry-run default and write flags)            |
+| `npm run ops:db-check`     | Check database posture and integrity settings                                                     |
+| `npm run ops:backup`       | Create, verify, list, and restore database backups                                                |
+| `npm run ops:maintenance`  | Prune expired operational records (dry run by default)                                            |
+| `npm run worker`           | Run the durable background-job worker (`server/dist/workers/worker.mjs`, needs `npm run build`)   |
+
+The `ops:*` and `worker` scripts run compiled output, so run `npm run build` first. Operator commands that write are dry runs unless given `--apply --yes --database <name>` (see [`docs/OPERATIONS.md`](docs/OPERATIONS.md)).
 
 ## Authentication, roles, and tenant boundaries
 
-Users are assigned role templates at organization or property scope. The application computes the navigation appropriate to a user's grants, then independently checks permissions on server requests. Common roles include Organization Admin, General Manager, Front Office Manager, Front Desk Agent, Reservations Agent, Housekeeping Manager, Housekeeper, Maintenance Manager, Maintenance Staff, Cashier, Accountant, and Auditor.
+Users are assigned role templates at organization or property scope. The client computes the navigation appropriate to a user's grants, and the API independently checks permissions on every request. Common roles include Organization Admin, General Manager, Front Office Manager, Front Desk Agent, Reservations Agent, Housekeeping Manager, Housekeeper, Maintenance Manager, Maintenance Staff, Cashier, Accountant, and Auditor.
 
 - Organization-wide tools appear only for users with the relevant organization access.
 - The property switcher is interactive when the account can access multiple properties; a single-property account may see a static property identity instead.
@@ -232,7 +244,8 @@ The repository includes deployment and operations tooling, but successful local 
 Items that require separate infrastructure or client/provider configuration include:
 
 - hosting, DNS, HTTPS/TLS, environment secrets, database operations, encrypted off-host backups, and monitoring;
-- an always-on background worker for queued work such as night audit;
+- two always-on processes (API server and client) behind a reverse proxy, plus an always-on background worker for queued work such as night audit;
+- optionally Redis, to share session and permission caches between API instances;
 - realtime database connections and proxy behavior when realtime is enabled;
 - email/SMS delivery for invitation and reset links (the current workflow can hand links to an administrator);
 - payment-gateway/card-terminal processing, channel-manager connectivity, and accounting-system integration.
@@ -255,6 +268,7 @@ Deployment reference: [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) · Operations: 
 | [`docs/IMPLEMENTATION_ROADMAP.md`](docs/IMPLEMENTATION_ROADMAP.md) | Development phases and completion criteria                                               |
 | [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)                         | Environment setup, deployment, migrations, and bootstrap                                 |
 | [`docs/OPERATIONS.md`](docs/OPERATIONS.md)                         | Backups, restore drills, maintenance, monitoring, and runbooks                           |
+| [`docs/SERVER_SPLIT_PLAN.md`](docs/SERVER_SPLIT_PLAN.md)           | The split into Express server, Next.js client, and shared package (decisions, layout)    |
 | [`docs/PRODUCTION_READINESS.md`](docs/PRODUCTION_READINESS.md)     | Production-readiness findings, prerequisites, and known risks                            |
 | [`docs/SECURITY.md`](docs/SECURITY.md)                             | Security model and controls                                                              |
 | [`docs/OFFLINE_ARCHITECTURE.md`](docs/OFFLINE_ARCHITECTURE.md)     | Offline data scope, expiry, and security behavior                                        |
@@ -262,21 +276,28 @@ Deployment reference: [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) · Operations: 
 ## Project structure
 
 ```text
-app/             Next.js pages, layouts, and API routes
-components/      Shared UI and workspace components
-hooks/           Shared client hooks
-lib/              Cross-cutting utilities, API clients, and runtime helpers
-modules/          Domain services, repositories, schemas, and policies
-prisma/schema/    Database schema organized by domain
-scripts/          Database setup, load tests, and operational tooling
-tests/            Unit, database-rule, and integration tests
-docs/             Architecture, workflows, security, deployment, and handover
+shared/    @serene/shared: Zod contracts, types, pure policies, permission catalog, utilities (no Prisma, no React)
+server/    Express API
+  app.ts, index.ts   application factory and process entry
+  config/            validated environment, Prisma client
+  lib/ middlewares/  infrastructure and the request middleware chain
+  modules/           per feature: routes, validators, controller, service, repository
+  workers/           background job worker (separate process)
+  scripts/           database setup, ops commands, load tests
+  prisma/            schema, migrations, seed
+  tests/             unit, database-rule, and integration tests
+client/    Next.js client
+  app/               routes; route-local code in _components, _hooks, _lib
+  global/            shared api (RTK Query), components, hooks, lib, stores, constants
+docs/      Architecture, workflows, security, deployment, and handover
 ```
+
+Import rules: `client` and `server` never import each other; both import `shared`. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) section 3 and [`docs/SERVER_SPLIT_PLAN.md`](docs/SERVER_SPLIT_PLAN.md).
 
 ## Contributing and change safety
 
 1. Read [`docs/SERENE_MANAGEMENT_DEVELOPMENT_GUIDE.md`](docs/SERENE_MANAGEMENT_DEVELOPMENT_GUIDE.md) before changing the architecture.
-2. Do not edit migrations that have already been applied; add a new migration when a schema change is required.
+2. Do not edit migrations that have already been applied; add a new migration when a schema change is required. Migration folders are dated ahead of the calendar: name new ones after `20261227090000`.
 3. Preserve organization/property isolation and server-side authorization.
 4. Keep financial operations auditable and exact; add meaningful regression tests for changes to money or booking workflows.
 5. Run `npm run verify` before proposing a change.

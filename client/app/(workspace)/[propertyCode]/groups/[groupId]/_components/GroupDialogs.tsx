@@ -1,0 +1,687 @@
+"use client";
+
+import { useState } from "react";
+import { type PickedCompany, CompanyPicker } from "@/global/components/accounts/CompanyPicker";
+import { type PickedGuest, GuestPicker } from "@/global/components/guests/GuestPicker";
+import { FormDialog } from "@/global/components/ui/FormDialog";
+import { Select } from "@/global/components/ui/Select";
+import { TextArea } from "@/global/components/ui/TextArea";
+import { TextField } from "@/global/components/ui/TextField";
+import { usePermissions } from "@/global/hooks/usePermissions";
+import { useProperty } from "@/global/hooks/useProperty";
+import {
+  useChangeBlockStatusMutation,
+  useChangeGroupStatusMutation,
+  useCreateBlockMutation,
+  useUpdateGroupMutation,
+  useGroupOptionsQuery,
+  usePickupMutation,
+  useReleaseBlockMutation,
+  useSetAllocationMutation,
+} from "@/global/api/endpoints/groupsApi";
+import { toClientApiError } from "@/global/api/errors";
+import { addDays } from "@serene/shared/modules/business-date/business-date.policy";
+import type { BlockView, GroupDetail } from "@serene/shared/modules/groups/groups.types";
+import { randomId } from "@serene/shared/lib/utils/random-id";
+
+const digits = (value: string) => value.replace(/\D/g, "");
+const toInt = (value: string) => Number.parseInt(value || "0", 10);
+
+/**
+ * Overbooking past house availability is a separate, audited permission; the
+ * checkbox is only offered to users who hold it (the server checks again).
+ */
+function OverrideField({
+  override,
+  setOverride,
+  label,
+}: {
+  override: boolean;
+  setOverride: (value: boolean) => void;
+  label: string;
+}) {
+  const property = useProperty();
+  const { can } = usePermissions(property.id);
+  if (!can("reservations:override_availability")) return null;
+  return (
+    <label className="flex min-h-11 items-center gap-2 text-sm">
+      <input type="checkbox" checked={override} onChange={(e) => setOverride(e.target.checked)} />
+      {label}
+    </label>
+  );
+}
+
+export function NewBlockDialog({ group, onClose }: { group: GroupDetail; onClose: () => void }) {
+  const property = useProperty();
+  const options = useGroupOptionsQuery(property.id);
+  const [create, state] = useCreateBlockMutation();
+  const start0 = group.businessDate ?? options.data?.businessDate ?? "";
+  const [code, setCode] = useState("");
+  const [name, setName] = useState("");
+  const [statusId, setStatusId] = useState("");
+  const [ratePlanId, setRatePlanId] = useState("");
+  const [startDate, setStartDate] = useState(start0);
+  const [endDate, setEndDate] = useState(start0 ? addDays(start0, 1) : "");
+  const [cutoffDate, setCutoffDate] = useState("");
+  const [isElastic, setIsElastic] = useState(false);
+  const [rooms, setRooms] = useState<Record<string, string>>({});
+  const [override, setOverride] = useState(false);
+  const [reason, setReason] = useState("");
+  const error = toClientApiError(state.error);
+  const data = options.data;
+  const status = statusId || data?.statuses.find((s) => s.isDefault)?.id || "";
+  const allocations = Object.entries(rooms)
+    .filter(([, v]) => toInt(v) > 0)
+    .map(([roomTypeId, v]) => ({ roomTypeId, rooms: toInt(v) }));
+
+  return (
+    <FormDialog
+      title="New block"
+      description="Rooms held per night for each room type. A definite block takes them out of house availability."
+      size="lg"
+      onClose={onClose}
+      onSubmit={async () => {
+        const result = await create({
+          propertyId: property.id,
+          groupId: group.id,
+          body: {
+            code: code.trim(),
+            name: name.trim(),
+            statusId: status,
+            ratePlanId,
+            startDate,
+            endDate,
+            cutoffDate: cutoffDate || null,
+            isElastic,
+            allocations,
+            override,
+            reason: reason.trim() || undefined,
+          },
+        });
+        if ("data" in result) onClose();
+      }}
+      submitLabel="Create block"
+      disabled={
+        !code.trim() ||
+        !name.trim() ||
+        !status ||
+        !ratePlanId ||
+        !startDate ||
+        !endDate ||
+        allocations.length === 0 ||
+        (override && reason.trim().length < 3)
+      }
+      pending={state.isLoading}
+      error={error}
+    >
+      <div className="grid gap-3 sm:grid-cols-2">
+        <TextField
+          label="Code"
+          value={code}
+          onChange={(e) => setCode(e.target.value.toUpperCase())}
+          maxLength={20}
+          errors={error?.fieldErrors.code}
+        />
+        <TextField
+          label="Name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          maxLength={200}
+        />
+        <Select
+          label="Status"
+          options={(data?.statuses ?? []).map((s) => ({
+            value: s.id,
+            label: `${s.name} (${s.code})`,
+          }))}
+          value={status}
+          onChange={(e) => setStatusId(e.target.value)}
+        />
+        <Select
+          label="Rate plan"
+          placeholder="Choose a rate plan"
+          options={(data?.ratePlans ?? []).map((p) => ({
+            value: p.id,
+            label: `${p.code} · ${p.name}`,
+          }))}
+          value={ratePlanId}
+          onChange={(e) => setRatePlanId(e.target.value)}
+          errors={error?.fieldErrors.ratePlanId}
+        />
+        <TextField
+          label="First night"
+          type="date"
+          value={startDate}
+          onChange={(e) => setStartDate(e.target.value)}
+        />
+        <TextField
+          label="Departure"
+          type="date"
+          value={endDate}
+          onChange={(e) => setEndDate(e.target.value)}
+          errors={error?.fieldErrors.endDate}
+        />
+        <TextField
+          label="Cutoff date (optional)"
+          type="date"
+          value={cutoffDate}
+          onChange={(e) => setCutoffDate(e.target.value)}
+          errors={error?.fieldErrors.cutoffDate}
+        />
+        <label className="flex min-h-11 items-center gap-2 self-end text-sm">
+          <input
+            type="checkbox"
+            checked={isElastic}
+            onChange={(e) => setIsElastic(e.target.checked)}
+          />
+          Elastic (pickup may exceed the block from house availability)
+        </label>
+      </div>
+      <fieldset className="flex flex-col gap-2 rounded-md border border-border-subtle p-3">
+        <legend className="px-1 text-sm">Rooms per night</legend>
+        <div className="grid gap-3 sm:grid-cols-3">
+          {(data?.roomTypes ?? []).map((rt) => (
+            <TextField
+              key={rt.id}
+              label={`${rt.code} · ${rt.name}`}
+              inputMode="numeric"
+              value={rooms[rt.id] ?? ""}
+              placeholder="0"
+              onChange={(e) => setRooms((prev) => ({ ...prev, [rt.id]: digits(e.target.value) }))}
+            />
+          ))}
+        </div>
+        {error?.fieldErrors.allocations ? (
+          <p className="text-sm text-danger">{error.fieldErrors.allocations.join(" ")}</p>
+        ) : null}
+      </fieldset>
+      <OverrideField
+        override={override}
+        setOverride={setOverride}
+        label="Hold beyond house availability (overbook, audited)"
+      />
+      {override ? (
+        <TextArea
+          label="Reason (audited)"
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          maxLength={1000}
+        />
+      ) : null}
+    </FormDialog>
+  );
+}
+
+export function AllocationDialog({ block, onClose }: { block: BlockView; onClose: () => void }) {
+  const property = useProperty();
+  const [save, state] = useSetAllocationMutation();
+  const lastNight = addDays(block.endDate, -1);
+  const [roomTypeId, setRoomTypeId] = useState(block.roomTypes[0]?.roomType.id ?? "");
+  const [from, setFrom] = useState(block.startDate);
+  const [to, setTo] = useState(lastNight);
+  const [rooms, setRooms] = useState("");
+  const [override, setOverride] = useState(false);
+  const [reason, setReason] = useState("");
+  const error = toClientApiError(state.error);
+  const options = useGroupOptionsQuery(property.id);
+  const roomTypes = options.data?.roomTypes ?? block.roomTypes.map((rt) => rt.roomType);
+
+  return (
+    <FormDialog
+      title={`Allocation · ${block.code}`}
+      description="Sets the rooms held on each night in the range. It cannot go below the rooms already picked up."
+      onClose={onClose}
+      onSubmit={async () => {
+        const result = await save({
+          propertyId: property.id,
+          blockId: block.id,
+          body: {
+            version: block.version,
+            roomTypeId,
+            from,
+            to,
+            rooms: toInt(rooms),
+            override,
+            reason: reason.trim() || undefined,
+          },
+        });
+        if ("data" in result) onClose();
+      }}
+      submitLabel="Save allocation"
+      disabled={
+        !roomTypeId || !from || !to || rooms === "" || (override && reason.trim().length < 3)
+      }
+      pending={state.isLoading}
+      error={error}
+    >
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Select
+          label="Room type"
+          options={roomTypes.map((rt) => ({ value: rt.id, label: `${rt.code} · ${rt.name}` }))}
+          value={roomTypeId}
+          onChange={(e) => setRoomTypeId(e.target.value)}
+        />
+        <TextField
+          label="Rooms per night"
+          inputMode="numeric"
+          value={rooms}
+          onChange={(e) => setRooms(digits(e.target.value))}
+          errors={error?.fieldErrors.rooms}
+        />
+        <TextField
+          label="From night"
+          type="date"
+          min={block.startDate}
+          max={lastNight}
+          value={from}
+          onChange={(e) => setFrom(e.target.value)}
+        />
+        <TextField
+          label="To night"
+          type="date"
+          min={block.startDate}
+          max={lastNight}
+          value={to}
+          onChange={(e) => setTo(e.target.value)}
+          errors={error?.fieldErrors.to}
+        />
+      </div>
+      <OverrideField
+        override={override}
+        setOverride={setOverride}
+        label="Hold beyond house availability (overbook, audited)"
+      />
+      {override ? (
+        <TextArea
+          label="Reason (audited)"
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          maxLength={1000}
+        />
+      ) : null}
+    </FormDialog>
+  );
+}
+
+export function BlockStatusDialog({ block, onClose }: { block: BlockView; onClose: () => void }) {
+  const property = useProperty();
+  const options = useGroupOptionsQuery(property.id);
+  const [save, state] = useChangeBlockStatusMutation();
+  const [statusId, setStatusId] = useState("");
+  const [override, setOverride] = useState(false);
+  const [reason, setReason] = useState("");
+  const error = toClientApiError(state.error);
+  const choices = (options.data?.statuses ?? []).filter((s) => s.id !== block.status.id);
+  const target = choices.find((s) => s.id === statusId);
+
+  return (
+    <FormDialog
+      title={`Block status · ${block.code}`}
+      description={`Currently ${block.status.name}. Definite blocks hold inventory; a block with active pickups cannot leave definite.`}
+      onClose={onClose}
+      onSubmit={async () => {
+        const result = await save({
+          propertyId: property.id,
+          blockId: block.id,
+          body: { version: block.version, statusId, override, reason: reason.trim() || undefined },
+        });
+        if ("data" in result) onClose();
+      }}
+      submitLabel="Change status"
+      danger={target?.type === "CANCEL"}
+      disabled={!statusId || (override && reason.trim().length < 3)}
+      pending={state.isLoading}
+      error={error}
+    >
+      <Select
+        label="New status"
+        placeholder="Choose a status"
+        options={choices.map((s) => ({ value: s.id, label: `${s.name} (${s.code})` }))}
+        value={statusId}
+        onChange={(e) => setStatusId(e.target.value)}
+      />
+      {target?.type === "DEDUCT" ? (
+        <OverrideField
+          override={override}
+          setOverride={setOverride}
+          label="Hold beyond house availability (overbook, audited)"
+        />
+      ) : null}
+      <TextArea
+        label={override ? "Reason (audited)" : "Reason (optional)"}
+        value={reason}
+        onChange={(e) => setReason(e.target.value)}
+        maxLength={1000}
+      />
+    </FormDialog>
+  );
+}
+
+export function ReleaseDialog({ block, onClose }: { block: BlockView; onClose: () => void }) {
+  const property = useProperty();
+  const [release, state] = useReleaseBlockMutation();
+  // One key per dialog: a retried submit replays instead of releasing twice.
+  const [idempotencyKey] = useState(randomId);
+  const lastNight = addDays(block.endDate, -1);
+  const [roomTypeId, setRoomTypeId] = useState("");
+  const [from, setFrom] = useState(block.startDate);
+  const [to, setTo] = useState(lastNight);
+  const [reason, setReason] = useState("");
+  const [done, setDone] = useState<number | null>(null);
+  const error = toClientApiError(state.error);
+
+  if (done !== null) {
+    return (
+      <FormDialog
+        title="Rooms released"
+        onClose={onClose}
+        onSubmit={onClose}
+        submitLabel="Done"
+        pending={false}
+        error={null}
+      >
+        <p className="text-sm">
+          {done} room-night{done === 1 ? "" : "s"} returned to house availability.
+        </p>
+      </FormDialog>
+    );
+  }
+  return (
+    <FormDialog
+      title={`Release rooms · ${block.code}`}
+      description="Returns rooms the block still holds (not picked up) to house availability. Picked-up rooms are never released."
+      onClose={onClose}
+      onSubmit={async () => {
+        const result = await release({
+          propertyId: property.id,
+          blockId: block.id,
+          idempotencyKey,
+          body: {
+            version: block.version,
+            roomTypeId: roomTypeId || undefined,
+            from,
+            to,
+            reason: reason.trim(),
+          },
+        });
+        if ("data" in result && result.data) setDone(result.data.released);
+      }}
+      submitLabel="Release"
+      danger
+      disabled={!from || !to || reason.trim().length < 3}
+      pending={state.isLoading}
+      error={error}
+    >
+      <div className="grid gap-3 sm:grid-cols-3">
+        <Select
+          label="Room type"
+          placeholder="All room types"
+          options={block.roomTypes.map((rt) => ({
+            value: rt.roomType.id,
+            label: rt.roomType.code,
+          }))}
+          value={roomTypeId}
+          onChange={(e) => setRoomTypeId(e.target.value)}
+        />
+        <TextField
+          label="From night"
+          type="date"
+          min={block.startDate}
+          max={lastNight}
+          value={from}
+          onChange={(e) => setFrom(e.target.value)}
+        />
+        <TextField
+          label="To night"
+          type="date"
+          min={block.startDate}
+          max={lastNight}
+          value={to}
+          onChange={(e) => setTo(e.target.value)}
+        />
+      </div>
+      <TextArea
+        label="Reason (audited)"
+        value={reason}
+        onChange={(e) => setReason(e.target.value)}
+        maxLength={1000}
+      />
+    </FormDialog>
+  );
+}
+
+export function PickupDialog({ block, onClose }: { block: BlockView; onClose: () => void }) {
+  const property = useProperty();
+  const [pickup, state] = usePickupMutation();
+  const [idempotencyKey] = useState(randomId);
+  const [guest, setGuest] = useState<{ id: string; label: string } | null>(null);
+  const [roomTypeId, setRoomTypeId] = useState(block.roomTypes[0]?.roomType.id ?? "");
+  const [arrival, setArrival] = useState(block.startDate);
+  const [departure, setDeparture] = useState(block.endDate);
+  const [adults, setAdults] = useState("2");
+  const [rooms, setRooms] = useState("1");
+  const [override, setOverride] = useState(false);
+  const [reason, setReason] = useState("");
+  const [done, setDone] = useState<string | null>(null);
+  const error = toClientApiError(state.error);
+  const remaining = block.roomTypes.find((rt) => rt.roomType.id === roomTypeId);
+
+  if (done) {
+    return (
+      <FormDialog
+        title="Picked up"
+        onClose={onClose}
+        onSubmit={onClose}
+        submitLabel="Done"
+        pending={false}
+        error={null}
+      >
+        <p className="text-sm">
+          The reservation was created at the block&apos;s rate (
+          {block.ratePlan?.code ?? "block rate"}) and the pickup count updated.
+        </p>
+      </FormDialog>
+    );
+  }
+  return (
+    <FormDialog
+      title={`Pick up · ${block.code}`}
+      description={`Rate ${block.ratePlan?.code ?? "—"} and booking codes come from the block; the server prices every night.`}
+      size="lg"
+      onClose={onClose}
+      onSubmit={async () => {
+        if (!guest) return;
+        const result = await pickup({
+          propertyId: property.id,
+          blockId: block.id,
+          idempotencyKey,
+          body: {
+            guestId: guest.id,
+            roomTypeId,
+            arrival,
+            departure,
+            adults: toInt(adults),
+            children: 0,
+            rooms: toInt(rooms),
+            override,
+            reason: reason.trim() || undefined,
+          },
+        });
+        if ("data" in result && result.data) setDone(result.data.reservationId);
+      }}
+      submitLabel="Create pickup"
+      disabled={
+        !guest ||
+        !roomTypeId ||
+        !arrival ||
+        !departure ||
+        toInt(adults) < 1 ||
+        toInt(rooms) < 1 ||
+        (override && reason.trim().length < 3)
+      }
+      pending={state.isLoading}
+      error={error}
+    >
+      <GuestPicker value={guest} onChange={setGuest} />
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Select
+          label="Room type"
+          options={block.roomTypes.map((rt) => ({
+            value: rt.roomType.id,
+            label: `${rt.roomType.code} · ${rt.totals.remaining} room-nights left`,
+          }))}
+          value={roomTypeId}
+          onChange={(e) => setRoomTypeId(e.target.value)}
+        />
+        <TextField
+          label="Rooms"
+          inputMode="numeric"
+          value={rooms}
+          onChange={(e) => setRooms(digits(e.target.value).slice(0, 1))}
+          errors={error?.fieldErrors.rooms}
+        />
+        <TextField
+          label="Arrival"
+          type="date"
+          min={block.startDate}
+          max={addDays(block.endDate, -1)}
+          value={arrival}
+          onChange={(e) => setArrival(e.target.value)}
+        />
+        <TextField
+          label="Departure"
+          type="date"
+          min={addDays(block.startDate, 1)}
+          max={block.endDate}
+          value={departure}
+          onChange={(e) => setDeparture(e.target.value)}
+          errors={error?.fieldErrors.departure}
+        />
+        <TextField
+          label="Adults per room"
+          inputMode="numeric"
+          value={adults}
+          onChange={(e) => setAdults(digits(e.target.value).slice(0, 2))}
+        />
+      </div>
+      {remaining ? (
+        <p className="text-xs text-fg-muted">
+          Held for {remaining.roomType.code}: {remaining.totals.allocated} room-nights,{" "}
+          {remaining.totals.pickedUp} picked up. The server re-counts under a lock before creating
+          the reservation.
+        </p>
+      ) : null}
+      <OverrideField
+        override={override}
+        setOverride={setOverride}
+        label="Overbook the house if needed (audited)"
+      />
+      {override ? (
+        <TextArea
+          label="Reason (audited)"
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          maxLength={1000}
+        />
+      ) : null}
+    </FormDialog>
+  );
+}
+
+export function GroupStatusDialog({ group, onClose }: { group: GroupDetail; onClose: () => void }) {
+  const property = useProperty();
+  const [save, state] = useChangeGroupStatusMutation();
+  const [status, setStatus] = useState<"CLOSED" | "CANCELLED">("CLOSED");
+  const [reason, setReason] = useState("");
+  const error = toClientApiError(state.error);
+  return (
+    <FormDialog
+      title={`Close or cancel · ${group.code}`}
+      description="Cancelling moves every block to cancelled and releases held rooms; it is refused while rooms are picked up."
+      onClose={onClose}
+      onSubmit={async () => {
+        const result = await save({
+          propertyId: property.id,
+          groupId: group.id,
+          body: { status, reason: reason.trim() },
+        });
+        if ("data" in result) onClose();
+      }}
+      submitLabel={status === "CANCELLED" ? "Cancel group" : "Close group"}
+      danger={status === "CANCELLED"}
+      disabled={reason.trim().length < 3}
+      pending={state.isLoading}
+      error={error}
+    >
+      <Select
+        label="New status"
+        options={[
+          { value: "CLOSED", label: "Closed (completed)" },
+          { value: "CANCELLED", label: "Cancelled" },
+        ]}
+        value={status}
+        onChange={(e) => setStatus(e.target.value as "CLOSED" | "CANCELLED")}
+      />
+      <TextArea
+        label="Reason (audited)"
+        value={reason}
+        onChange={(e) => setReason(e.target.value)}
+        maxLength={1000}
+      />
+    </FormDialog>
+  );
+}
+
+/** Name, company, contact and notes of an active group; the code is fixed. */
+export function EditGroupDialog({ group, onClose }: { group: GroupDetail; onClose: () => void }) {
+  const property = useProperty();
+  const [save, state] = useUpdateGroupMutation();
+  const [name, setName] = useState(group.name);
+  const [company, setCompany] = useState<PickedCompany | null>(
+    group.account ? { id: group.account.id, label: group.account.name } : null,
+  );
+  const [contact, setContact] = useState<PickedGuest | null>(
+    group.contact ? { id: group.contact.id, label: group.contact.name } : null,
+  );
+  const [notes, setNotes] = useState(group.notes ?? "");
+  const error = toClientApiError(state.error);
+  return (
+    <FormDialog
+      title={`Edit group · ${group.code}`}
+      onClose={onClose}
+      onSubmit={async () => {
+        const result = await save({
+          propertyId: property.id,
+          groupId: group.id,
+          body: {
+            name: name.trim(),
+            accountProfileId: company?.id ?? null,
+            contactGuestId: contact?.id ?? null,
+            notes: notes.trim() || null,
+          },
+        });
+        if ("data" in result) onClose();
+      }}
+      submitLabel="Save group"
+      disabled={!name.trim()}
+      pending={state.isLoading}
+      error={error}
+    >
+      <TextField
+        label="Name"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        maxLength={200}
+        errors={error?.fieldErrors.name}
+      />
+      <CompanyPicker value={company} onChange={setCompany} label="Company (optional)" />
+      <GuestPicker value={contact} onChange={setContact} label="Contact (optional)" />
+      <TextArea
+        label="Notes (optional)"
+        value={notes}
+        onChange={(e) => setNotes(e.target.value)}
+        maxLength={4000}
+      />
+    </FormDialog>
+  );
+}

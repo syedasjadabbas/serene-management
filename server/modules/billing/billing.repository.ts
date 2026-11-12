@@ -1,0 +1,641 @@
+import { confirmationMatchSql } from "@/modules/properties/confirmation-number.sql";
+import { Prisma } from "@/generated/prisma/client";
+import type { Tx } from "@/config/prisma";
+
+/**
+ * Billing data access: folios, folio_items (append-only ledger), transaction
+ * codes, tax rules, payment methods, payments and refunds. Every query is
+ * scoped by property. Folio totals are never written here — the ledger
+ * trigger maintains them (migration 20260926090000).
+ *
+ * The folio header and list read reservation / guest / room rows as
+ * read models; writes to those tables go through their modules' services.
+ */
+
+// --- Folios ---------------------------------------------------------------------------
+
+export interface LockedFolio {
+  id: string;
+  property_id: string;
+  reservation_room_id: string | null;
+  window: number;
+  status: "OPEN" | "SETTLED" | "CLOSED";
+  currency_code: string;
+  balance: string;
+  version: number;
+}
+
+/** Locks folios FOR UPDATE in id order (ARCHITECTURE §5, lock 9). */
+export async function lockFolios(tx: Tx, propertyId: string, ids: string[]) {
+  if (ids.length === 0) return [];
+  return tx.$queryRaw<LockedFolio[]>`
+    SELECT "id", "property_id", "reservation_room_id", "window", "status"::text AS "status", "currency_code",
+           "balance"::text AS "balance", "version"
+    FROM "folios"
+    WHERE "property_id" = ${propertyId}::uuid AND "id" IN (${Prisma.join(ids.map((id) => Prisma.sql`${id}::uuid`))})
+    ORDER BY "id"
+    FOR UPDATE`;
+}
+
+/** Locks every window of a reservation room FOR UPDATE, in id order. */
+export function lockReservationRoomFolios(tx: Tx, propertyId: string, reservationRoomId: string) {
+  return tx.$queryRaw<LockedFolio[]>`
+    SELECT "id", "property_id", "reservation_room_id", "window", "status"::text AS "status", "currency_code",
+           "balance"::text AS "balance", "version"
+    FROM "folios"
+    WHERE "property_id" = ${propertyId}::uuid AND "reservation_room_id" = ${reservationRoomId}::uuid
+    ORDER BY "id"
+    FOR UPDATE`;
+}
+
+/** The balance recomputed from the ledger (the authority the stored balance must match). */
+export async function ledgerBalance(tx: Tx, propertyId: string, folioId: string): Promise<string> {
+  const rows = await tx.$queryRaw<{ total: string }[]>`
+    SELECT COALESCE(SUM("amount"), 0)::text AS "total" FROM "folio_items"
+    WHERE "folio_id" = ${folioId}::uuid AND "property_id" = ${propertyId}::uuid`;
+  return rows[0]!.total;
+}
+
+/** Stored balance and ledger sum of many folios in one statement (batch verification, M8). */
+export function folioBalancesWithLedger(tx: Tx, propertyId: string, folioIds: string[]) {
+  if (folioIds.length === 0) return Promise.resolve([]);
+  return tx.$queryRaw<{ id: string; balance: string; ledger: string }[]>`
+    SELECT f."id", f."balance"::text AS "balance",
+           COALESCE((SELECT sum(i."amount") FROM "folio_items" i
+                      WHERE i."folio_id" = f."id" AND i."property_id" = ${propertyId}::uuid), 0)::text
+             AS "ledger"
+    FROM "folios" f
+    WHERE f."property_id" = ${propertyId}::uuid AND f."id" = ANY(${folioIds}::uuid[])`;
+}
+
+/**
+ * A guest folio (a billing window of a reservation room) of the property.
+ * Folios without a reservation room (group/block masters, not yet used) are
+ * not found here, so no command can mistake one for a stay's window (L15).
+ */
+export async function findFolioRef(tx: Tx, propertyId: string, id: string) {
+  const ref = await tx.folio.findFirst({
+    where: { id, propertyId, reservationRoomId: { not: null } },
+    select: { id: true, reservationRoomId: true, window: true },
+  });
+  return ref ? { ...ref, reservationRoomId: ref.reservationRoomId! } : null;
+}
+
+export function findWindows(tx: Tx, propertyId: string, reservationRoomId: string) {
+  return tx.folio.findMany({
+    where: { propertyId, reservationRoomId },
+    orderBy: { window: "asc" },
+    select: {
+      id: true,
+      window: true,
+      status: true,
+      currencyCode: true,
+      chargesTotal: true,
+      creditsTotal: true,
+      balance: true,
+      version: true,
+      openedAt: true,
+      settledAt: true,
+      closedAt: true,
+      payeeGuest: { select: { firstName: true, lastName: true } },
+      payeeAccount: { select: { name: true } },
+    },
+  });
+}
+
+export function findWindowRef(
+  tx: Tx,
+  propertyId: string,
+  reservationRoomId: string,
+  window: number,
+) {
+  return tx.folio.findFirst({
+    where: { propertyId, reservationRoomId, window },
+    select: { id: true },
+  });
+}
+
+/** Window-1 folios of many reservation rooms (night audit batch, M8). */
+export function findWindowOneRefs(tx: Tx, propertyId: string, reservationRoomIds: string[]) {
+  return tx.folio.findMany({
+    where: { propertyId, reservationRoomId: { in: reservationRoomIds }, window: 1 },
+    select: { id: true, reservationRoomId: true },
+  });
+}
+
+export function countWindows(tx: Tx, propertyId: string, reservationRoomId: string) {
+  return tx.folio.count({ where: { propertyId, reservationRoomId } });
+}
+
+export function insertFolio(tx: Tx, data: Prisma.FolioUncheckedCreateInput) {
+  return tx.folio.create({ data, select: { id: true, window: true } });
+}
+
+export function updateFolioVersioned(
+  tx: Tx,
+  propertyId: string,
+  id: string,
+  version: number,
+  data: Prisma.FolioUncheckedUpdateManyInput,
+) {
+  return tx.folio.updateMany({
+    where: { id, propertyId, version },
+    data: { ...data, version: { increment: 1 } },
+  });
+}
+
+/** Folio header: the reservation room, its guest, room and stay (read model). */
+export function findAccountHeader(tx: Tx, propertyId: string, reservationRoomId: string) {
+  return tx.reservationRoom.findFirst({
+    where: { id: reservationRoomId, propertyId },
+    select: {
+      id: true,
+      status: true,
+      arrivalDate: true,
+      departureDate: true,
+      adults: true,
+      children: true,
+      lineNumber: true,
+      primaryGuestId: true,
+      reservation: { select: { confirmationNumber: true } },
+      primaryGuest: { select: { id: true, firstName: true, lastName: true } },
+      room: { select: { id: true, number: true } },
+      roomType: { select: { code: true, name: true } },
+      ratePlan: { select: { code: true } },
+      stay: { select: { id: true, status: true } },
+    },
+  });
+}
+
+// --- Codes, taxes, methods, reasons ------------------------------------------------------
+
+const codeSelect = {
+  id: true,
+  code: true,
+  name: true,
+  bucket: true,
+  status: true,
+  isManualPostAllowed: true,
+  isPaidOut: true,
+  isTaxInclusive: true,
+  defaultPrice: true,
+  minAmount: true,
+  maxAmount: true,
+  adjustmentCodeId: true,
+  group: { select: { code: true, type: true } },
+} as const satisfies Prisma.TransactionCodeSelect;
+
+export function findTransactionCode(tx: Tx, propertyId: string, id: string) {
+  return tx.transactionCode.findFirst({ where: { id, propertyId }, select: codeSelect });
+}
+
+export function findTransactionCodes(tx: Tx, propertyId: string, ids: string[]) {
+  return tx.transactionCode.findMany({
+    where: { propertyId, id: { in: ids } },
+    select: codeSelect,
+  });
+}
+
+/** Tax rules attached to the given codes and in force on `date`. */
+export function findTaxRules(tx: Tx, propertyId: string, codeIds: string[], date: Date) {
+  return tx.transactionCodeTax.findMany({
+    where: {
+      propertyId,
+      transactionCodeId: { in: codeIds },
+      taxRule: {
+        status: "ACTIVE",
+        effectiveFrom: { lte: date },
+        OR: [{ effectiveTo: null }, { effectiveTo: { gte: date } }],
+      },
+    },
+    select: {
+      transactionCodeId: true,
+      sequence: true,
+      taxRule: {
+        select: {
+          id: true,
+          code: true,
+          name: true,
+          calculation: true,
+          basis: true,
+          rate: true,
+          transactionCodeId: true,
+        },
+      },
+    },
+  });
+}
+
+export function findManualChargeCodes(tx: Tx, propertyId: string) {
+  return tx.transactionCode.findMany({
+    where: {
+      propertyId,
+      status: "ACTIVE",
+      isManualPostAllowed: true,
+      isPaidOut: false,
+      bucket: { notIn: ["TAX", "PAYMENT", "NON_REVENUE"] },
+      group: { type: "REVENUE" },
+    },
+    orderBy: [{ group: { sortOrder: "asc" } }, { code: "asc" }],
+    select: codeSelect,
+  });
+}
+
+const methodSelect = {
+  id: true,
+  code: true,
+  name: true,
+  kind: true,
+  status: true,
+  requiresReference: true,
+  transactionCodeId: true,
+  transactionCode: { select: { status: true, group: { select: { type: true } } } },
+} as const satisfies Prisma.PaymentMethodSelect;
+
+export function findPaymentMethod(tx: Tx, propertyId: string, id: string) {
+  return tx.paymentMethod.findFirst({ where: { id, propertyId }, select: methodSelect });
+}
+
+export function findPaymentMethods(tx: Tx, propertyId: string) {
+  return tx.paymentMethod.findMany({
+    where: { propertyId, status: "ACTIVE" },
+    orderBy: { code: "asc" },
+    select: methodSelect,
+  });
+}
+
+export type FinancialReasonCategory = "ADJUSTMENT" | "VOID" | "REFUND";
+
+export function findReasonCode(
+  tx: Tx,
+  propertyId: string,
+  id: string,
+  category: FinancialReasonCategory,
+) {
+  return tx.reasonCode.findFirst({
+    where: { id, propertyId, category, status: "ACTIVE" },
+    select: { id: true, code: true, name: true, requiresComment: true },
+  });
+}
+
+export function findFinancialReasonCodes(tx: Tx, propertyId: string) {
+  return tx.reasonCode.findMany({
+    where: { propertyId, status: "ACTIVE", category: { in: ["ADJUSTMENT", "VOID", "REFUND"] } },
+    orderBy: [{ category: "asc" }, { code: "asc" }],
+    select: { id: true, category: true, code: true, name: true },
+  });
+}
+
+// --- Ledger -----------------------------------------------------------------------------
+
+export function insertItem(tx: Tx, data: Prisma.FolioItemUncheckedCreateInput) {
+  return tx.folioItem.create({ data, select: { id: true } });
+}
+
+const correctionSelect = { kind: true, amount: true } as const;
+
+/** A posted line with what is needed to reverse or adjust it (and its generated taxes). */
+export function findItemForCorrection(tx: Tx, propertyId: string, id: string) {
+  return tx.folioItem.findFirst({
+    where: { id, propertyId },
+    select: {
+      id: true,
+      folioId: true,
+      kind: true,
+      source: true,
+      transactionCodeId: true,
+      businessDate: true,
+      revenueDate: true,
+      quantity: true,
+      unitAmount: true,
+      amount: true,
+      currencyCode: true,
+      description: true,
+      reference: true,
+      postingKey: true,
+      roomId: true,
+      originReservationRoomId: true,
+      packageComponentId: true,
+      paymentId: true,
+      refundId: true,
+      transactionCode: { select: { code: true, name: true, adjustmentCodeId: true } },
+      corrections: { select: correctionSelect },
+      generatedItems: {
+        where: { kind: "TAX" },
+        orderBy: { id: "asc" },
+        select: {
+          id: true,
+          transactionCodeId: true,
+          amount: true,
+          description: true,
+          corrections: { select: correctionSelect },
+        },
+      },
+    },
+  });
+}
+
+/** The ledger line that recorded a payment (not its refunds). */
+export function findPaymentLine(tx: Tx, propertyId: string, paymentId: string) {
+  return tx.folioItem.findFirst({
+    where: { propertyId, paymentId, kind: "PAYMENT", refundId: null },
+    select: { id: true, folioId: true, amount: true, transactionCodeId: true, description: true },
+  });
+}
+
+/** Posting keys already used for a reservation room's room / package nights, with reversal state. */
+export function findPostingKeys(tx: Tx, propertyId: string, reservationRoomId: string) {
+  return tx.$queryRaw<{ posting_key: string; reversed: boolean }[]>`
+    SELECT i."posting_key",
+           EXISTS (SELECT 1 FROM "folio_items" r
+                   WHERE r."corrects_item_id" = i."id" AND r."kind" = 'REVERSAL') AS "reversed"
+    FROM "folio_items" i
+    WHERE i."property_id" = ${propertyId}::uuid
+      AND i."origin_reservation_room_id" = ${reservationRoomId}::uuid
+      AND i."posting_key" IS NOT NULL`;
+}
+
+/** Posting keys of many reservation rooms (night audit batch, M8). */
+export function findPostingKeysMany(tx: Tx, propertyId: string, reservationRoomIds: string[]) {
+  if (reservationRoomIds.length === 0) return Promise.resolve([]);
+  return tx.$queryRaw<{ reservation_room_id: string; posting_key: string; reversed: boolean }[]>`
+    SELECT i."origin_reservation_room_id" AS "reservation_room_id", i."posting_key",
+           EXISTS (SELECT 1 FROM "folio_items" r
+                   WHERE r."corrects_item_id" = i."id" AND r."kind" = 'REVERSAL') AS "reversed"
+    FROM "folio_items" i
+    WHERE i."property_id" = ${propertyId}::uuid
+      AND i."origin_reservation_room_id" = ANY(${reservationRoomIds}::uuid[])
+      AND i."posting_key" IS NOT NULL`;
+}
+
+export interface LedgerRow {
+  id: string;
+  folio_id: string;
+  kind: string;
+  source: string;
+  business_date: Date;
+  revenue_date: Date | null;
+  posted_at: Date;
+  description: string;
+  reference: string | null;
+  comment: string | null;
+  quantity: string;
+  unit_amount: string;
+  amount: string;
+  running_balance: string;
+  parent_item_id: string | null;
+  corrects_item_id: string | null;
+  payment_id: string | null;
+  refund_id: string | null;
+  code_id: string;
+  code: string;
+  code_name: string;
+  reason_code: string | null;
+  posted_by: string | null;
+  reversed: boolean;
+  adjusted: string;
+  receipt_number: string | null;
+  payment_status: string | null;
+  payment_business_date: Date | null;
+  refundable: string | null;
+  refunded: string | null;
+  method_name: string | null;
+}
+
+/**
+ * One page of a window's ledger in posting order, with the running balance
+ * computed by the database over the whole window (keyset pagination).
+ */
+export function findLedgerPage(
+  tx: Tx,
+  propertyId: string,
+  folioId: string,
+  after: { postedAt: Date; id: string } | null,
+  limit: number,
+) {
+  const cursor = after
+    ? Prisma.sql`WHERE (l."posted_at", l."id") > (${after.postedAt}, ${after.id}::uuid)`
+    : Prisma.empty;
+  return tx.$queryRaw<LedgerRow[]>`
+    WITH ledger AS (
+      SELECT i.*, SUM(i."amount") OVER (ORDER BY i."posted_at", i."id") AS "running"
+      FROM "folio_items" i
+      WHERE i."folio_id" = ${folioId}::uuid AND i."property_id" = ${propertyId}::uuid
+    )
+    SELECT l."id", l."folio_id", l."kind"::text AS "kind", l."source"::text AS "source",
+           l."business_date", l."revenue_date", l."posted_at", l."description", l."reference",
+           l."comment", l."quantity"::text AS "quantity", l."unit_amount"::text AS "unit_amount",
+           l."amount"::text AS "amount", l."running"::text AS "running_balance",
+           l."parent_item_id", l."corrects_item_id", l."payment_id", l."refund_id",
+           c."id" AS "code_id", c."code", c."name" AS "code_name",
+           rc."code" AS "reason_code", u."display_name" AS "posted_by",
+           EXISTS (SELECT 1 FROM "folio_items" r
+                   WHERE r."corrects_item_id" = l."id" AND r."kind" = 'REVERSAL') AS "reversed",
+           COALESCE((SELECT SUM(a."amount") FROM "folio_items" a
+                     WHERE a."corrects_item_id" = l."id" AND a."kind" = 'ADJUSTMENT'), 0)::text AS "adjusted",
+           p."receipt_number", p."status"::text AS "payment_status",
+           p."business_date" AS "payment_business_date",
+           (p."amount" - p."refunded_amount")::text AS "refundable",
+           p."refunded_amount"::text AS "refunded", pm."name" AS "method_name"
+    FROM ledger l
+    JOIN "transaction_codes" c ON c."id" = l."transaction_code_id"
+    LEFT JOIN "reason_codes" rc ON rc."id" = l."reason_code_id"
+    LEFT JOIN "users" u ON u."id" = l."posted_by_id"
+    LEFT JOIN "payments" p ON p."id" = l."payment_id"
+    LEFT JOIN "payment_methods" pm ON pm."id" = p."method_id"
+    ${cursor}
+    ORDER BY l."posted_at", l."id"
+    LIMIT ${limit + 1}`;
+}
+
+// --- Payments and refunds --------------------------------------------------------------------
+
+export interface LockedPayment {
+  id: string;
+  folio_id: string | null;
+  kind: string;
+  status: string;
+  amount: string;
+  refunded_amount: string;
+  currency_code: string;
+  business_date: Date;
+  method_id: string;
+  receipt_number: string | null;
+  version: number;
+}
+
+/** Locks a payment FOR UPDATE (after its folio: ARCHITECTURE §5, lock 10). */
+export async function lockPayment(tx: Tx, propertyId: string, id: string) {
+  const rows = await tx.$queryRaw<LockedPayment[]>`
+    SELECT "id", "folio_id", "kind"::text AS "kind", "status"::text AS "status",
+           "amount"::text AS "amount", "refunded_amount"::text AS "refunded_amount",
+           "currency_code", "business_date", "method_id", "receipt_number", "version"
+    FROM "payments"
+    WHERE "id" = ${id}::uuid AND "property_id" = ${propertyId}::uuid
+    FOR UPDATE`;
+  return rows[0] ?? null;
+}
+
+export function findPaymentRef(tx: Tx, propertyId: string, id: string) {
+  return tx.payment.findFirst({
+    where: { id, propertyId },
+    select: { id: true, folioId: true, methodId: true },
+  });
+}
+
+export function insertPayment(tx: Tx, data: Prisma.PaymentUncheckedCreateInput) {
+  return tx.payment.create({ data, select: { id: true } });
+}
+
+export function updatePaymentVersioned(
+  tx: Tx,
+  propertyId: string,
+  id: string,
+  version: number,
+  data: Prisma.PaymentUncheckedUpdateManyInput,
+) {
+  return tx.payment.updateMany({
+    where: { id, propertyId, version },
+    data: { ...data, version: { increment: 1 } },
+  });
+}
+
+export function insertRefund(tx: Tx, data: Prisma.RefundUncheckedCreateInput) {
+  return tx.refund.create({ data, select: { id: true } });
+}
+
+// --- Folio list ---------------------------------------------------------------------------
+
+export interface FolioListSqlRow {
+  reservation_room_id: string;
+  confirmation_number: string;
+  first_name: string;
+  last_name: string;
+  search_name: string;
+  room_number: string | null;
+  arrival_date: Date;
+  departure_date: Date;
+  stay_status: "IN_HOUSE" | "CHECKED_OUT" | null;
+  windows: number;
+  currency_code: string | null;
+  balance: string;
+  open_windows: number;
+  settled_windows: number;
+}
+
+export function findFolioListPage(
+  tx: Tx,
+  propertyId: string,
+  options: {
+    view: "in_house" | "open_balance" | "all";
+    search: { tokens: string[]; raw: string } | null;
+    cursor: { v: string; i: string } | null;
+    limit: number;
+  },
+) {
+  // Open balance (B5): candidates come from the partial index of non-zero
+  // folios; the exact rule — the windows' balances sum to non-zero — still
+  // decides, before the page is cut.
+  const scope =
+    options.view === "in_house"
+      ? Prisma.sql`AND rr."status" = 'IN_HOUSE'`
+      : options.view === "open_balance"
+        ? Prisma.sql`AND rr."id" IN (SELECT x."reservation_room_id" FROM "folios" x
+                                      WHERE x."property_id" = ${propertyId}::uuid AND x."balance" <> 0)
+                     AND (SELECT sum(y."balance") FROM "folios" y
+                          WHERE y."reservation_room_id" = rr."id") <> 0`
+        : Prisma.sql`AND EXISTS (SELECT 1 FROM "folios" x WHERE x."reservation_room_id" = rr."id")`;
+  const cursor = options.cursor
+    ? Prisma.sql`AND (g."search_name", rr."id") > (${options.cursor.v}, ${options.cursor.i}::uuid)`
+    : Prisma.empty;
+  const pageSize = options.limit + 1;
+  // Search: guest name words, confirmation number or room number. Each is its
+  // own branch that takes its first page in the list order (guest name, id);
+  // the page is then cut from the union of those. The same rows as filtering
+  // on "name OR confirmation OR room" and cutting once — the first rows of a
+  // union are always among the first rows of its parts — but each branch can
+  // use its index: the name branch walks the matching guests (trigram index)
+  // and their reservation rooms (primary guest index) instead of the whole
+  // property history. An OR across the three tables could use no index
+  // (4-8 s on 400k reservation rooms), and one candidate set joined back still
+  // scanned the property's reservation rooms twice (0.3-1.1 s, SCALABILITY §28).
+  const searchPage = (search: { tokens: string[]; raw: string }) =>
+    Prisma.sql`
+      SELECT DISTINCT u."id", u."search_name" FROM (
+        ${Prisma.join(
+          [
+            ...(search.tokens.length > 0
+              ? [
+                  Prisma.sql`(SELECT rr."id", g."search_name"
+                    FROM "guests" g
+                    JOIN LATERAL (
+                      SELECT rr."id" FROM "reservation_rooms" rr
+                      WHERE rr."primary_guest_id" = g."id" AND rr."property_id" = ${propertyId}::uuid
+                        ${scope}
+                    ) rr ON TRUE
+                    WHERE ${Prisma.join(
+                      search.tokens.map((t) => Prisma.sql`g."search_name" LIKE ${`%${t}%`}`),
+                      " AND ",
+                    )}
+                      ${cursor}
+                    ORDER BY g."search_name", rr."id"
+                    LIMIT ${pageSize})`,
+                ]
+              : []),
+            Prisma.sql`(SELECT rr."id", g."search_name"
+              FROM "reservations" res
+              JOIN "reservation_rooms" rr ON rr."reservation_id" = res."id"
+              JOIN "guests" g ON g."id" = rr."primary_guest_id"
+              WHERE res."property_id" = ${propertyId}::uuid AND rr."property_id" = ${propertyId}::uuid
+                AND ${confirmationMatchSql(Prisma.sql`res."confirmation_number"`, search.raw)}
+                ${scope}
+                ${cursor}
+              ORDER BY g."search_name", rr."id"
+              LIMIT ${pageSize})`,
+            Prisma.sql`(SELECT rr."id", g."search_name"
+              FROM "rooms" rm
+              JOIN "reservation_rooms" rr ON rr."room_id" = rm."id"
+              JOIN "guests" g ON g."id" = rr."primary_guest_id"
+              WHERE rm."property_id" = ${propertyId}::uuid AND rr."property_id" = ${propertyId}::uuid
+                AND upper(rm."number") = ${search.raw.trim().toUpperCase()}
+                ${scope}
+                ${cursor}
+              ORDER BY g."search_name", rr."id"
+              LIMIT ${pageSize})`,
+          ],
+          " UNION ALL ",
+        )}
+      ) u
+      ORDER BY u."search_name", u."id"
+      LIMIT ${pageSize}`;
+  const listPage = Prisma.sql`
+      SELECT rr."id", g."search_name"
+      FROM "reservation_rooms" rr
+      JOIN "guests" g ON g."id" = rr."primary_guest_id"
+      WHERE rr."property_id" = ${propertyId}::uuid
+        ${scope}
+        ${cursor}
+      ORDER BY g."search_name", rr."id"
+      LIMIT ${pageSize}`;
+  // Two phases (B5): cut the page of reservation rooms first (keyset order,
+  // no aggregation), then total the folios of that page only — instead of
+  // grouping every historical reservation room of the property per request.
+  return tx.$queryRaw<FolioListSqlRow[]>`
+    WITH page AS (${options.search ? searchPage(options.search) : listPage})
+    SELECT rr."id" AS "reservation_room_id", res."confirmation_number", g."first_name",
+           g."last_name", g."search_name", rm."number" AS "room_number", rr."arrival_date",
+           rr."departure_date", s."status"::text AS "stay_status",
+           COUNT(f."id")::int AS "windows", MIN(f."currency_code") AS "currency_code",
+           COALESCE(SUM(f."balance"), 0)::text AS "balance",
+           COUNT(f."id") FILTER (WHERE f."status" = 'OPEN')::int AS "open_windows",
+           COUNT(f."id") FILTER (WHERE f."status" = 'SETTLED')::int AS "settled_windows"
+    FROM page
+    JOIN "reservation_rooms" rr ON rr."id" = page."id"
+    JOIN "reservations" res ON res."id" = rr."reservation_id"
+    JOIN "guests" g ON g."id" = rr."primary_guest_id"
+    LEFT JOIN "rooms" rm ON rm."id" = rr."room_id"
+    LEFT JOIN "stays" s ON s."reservation_room_id" = rr."id"
+    LEFT JOIN "folios" f ON f."reservation_room_id" = rr."id"
+    GROUP BY rr."id", res."confirmation_number", g."id", rm."number", s."status"
+    ORDER BY g."search_name", rr."id"`;
+}

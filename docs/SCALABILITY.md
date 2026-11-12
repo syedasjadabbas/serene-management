@@ -19,6 +19,8 @@ Every number is labelled:
 
 Decision D58 in `docs/ARCHITECTURE.md` §15.
 
+> **As of the server split (2026-11-12, [SERVER_SPLIT_PLAN.md](SERVER_SPLIT_PLAN.md)):** the application is now an Express API server plus a separate Next.js client; every measurement below was taken on the single Next.js application and has **not** been repeated on the new stack, so treat the numbers as historical. Sections that discuss "the Next.js process" (§9, §37) apply to the API server process for request handling, and the client process now serves only pages. Facts that changed: sessions and permissions are cached (30 s with Redis, at most 10 s in process memory) instead of being re-read from PostgreSQL on every request, which removes the per-request authentication query measured in §10 at the cost of that bounded staleness; Redis is **optional** (`REDIS_URL`) and only backs those caches, while rate limits, jobs and live-update fan-out remain PostgreSQL-based (§12, §33, §31). Instances remain stateless: any instance can serve any request, either through the shared Redis caches or, without Redis, with up to 10 s of staleness for session and permission changes made on another instance.
+
 ---
 
 ## 1. Executive summary
@@ -2309,7 +2311,7 @@ Guest search was 95 % of the organization search's time for common names, and is
 
 ## 37. Horizontal scaling: several stateless instances behind a load balancer
 
-Phase 9 prepares the application to run as several identical Next.js processes behind a health-aware load balancer, without sticky sessions. Everything here was measured on one development machine:
+Phase 9 prepares the application to run as several identical Next.js processes behind a health-aware load balancer, without sticky sessions (since the server split: several identical API server processes; see the note at the top of this document). Everything here was measured on one development machine:
 
 - Intel i5-8365U, 4 cores / 8 threads, Windows 11;
 - native PostgreSQL 18;

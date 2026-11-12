@@ -1,5 +1,7 @@
 # SERENE MANAGEMENT — AI MEMORY FREEZE
 
+> **Superseded in part (2026-11-12).** The architecture described here (a single Next.js application with `app/api` route handlers, cookie authentication and a root-level `lib/`, `modules/`, `prisma/` layout) is no longer accurate. The backend now runs as a separate Express 5 server and the repository is three npm workspaces (`shared/`, `server/`, `client/`). Business rules, the data model, permissions and API paths are unchanged. See [SERVER_SPLIT_PLAN.md](SERVER_SPLIT_PLAN.md) and ARCHITECTURE.md §15 (D72–D79). The rest of this document is kept as the record of the Phase 10 freeze.
+
 ## Canonical State
 
 SERENE MANAGEMENT is a hotel PMS built from scratch, functionally inspired by enterprise PMS workflows such as Oracle Hospitality OPERA, without copying proprietary code/UI/assets/text.

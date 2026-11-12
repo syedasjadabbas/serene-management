@@ -2,7 +2,7 @@
 node_modules
 generated
 coverage
-prisma/migrations
+server/prisma/migrations
 package-lock.json
 docs/SERENE_MANAGEMENT_DEVELOPMENT_GUIDE.md
 dist

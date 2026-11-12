@@ -1,0 +1,15 @@
+export {
+  createFloorSchema,
+  createRoomsSchema,
+  createRoomTypeSchema,
+  createTaxSchema,
+  floorParamsSchema,
+  roomParamsSchema,
+  roomTypeParamsSchema,
+  setupParamsSchema,
+  taxParamsSchema,
+  updateFloorSchema,
+  updateRoomSchema,
+  updateRoomTypeSchema,
+  updateTaxSchema,
+} from "@serene/shared/modules/setup/setup.schema";

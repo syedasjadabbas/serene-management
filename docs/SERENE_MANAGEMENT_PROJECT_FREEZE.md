@@ -1,5 +1,7 @@
 # SERENE MANAGEMENT — PROJECT FREEZE
 
+> **Superseded in part (2026-11-12).** The architecture described here (a single Next.js application with `app/api` route handlers, cookie authentication and a root-level `lib/`, `modules/`, `prisma/` layout) is no longer accurate. The backend now runs as a separate Express 5 server and the repository is three npm workspaces (`shared/`, `server/`, `client/`). Business rules, the data model, permissions and API paths are unchanged. See [SERVER_SPLIT_PLAN.md](SERVER_SPLIT_PLAN.md) and ARCHITECTURE.md §15 (D72–D79). The rest of this document is kept as the record of the Phase 10 freeze.
+
 **Status:** Core PMS engineering frozen at Phase 10 completion
 **Freeze date:** 2026-09-29
 **Git commit:** `7129881` — `feat: complete phase 10 production readiness`

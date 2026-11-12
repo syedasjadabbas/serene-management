@@ -76,7 +76,7 @@ jobs:
             echo "AUTH_ACCESS_TOKEN_SECRET=\"$(openssl rand -base64 48)\""
             echo "AUTH_REFRESH_TOKEN_SECRET=\"$(openssl rand -base64 48)\""
             echo "FIELD_ENCRYPTION_KEY=\"$(openssl rand -base64 32)\""
-            echo "APP_URL=\"http://localhost:3000\""
+            echo "CLIENT_ORIGINS=\"http://localhost:3000\""
             echo "TRUSTED_PROXY_HOPS=0"
           } > .env
 
@@ -95,17 +95,20 @@ jobs:
       - name: Test
         run: npm run test
 
+      - name: Integration tests
+        run: npm run test:integration
+
       - name: Build
         run: npm run build
 
       - name: Migrations and role separation
         run: |
           npm run db:deploy
-          npm run ops:seed
+          npm run ops:seed -- --apply --yes --database serene_management
           runtime_password=$(openssl rand -hex 24)
           echo "::add-mask::${runtime_password}"
           # The postgres OS user cannot read the workspace; run the scripts from /tmp.
-          cp scripts/db/runtime-role.sql scripts/db/runtime-grants.sql /tmp/
+          cp server/scripts/db/runtime-role.sql server/scripts/db/runtime-grants.sql /tmp/
           sudo -u postgres env SERENE_RUNTIME_PASSWORD="${runtime_password}" \
             psql -p "${PGPORT_CI}" -d postgres -X -q \
             -v owner_role=serene -v runtime_role=serene_app -v app_db=serene_management \

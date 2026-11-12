@@ -1,0 +1,169 @@
+"use client";
+
+import { useEffect } from "react";
+import { availableRoomOptions } from "@/global/components/rooms/roomOptions";
+import { Button } from "@/global/components/ui/Button";
+import { Select } from "@/global/components/ui/Select";
+import { StatusPanel } from "@/global/components/ui/StatusPanel";
+import { TextArea } from "@/global/components/ui/TextArea";
+import { TextField } from "@/global/components/ui/TextField";
+import { usePermissions } from "@/global/hooks/usePermissions";
+import { useProperty } from "@/global/hooks/useProperty";
+import { useAccountQuery } from "@/global/api/endpoints/accountsApi";
+import {
+  useAvailableRoomsQuery,
+  useBookingOptionsQuery,
+} from "@/global/api/endpoints/reservationsApi";
+import { useBookingDraft } from "../_lib/bookingDraft.store";
+
+const toOptions = (rows: { id: string; code: string; name: string }[]) =>
+  rows.map((r) => ({ value: r.id, label: `${r.code} · ${r.name}` }));
+
+/** Step 3: guarantee (reservation type), segmentation, ETA, specific room, requests. */
+export function StepDetails() {
+  const property = useProperty();
+  const { can } = usePermissions(property.id);
+  const { stay, selection, details, setDetails, setStep, mode, company } = useBookingDraft();
+  const account = useAccountQuery(company?.id ?? "", { skip: !company });
+  const walkIn = mode === "walk-in";
+  const options = useBookingOptionsQuery(property.id);
+  const canPickRoom = can("rooms:assign") && stay?.rooms === 1 && !selection?.waitlist;
+  const rooms = useAvailableRoomsQuery(
+    {
+      propertyId: property.id,
+      roomTypeId: selection?.roomTypeId ?? "",
+      arrival: stay?.arrival ?? "",
+      departure: stay?.departure ?? "",
+    },
+    { skip: !canPickRoom || !stay || !selection },
+  );
+
+  // Defaults: a guaranteed type, and the rate plan's market / source codes.
+  useEffect(() => {
+    if (!options.data || !selection) return;
+    const plan = options.data.ratePlans.find((p) => p.id === selection.ratePlanId);
+    const guaranteed = options.data.reservationTypes.find(
+      (t) => t.deductsInventory && t.isGuaranteed,
+    );
+    setDetails({
+      reservationTypeId: details.reservationTypeId || guaranteed?.id || "",
+      marketCodeId: details.marketCodeId || plan?.defaultMarketCodeId || "",
+      sourceCodeId: details.sourceCodeId || plan?.defaultSourceCodeId || "",
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [options.data, selection?.ratePlanId]);
+
+  if (!stay || !selection)
+    return <StatusPanel kind="empty" title="Choose a room type and rate first" />;
+  if (options.isLoading) return <StatusPanel kind="loading" title="Loading booking options" />;
+  if (!options.data)
+    return <StatusPanel kind="error" title="Booking options could not be loaded" />;
+  const data = options.data;
+  const set = (key: keyof typeof details) => (event: { target: { value: string } }) =>
+    setDetails({ [key]: event.target.value });
+  const selectedType = data.reservationTypes.find((t) => t.id === details.reservationTypeId);
+
+  return (
+    <section
+      className="flex flex-col gap-4 rounded-lg border border-border-subtle bg-surface p-5 shadow-card"
+      aria-label="Booking details"
+    >
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <Select
+          label="Reservation type (guarantee)"
+          options={data.reservationTypes.map((t) => ({
+            value: t.id,
+            label: `${t.code} · ${t.name}${t.deductsInventory ? "" : " (tentative)"}`,
+          }))}
+          value={details.reservationTypeId}
+          onChange={set("reservationTypeId")}
+          hint={
+            selectedType && !selectedType.deductsInventory
+              ? "Tentative: does not hold inventory until confirmed"
+              : undefined
+          }
+        />
+        <Select
+          label="Market segment"
+          placeholder="Select"
+          options={toOptions(data.marketCodes)}
+          value={details.marketCodeId}
+          onChange={set("marketCodeId")}
+        />
+        <Select
+          label="Source"
+          placeholder="Select"
+          options={toOptions(data.sourceCodes)}
+          value={details.sourceCodeId}
+          onChange={set("sourceCodeId")}
+        />
+        <Select
+          label="Channel"
+          placeholder="Not specified"
+          options={toOptions(data.channels)}
+          value={details.channelId}
+          onChange={set("channelId")}
+        />
+      </div>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <TextField
+          label="Expected arrival time"
+          type="time"
+          value={details.eta}
+          onChange={set("eta")}
+          hint="Property local time"
+        />
+        {canPickRoom ? (
+          <Select
+            label={walkIn ? "Room" : "Room (optional)"}
+            placeholder={
+              rooms.isLoading ? "Loading rooms…" : walkIn ? "Select a room" : "Assign later"
+            }
+            options={availableRoomOptions(
+              // A walk-in goes into the room now: only vacant rooms qualify.
+              (rooms.data ?? []).filter((r) => !walkIn || r.frontOfficeStatus === "VACANT"),
+            )}
+            value={details.roomId}
+            onChange={set("roomId")}
+            hint={rooms.data ? `${rooms.data.length} free for the whole stay` : undefined}
+          />
+        ) : null}
+      </div>
+      {company ? (
+        <Select
+          label={`Booked by (${company.label} contact)`}
+          placeholder="The guest"
+          options={(account.data?.contacts ?? []).map((c) => ({
+            value: c.guest.id,
+            label: `${c.guest.fullName}${c.role ? ` · ${c.role}` : ""}`,
+          }))}
+          value={details.bookerGuestId}
+          onChange={set("bookerGuestId")}
+          className="max-w-md"
+        />
+      ) : null}
+      <TextArea
+        label="Special requests"
+        value={details.specialRequests}
+        onChange={set("specialRequests")}
+        maxLength={2000}
+      />
+      <div className="flex gap-2">
+        <Button
+          onClick={() => setStep(4)}
+          disabled={
+            !details.reservationTypeId ||
+            !details.marketCodeId ||
+            !details.sourceCodeId ||
+            (walkIn && !details.roomId)
+          }
+        >
+          Review
+        </Button>
+        <Button variant="ghost" onClick={() => setStep(2)}>
+          Back
+        </Button>
+      </div>
+    </section>
+  );
+}

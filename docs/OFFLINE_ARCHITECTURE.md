@@ -5,6 +5,8 @@ for offline support in SERENE MANAGEMENT: what works without a connection, what 
 how data is stored and protected on the device, and how later phases add offline actions
 without weakening the server's authority. Decision D57 in `docs/ARCHITECTURE.md` §15.
 
+> **As of the server split (2026-11-12):** the offline design is unchanged (read-only snapshot, 24 h expiry, same wipe rules). Facts that changed: authentication is a Bearer access token in client memory plus an httpOnly refresh cookie (not HttpOnly access and refresh cookies), `proxy.ts` no longer redirects unauthenticated requests (routes are guarded on the client), `lib/offline/verifySession.ts` and the snapshot code now live under `client/global/lib/offline` and go through the auth store (`global/stores/auth.store.ts`) and RTK Query (`/me` via the API server). See [SERVER_SPLIT_PLAN.md](SERVER_SPLIT_PLAN.md) §4–§5. The tables and paths below describe the pre-split code.
+
 The server stays the only source of truth. Offline mode is a safety net for connection
 outages at the front desk, not a second system of record.
 
@@ -203,7 +205,7 @@ reported as a conflict (safe, but confusing). Hence the phase-3 prerequisite.
 
 ## J. Security and privacy
 
-- No tokens, passwords or secrets anywhere client-side (auth cookies remain HttpOnly).
+- No tokens, passwords or secrets in any browser storage. (Since the server split the short-lived access token exists in page memory only, and the refresh cookie remains HttpOnly; neither is written to IndexedDB, Cache Storage or `localStorage`.)
 - Service worker caches only public resources; `/api/*`, authenticated HTML and RSC payloads
   are never cached (verified: no `/api` or property paths in Cache Storage).
 - The `/offline` shell is fetched without credentials and renders no server data.

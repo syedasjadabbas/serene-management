@@ -1,0 +1,21 @@
+{
+  "name": "@serene/shared",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Isomorphic contracts shared by server and client: Zod schemas, types, pure policies, permission catalog, money/date utils.",
+  "exports": {
+    "./*": "./*.ts"
+  },
+  "scripts": {
+    "typecheck": "node ../node_modules/typescript/bin/tsc --noEmit",
+    "lint": "node ../node_modules/eslint/bin/eslint.js ."
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "eslint": "^9",
+    "typescript": "^5",
+    "typescript-eslint": "^8"
+  }
+}

@@ -2,6 +2,10 @@
 
 Running SERENE MANAGEMENT in production after it is deployed: backups and recovery, migrations, database roles, data retention, connection settings, scheduling and CI. Installation and the release runbook are in [DEPLOYMENT.md](DEPLOYMENT.md). Everything here uses native PostgreSQL and the commands in this repository. There is no Docker and no Redis; background jobs run inside the application or in separate worker processes (§7), with PostgreSQL as the queue. Step-by-step procedures for deploy, rollback, restart, drain, backup, restore, night audit recovery and incidents are in §12.
 
+**As of the server split (2026-11-12, [SERVER_SPLIT_PLAN.md](SERVER_SPLIT_PLAN.md)):** the application is an Express API server (`server/`, port 4000), a Next.js client (`client/`, port 3000) and optional worker processes. "Web instance" in the older text below means an **API server instance**; the client holds no state and no secrets and needs only a restart per release. Operator commands (`ops:*`, `worker`, `db:*`) are still run from the repository root through npm scripts and execute the compiled output in `server/dist/` (run `npm run build` first). File paths such as `scripts/db/runtime-role.sql`, `scripts/ops/db-guards.ts` and `prisma/migrations` are now under `server/`. Services run from `server/` (`node dist/index.mjs`, `node dist/workers/worker.mjs`); the systemd units are `serene-api@<port>`, `serene-client@<port>` and `serene-worker@<metricsPort>` (DEPLOYMENT.md §11).
+
+**Operator write safety.** `ops:seed`, `ops:bootstrap`, `ops:maintenance` and `ops:backup restore` are dry runs by default. To write, pass `--apply --yes --database <name>`, where `<name>` must equal the connected database (`OPS_EXPECTED_DATABASE` may supply it instead; set it only in the shell of the command, not in a shared `.env`). `--apply` without `--yes` (or the reverse) is refused, `--dry-run` is accepted and changes nothing, refusals exit 2, and in production a `_test` database is never written. `ops:bootstrap --confirm` still works as a deprecated alias for `--apply --yes`. `ops:backup restore` keeps its own guard (`--target-db` plus `--confirm-target`, and `--apply --yes` to execute).
+
 Related decisions: [ARCHITECTURE.md](ARCHITECTURE.md) D50 (retention), D51 (TRUNCATE guards), D52 (pool and timeouts), D53 (database roles).
 
 ## 1. Recovery objectives
@@ -240,7 +244,7 @@ Development keeps the single owner role (`npm run db:setup`), so `ops:db-check` 
 
 ## 5. Data retention and maintenance
 
-`npm run ops:maintenance` prunes transient operational data. Ledgers, audit logs, reservations, folios and every other business record are **never** pruned.
+`npm run ops:maintenance` prunes transient operational data. It is a **dry run by default** (it counts and deletes nothing); `npm run ops:maintenance -- --apply --yes --database <name>` deletes. Ledgers, audit logs, reservations, folios and every other business record are **never** pruned.
 
 | Data                        | Removed when                                 | Why this window                                                                                                                                                           |
 | --------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -258,7 +262,7 @@ How it behaves:
 - Each run deletes in batches (default 1 000 rows, `--batch-size 10–10000`).
 - Every batch is its own short statement with `FOR UPDATE SKIP LOCKED`: no long transaction, no waiting on rows a request is using.
 - It is safe to run while the application serves traffic, and safe to repeat; a second run finds nothing.
-- `--dry-run` counts without deleting.
+- Without `--apply --yes --database <name>` it only counts (`--dry-run` is accepted and means the same).
 - The output is counts only:
 
 ```
@@ -273,11 +277,11 @@ Retention maintenance (batches of 1000):
   outbox PENDING       5120 retained (never pruned)
 ```
 
-The durations are defined in `modules/retention/retention.policy.ts`; change them there and in this table together.
+The durations are defined in `shared/modules/retention/retention.policy.ts`; change them there and in this table together.
 
 ## 6. Connection pool and timeouts
 
-The application uses one connection pool per process (`lib/db/pool-config.ts`). Every setting is explicit:
+The application uses one connection pool per process (`server/lib/db/pool-config.ts`). Every setting is explicit:
 
 | Variable                                  | Default | Range                       | Meaning                                                                                          |
 | ----------------------------------------- | ------- | --------------------------- | ------------------------------------------------------------------------------------------------ |
@@ -361,8 +365,9 @@ Work too long for a request (today: the night audit) is queued in the `backgroun
 
 **Where workers run.**
 
-- **Default (`JOB_WORKER=inline`):** every application process runs one worker next to its requests. Nothing else to deploy; a single-server installation needs nothing more.
-- **Separate workers:** set `JOB_WORKER=off` on the web processes and run `npm run worker` (`node --conditions=react-server dist/ops/worker.mjs`) under the process manager (systemd, NSSM, pm2), with the application's environment. Use this to keep long audits off the web processes' event loop, or to run workers on another host.
+- **Default (`JOB_WORKER=inline`):** every API server process runs one worker next to its requests. Nothing else to deploy; a single-server installation needs nothing more.
+- **Separate workers:** set `JOB_WORKER=off` on the API processes and run `npm run worker` (`node dist/workers/worker.mjs`, built by `npm run build`, run from `server/` or through the npm script) under the process manager (systemd, NSSM, pm2), with the API's environment. The `--conditions=react-server` flag is gone.
+- **`JOB_WORKER` is read per process.** `off` makes a separate worker exit without claiming anything, exactly as it stops the inline worker of an API process. Give the API processes `off` in their own unit or environment; do not put `off` in an environment file that the separate workers also load, or no job will run. Use this to keep long audits off the web processes' event loop, or to run workers on another host.
 - Any mix is safe, on any number of hosts: a job is claimed by exactly one worker at a time (`FOR UPDATE SKIP LOCKED`), and every write a worker makes is fenced on its lease.
 
 **What happens when things fail.**
@@ -383,7 +388,7 @@ Work too long for a request (today: the night audit) is queued in the `backgroun
 
 ## 8. Scheduling
 
-Recurring jobs are plain commands started by the operating system's scheduler. Run them from the application directory, with the same environment as the application.
+Recurring jobs are plain commands started by the operating system's scheduler. Run them from the repository (release) directory, with the same environment as the API server (`server/.env` or the service's environment file). Build first (`npm run build`): the commands run compiled output.
 
 **Linux (cron)**, for example in `/etc/cron.d/serene`, running as the service user:
 
@@ -391,7 +396,7 @@ Recurring jobs are plain commands started by the operating system's scheduler. R
 # m  h  dom mon dow  user    command
 30  2  *   *   *    serene  cd /srv/serene && npm run --silent ops:backup -- create --out-dir /var/backups/serene >> /var/log/serene/backup.log 2>&1
 50  2  *   *   *    serene  cd /srv/serene && npm run --silent ops:backup -- verify --file "$(ls -1 /var/backups/serene/*.dump | tail -n 1)" >> /var/log/serene/backup.log 2>&1
-15  3  *   *   *    serene  cd /srv/serene && npm run --silent ops:maintenance >> /var/log/serene/maintenance.log 2>&1
+15  3  *   *   *    serene  cd /srv/serene && npm run --silent ops:maintenance -- --apply --yes --database serene_management >> /var/log/serene/maintenance.log 2>&1
 ```
 
 Add the off-host copy and the pruning of old backups to the same schedule. Alert when a job exits non-zero or when no new backup appeared in 26 hours.
@@ -399,7 +404,7 @@ Add the off-host copy and the pruning of old backups to the same schedule. Alert
 **Windows (Task Scheduler):**
 
 ```
-schtasks /Create /TN "Serene maintenance" /SC DAILY /ST 03:15 /RU <service account> /TR "cmd /c cd /d D:\serene && npm run --silent ops:maintenance >> D:\serene\logs\maintenance.log 2>&1"
+schtasks /Create /TN "Serene maintenance" /SC DAILY /ST 03:15 /RU <service account> /TR "cmd /c cd /d D:\serene && npm run --silent ops:maintenance -- --apply --yes --database serene_management >> D:\serene\logs\maintenance.log 2>&1"
 ```
 
 Create the backup and verify tasks the same way.
@@ -411,32 +416,33 @@ Schedule the backup before the maintenance run, and both away from the hotel's n
 `.github/workflows/ci.yml` runs on every push and pull request. It does the following, and never deploys, pushes or tags:
 
 1. Checks out the code and installs Node 22 (npm cache).
-2. Installs PostgreSQL 18 **natively on the runner** from the official PGDG apt repository (no Docker, no service containers). It creates the `serene` role and the `serene_management` and `serene_management_test` databases, and writes a `.env` with throwaway, per-run random credentials. No repository secrets are used.
-3. Runs `npm ci`, `format:check`, `typecheck`, `lint`, `test` (unit, PGlite database rules and integration against the runner's PostgreSQL) and `build`.
-4. Checks the role split. It runs `db:deploy` and `ops:seed`, creates `serene_app` with `scripts/db/runtime-role.sql`, then runs `ops:db-check -- --strict` as the runtime role and `ops:maintenance -- --dry-run`.
+2. Installs PostgreSQL 18 **natively on the runner** from the official PGDG apt repository (no Docker, no service containers). It creates the `serene` role and the `serene_management` and `serene_management_test` databases, and writes a repository-root `.env` (the server reads it as a fallback) with throwaway, per-run random credentials and `CLIENT_ORIGINS`. No repository secrets are used.
+3. Runs `npm ci`, `format:check`, `typecheck`, `lint`, `test` (unit and PGlite database rules), `test:integration` (the API through supertest against the runner's `serene_management_test` PostgreSQL database) and `build` (server and client). Locally, `npm run verify` runs the same sequence except `format:check`, and needs a running native PostgreSQL.
+4. Checks the role split. It runs `db:deploy` and `ops:seed -- --apply --yes --database serene_management`, creates `serene_app` with `server/scripts/db/runtime-role.sql`, then runs `ops:db-check -- --strict` as the runtime role and `ops:maintenance -- --dry-run`.
 
-`tests/unit/ci-workflow.test.ts` keeps the workflow honest: it must reference only existing npm scripts, use a supported Node version, and contain no Docker, secrets or deploy steps.
+`server/tests/unit/ci-workflow.test.ts` keeps the workflow honest: it must reference only existing npm scripts, use a supported Node version, and contain no Docker, secrets or deploy steps.
 
 ## 10. Several instances and graceful shutdown
 
-The application is stateless per process: sessions, rate limits, jobs, live-update fan-out and audit
+The API server is stateless per process: sessions, rate limits, jobs, live-update fan-out and audit
 data live in PostgreSQL, so any instance can serve any request and no sticky sessions are needed
-(state audit and measurements: SCALABILITY §37, ARCHITECTURE D69).
+(state audit and measurements: SCALABILITY §37, ARCHITECTURE D69). Since the server split each instance also caches resolved sessions and permissions (TTL 30 s in Redis when `REDIS_URL` is set, at most 10 s in process memory otherwise). Revoking a session, changing a password or a role invalidates the cache entry at once on the instance that handled the change and in Redis; without Redis another instance may still honour a revoked session for up to 10 s. Redis is optional: if it is down, instances fall back to memory and log one line a minute.
 
 **Load balancer contract.**
 
-| Item                     | Requirement                                                                                                                                         |
-| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Health check             | `GET /api/health/ready`, unauthenticated, every 1–5 s; remove a target after 2 failures (503 `unavailable` or `draining`), re-add after 2 successes |
-| Liveness (orchestrators) | `GET /api/health/live`: never touches PostgreSQL; restart only when it fails                                                                        |
-| Affinity                 | None. Round-robin or least-connections                                                                                                              |
-| Event streams            | `/api/v1/properties/{id}/events`: no buffering, idle/read timeout > 25 s (heartbeat), abort upstream when the client disconnects                    |
-| Request timeout          | ≥ 60 s for normal requests (statement timeout 30 s; heavy reports may wait 30 s for a slot); streams end by themselves within 15 min                |
-| Retries                  | Only idempotent requests (GET/HEAD) on connection errors; never retry POST/PUT/PATCH/DELETE automatically                                           |
-| Forwarded headers        | Append to `X-Forwarded-For`; `TRUSTED_PROXY_HOPS` = number of appending proxies; `X-Real-IP` and `Forwarded` are ignored                            |
-| Instances unreachable    | The Node port must be reachable only through the proxy chain when `TRUSTED_PROXY_HOPS` > 0                                                          |
+| Item                     | Requirement                                                                                                                                                           |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Health check             | `GET /api/health/ready`, unauthenticated, every 1–5 s; remove a target after 2 failures (503 `unavailable` or `draining`), re-add after 2 successes                   |
+| Liveness (orchestrators) | `GET /api/health/live`: never touches PostgreSQL; restart only when it fails                                                                                          |
+| Affinity                 | None. Round-robin or least-connections                                                                                                                                |
+| Event streams            | `/api/v1/properties/{id}/events`: no buffering, idle/read timeout > 25 s (heartbeat), abort upstream when the client disconnects                                      |
+| Request timeout          | ≥ 60 s for normal requests (statement timeout 30 s; heavy reports may wait 30 s for a slot); streams end by themselves within 15 min                                  |
+| Retries                  | Only idempotent requests (GET/HEAD) on connection errors; never retry POST/PUT/PATCH/DELETE automatically                                                             |
+| Forwarded headers        | Append to `X-Forwarded-For`; `TRUSTED_PROXY_HOPS` = number of appending proxies; `X-Real-IP` and `Forwarded` are ignored                                              |
+| Instances unreachable    | The API's Node port must be reachable only through the proxy chain when `TRUSTED_PROXY_HOPS` > 0                                                                      |
+| Cross-origin             | If the client is on another origin than the API, that origin must be in `CLIENT_ORIGINS` (CORS); the proxy must pass `Authorization`, `Origin` and `Cookie` unchanged |
 
-**Graceful shutdown** (`npm start`, which sets `NEXT_MANUAL_SIG_HANDLE=true`; `lib/lifecycle`). On SIGTERM
+**Graceful shutdown** (`node dist/index.mjs`, which installs its own signal handlers; `server/lib/lifecycle`). On SIGTERM
 or SIGINT (and Ctrl+Break, SIGBREAK, on Windows):
 
 1. Readiness answers 503 `draining` at once; liveness stays 200; new event streams get 503 with
@@ -652,18 +658,18 @@ groups:
 
 ## 12. Runbooks
 
-Commands assume the reference topology (DEPLOYMENT.md §11): releases in `/srv/serene/releases/<version>`, `/srv/serene/current` pointing at the live one, systemd units `serene-web@<port>` and `serene-worker@<metricsPort>`, and the production environment in `/etc/serene/serene.env`. Run `ops:*` commands from `/srv/serene/current` with that environment loaded. Never paste secrets into a ticket or chat.
+Commands assume the reference topology (DEPLOYMENT.md §11): releases in `/srv/serene/releases/<version>`, `/srv/serene/current` pointing at the live one, systemd units `serene-api@<port>`, `serene-client@<port>` and `serene-worker@<metricsPort>`, and the production environment in `/etc/serene/serene.env`. Run `ops:*` commands from `/srv/serene/current` with that environment loaded. "Instance" below means an API server instance unless stated; the client units (`serene-client@3000`) are restarted after the API in each release and need no drain. Never paste secrets into a ticket or chat.
 
 ### 12.1 Health checks
 
 | Check                    | Command                                                                                          | Healthy                                                                   |
 | ------------------------ | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------- |
-| Liveness (per instance)  | `curl -fsS http://<instance>:3000/api/health/live`                                               | 200 `ok`. Failing = restart that process                                  |
-| Readiness (per instance) | `curl -fsS http://<instance>:3000/api/health/ready`                                              | 200 `ready`. 503 `unavailable` = database; 503 `draining` = shutting down |
-| Public path              | `curl -fsS https://<APP_URL host>/api/health/ready`                                              | 200 through the load balancer                                             |
+| Liveness (per instance)  | `curl -fsS http://<instance>:4000/api/health/live`                                               | 200 `ok`. Failing = restart that process                                  |
+| Readiness (per instance) | `curl -fsS http://<instance>:4000/api/health/ready`                                              | 200 `ready`. 503 `unavailable` = database; 503 `draining` = shutting down |
+| Public path              | `curl -fsS https://<public host>/api/health/ready`                                               | 200 through the load balancer                                             |
 | Database posture         | `npm run ops:db-check -- --strict`                                                               | no `FAIL`/`WARN` lines (exit 0)                                           |
 | Job queue                | `npm run worker -- --stats`                                                                      | `oldestDueSeconds` < 120, `expiredLeases` 0, `failedLast24h` 0            |
-| Metrics                  | `curl -fsS -H "Authorization: Bearer $METRICS_TOKEN" http://<instance>:3000/api/metrics \| head` | Prometheus text; 404 means a missing or wrong token                       |
+| Metrics                  | `curl -fsS -H "Authorization: Bearer $METRICS_TOKEN" http://<instance>:4000/api/metrics \| head` | Prometheus text; 404 means a missing or wrong token                       |
 
 Do not restart an instance whose liveness passes while readiness fails: the database is the problem (§12.9).
 
@@ -673,16 +679,17 @@ Do not restart an instance whose liveness passes while readiness fails: the data
 
 1. Back up and verify (§2.2), then encrypt and copy off the host (§2.6). Note the file name.
 2. Unpack and build the new release into `/srv/serene/releases/<version>` (DEPLOYMENT.md §3). Never build inside `current`.
-3. `npm run db:deploy` and `npm run ops:seed` once, from the new release directory (only when the release has migrations or new permissions; safe to repeat).
+3. `npm run db:deploy` and `npm run ops:seed -- --apply --yes --database <name>` once, from the new release directory (only when the release has migrations or new permissions; safe to repeat).
 4. Switch `current` to the new release: `ln -sfn /srv/serene/releases/<version> /srv/serene/current`.
-5. Rolling restart, one web instance at a time: `systemctl restart serene-web@3000`, wait until its readiness is 200 and the load balancer shows it healthy, then the next instance. With open-source nginx, take the instance out of `upstream` and reload first (§12.4).
-6. Restart the workers: `systemctl restart serene-worker@9101 serene-worker@9102`.
-7. Smoke checks: DEPLOYMENT.md §9 step 9, `ops:db-check -- --strict`, and the alert dashboard for 30 minutes.
+5. Rolling restart, one web instance at a time: `systemctl restart serene-api@4000`, wait until its readiness is 200 and the load balancer shows it healthy, then the next instance. With open-source nginx, take the instance out of `upstream` and reload first (§12.4).
+6. Restart the client instances one at a time (`systemctl restart serene-client@3000`), after the API instances are healthy: the new client is built for the new API, and the new API stays compatible with the previous client during the roll.
+7. Restart the workers: `systemctl restart serene-worker@9101 serene-worker@9102`.
+8. Smoke checks: DEPLOYMENT.md §9 step 9, `ops:db-check -- --strict`, and the alert dashboard for 30 minutes.
 
 **Application rollback** (the schema did not change, or changed backward-compatibly):
 
 1. `ln -sfn /srv/serene/releases/<previous> /srv/serene/current`.
-2. Rolling restart of the web instances, then the workers (steps 5–6 above). Rehearsed for v1.0.0-rc1 under load with no failed request (DEPLOYMENT.md §12).
+2. Rolling restart of the web instances, then the workers (steps 5–7 above). Rehearsed for v1.0.0-rc1 under load with no failed request (DEPLOYMENT.md §12).
 3. `npm run ops:db-check -- --strict` and the smoke checks.
 
 **Worker rollback.** Workers run the release in `current`, so step 2 covers them; restart them after the web instances. Between `a70992d` and v1.0.0-rc1 the job kinds and payloads are unchanged, so either release's worker runs the other's jobs. For a future release that changes a job payload, drain the queue (`npm run worker -- --stats` shows nothing queued or running) before rolling workers across that change.
@@ -697,19 +704,19 @@ Do not restart an instance whose liveness passes while readiness fails: the data
 
 1. Stop new traffic at the load balancer: serve a static maintenance page or remove every upstream (nginx: `return 503;` in the `location /` block, then reload).
 2. `systemctl stop serene-worker@*` so no job continues (a running night audit commit either finishes or rolls back as a whole).
-3. `systemctl stop serene-web@*` (graceful; bounded by `TimeoutStopSec`).
+3. `systemctl stop serene-api@* serene-client@*` (graceful; bounded by `TimeoutStopSec`).
 4. Leave PostgreSQL running for investigation. Take a backup (§2.2) before changing anything.
 5. To bring the service back: start the workers, then the web instances, check readiness, restore the load balancer configuration.
 
 ### 12.3 Restart
 
-- **One instance:** `systemctl restart serene-web@3000` (graceful: readiness 503 `draining`, in-flight requests finish, at most `SHUTDOWN_TIMEOUT_MS` + 5 s). Its event streams reconnect to the other instances.
+- **One instance:** `systemctl restart serene-api@4000` (graceful: readiness 503 `draining`, in-flight requests finish, at most `SHUTDOWN_TIMEOUT_MS` + 5 s). Its event streams reconnect to the other instances.
 - **All instances** (for example after a database failover, §6): restart them one at a time and wait for readiness between them. A simultaneous restart of every instance is an outage of a few seconds; announce it.
-- **After a crash** systemd restarts the process (`Restart=on-failure`). Check `journalctl -u serene-web@3000` for the cause before restarting it by hand again.
+- **After a crash** systemd restarts the process (`Restart=on-failure`). Check `journalctl -u serene-api@4000` for the cause before restarting it by hand again.
 
 ### 12.4 Drain an instance
 
-1. HAProxy or a cloud load balancer: send SIGTERM (`systemctl stop serene-web@3000`). Readiness answers 503 `draining` at once and the balancer removes the instance within 2 health checks; the instance serves for `SHUTDOWN_DRAIN_MS` more, then finishes in-flight requests and exits.
+1. HAProxy or a cloud load balancer: send SIGTERM (`systemctl stop serene-api@4000`). Readiness answers 503 `draining` at once and the balancer removes the instance within 2 health checks; the instance serves for `SHUTDOWN_DRAIN_MS` more, then finishes in-flight requests and exits.
 2. Open-source nginx (passive checks only): comment out the instance in `upstream`, `nginx -t && nginx -s reload`, wait 30 s, then stop it. Put it back the same way after the restart.
 3. Confirm: `serene_instance_draining` = 1 while draining; no new 5xx in the access log.
 
