@@ -1,6 +1,7 @@
 import type { Prisma } from "@/generated/prisma/client";
 import type { Db, Tx } from "@/config/prisma";
 import type { JobStatus } from "@serene/shared/modules/jobs/jobs.policy";
+import { propertyFilterSql, propertyWhere } from "@/lib/scope";
 
 /**
  * Background job storage (migration 20261220090000_background_jobs). The queue
@@ -293,7 +294,11 @@ export async function findJobForSubject(
   subjectId: string,
 ) {
   return db.backgroundJob.findFirst({
-    where: { propertyId, kind, payload: { path: ["subjectId"], equals: subjectId } },
+    where: {
+      ...propertyWhere({ propertyId }),
+      kind,
+      payload: { path: ["subjectId"], equals: subjectId },
+    },
     orderBy: { createdAt: "desc" },
     select: VIEW_SELECT,
   });
@@ -308,7 +313,7 @@ export async function lockJobForSubject(
 ): Promise<{ id: string; status: JobStatus; locked_until: Date | null } | null> {
   const rows = await tx.$queryRaw<{ id: string; status: JobStatus; locked_until: Date | null }[]>`
     SELECT "id", "status"::text AS "status", "locked_until" FROM "background_jobs"
-    WHERE "property_id" = ${propertyId}::uuid AND "kind" = ${kind}
+    WHERE ${propertyFilterSql({ propertyId })} AND "kind" = ${kind}
       AND "payload"->>'subjectId' = ${subjectId}
     ORDER BY "created_at" DESC
     LIMIT 1

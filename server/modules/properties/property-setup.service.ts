@@ -20,6 +20,7 @@ import type {
   PropertySetupCopyResult,
   PropertySetupSection,
 } from "@serene/shared/modules/properties/properties.types";
+import { propertyWhere } from "@/lib/scope";
 
 /**
  * Copies a property's reference setup into a new property (D37): charge and
@@ -300,7 +301,10 @@ async function copySetup(
   );
   const marketGroupIds = new Map(
     (
-      await tx.marketGroup.findMany({ where: { propertyId }, select: { id: true, code: true } })
+      await tx.marketGroup.findMany({
+        where: { ...propertyWhere({ propertyId }) },
+        select: { id: true, code: true },
+      })
     ).map((g) => [g.code, g.id]),
   );
   const sourceMarketGroup = new Map(from.marketGroups.map((g) => [g.id, g.code]));
@@ -429,7 +433,7 @@ async function copySetup(
   const noShowCode = from.configuration?.noShowTransactionCode?.code;
   const noShowReason = from.configuration?.noShowReasonCode;
   const configuration = await tx.propertyConfiguration.findUnique({
-    where: { propertyId },
+    where: { ...propertyWhere({ propertyId }) },
     select: { noShowTransactionCodeId: true, noShowReasonCodeId: true },
   });
   const settings: Prisma.PropertyConfigurationUncheckedUpdateInput = {};
@@ -438,14 +442,18 @@ async function copySetup(
   }
   if (noShowReason && !configuration?.noShowReasonCodeId) {
     const reason = await tx.reasonCode.findFirst({
-      where: { propertyId, category: noShowReason.category, code: noShowReason.code },
+      where: {
+        ...propertyWhere({ propertyId }),
+        category: noShowReason.category,
+        code: noShowReason.code,
+      },
       select: { id: true },
     });
     if (reason) settings.noShowReasonCodeId = reason.id;
   }
   if (Object.keys(settings).length > 0) {
     await tx.propertyConfiguration.upsert({
-      where: { propertyId },
+      where: { ...propertyWhere({ propertyId }) },
       create: {
         propertyId,
         ...(settings as Omit<Prisma.PropertyConfigurationUncheckedCreateInput, "propertyId">),

@@ -103,6 +103,7 @@ import type {
   RoomChargesResult,
   StayChargeEstimate,
 } from "@serene/shared/modules/billing/billing.types";
+import { propertyWhere } from "@/lib/scope";
 
 /**
  * Folios and postings (docs/PMS_WORKFLOWS.md §7, §22; docs/DOMAIN_MODEL.md §5.4).
@@ -674,12 +675,12 @@ function directReference(tx: Tx, propertyId: string): PostingReference {
   return {
     ratePlans: (ids) =>
       tx.ratePlan.findMany({
-        where: { propertyId, id: { in: ids } },
+        where: { ...propertyWhere({ propertyId }), id: { in: ids } },
         select: ratePlanPostingSelect,
       }),
     reservationPackages: (reservationRoomId) =>
       tx.reservationPackage.findMany({
-        where: { propertyId, reservationRoomId },
+        where: { ...propertyWhere({ propertyId }), reservationRoomId },
         select: reservationPackageSelect,
       }),
     codes: async (ids) =>
@@ -930,7 +931,7 @@ export async function estimateStayCharges(
 
 function findRoomDatesForEstimate(propertyId: string, reservationRoomId: string) {
   return prisma.reservationRoom.findFirst({
-    where: { id: reservationRoomId, propertyId },
+    where: { id: reservationRoomId, ...propertyWhere({ propertyId }) },
     select: { arrivalDate: true, departureDate: true },
   });
 }
@@ -1217,7 +1218,7 @@ export async function preparePostingBatch(
   const reservationPackages = new Map<string, ReservationPackageRows>();
   if (postingIds.length > 0) {
     const rows = await tx.reservationPackage.findMany({
-      where: { propertyId: ctx.propertyId, reservationRoomId: { in: postingIds } },
+      where: { ...propertyWhere(ctx), reservationRoomId: { in: postingIds } },
       select: { ...reservationPackageSelect, reservationRoomId: true },
     });
     for (const { reservationRoomId, ...row } of rows) {
@@ -1314,7 +1315,7 @@ export async function postNoShowFeeInTx(
 ): Promise<{ itemIds: string[]; total: MoneyUnits; taxes: MoneyUnits } | null> {
   const postingKey = `NOSHOW:${room.id}:1`;
   const existing = await tx.folioItem.findFirst({
-    where: { propertyId: ctx.propertyId, postingKey },
+    where: { ...propertyWhere(ctx), postingKey },
     select: { id: true },
   });
   if (existing) return null;
@@ -1326,7 +1327,7 @@ export async function postNoShowFeeInTx(
     throw rule("The no-show fee transaction code is not active", "CODE_INACTIVE");
   }
   const plan = await tx.ratePlan.findFirst({
-    where: { propertyId: ctx.propertyId, id: first.ratePlanId },
+    where: { ...propertyWhere(ctx), id: first.ratePlanId },
     select: { taxInclusive: true },
   });
   const folioId = await ensureGuestFolioInTx(tx, ctx, businessDate, room, 1);

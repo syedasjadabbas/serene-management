@@ -125,6 +125,7 @@ import type {
   ReservationListItem,
   ReservationRoomDetail,
 } from "@serene/shared/modules/reservations/reservations.types";
+import { propertyWhere } from "@/lib/scope";
 
 /**
  * Reservation engine (docs/PMS_WORKFLOWS.md §2, §3, §4, §14–§16).
@@ -1708,7 +1709,7 @@ export async function listReservations(
   query: ListReservationsQuery,
 ): Promise<{ items: ReservationListItem[]; meta: CursorPageMeta }> {
   const sort = SORTS[query.sort];
-  const and: Prisma.ReservationRoomWhereInput[] = [{ propertyId: ctx.propertyId }];
+  const and: Prisma.ReservationRoomWhereInput[] = [{ ...propertyWhere(ctx) }];
 
   if (query.state?.length) {
     and.push({

@@ -101,6 +101,7 @@ import type {
   StayDetail,
   StayRow,
 } from "@serene/shared/modules/front-desk/front-desk.types";
+import { propertyWhere } from "@/lib/scope";
 
 /**
  * Front desk (docs/PMS_WORKFLOWS.md §5–§9): check-in, walk-in, in-house room
@@ -394,7 +395,7 @@ export async function reverseCheckIn(
     if (!stay) throw notFound("Stay");
     if (stay.version !== input.version) throw staleVersion("Stay");
     const postings = await tx.folioItem.count({
-      where: { propertyId: ctx.propertyId, folio: { reservationRoomId: current.id } },
+      where: { ...propertyWhere(ctx), folio: { reservationRoomId: current.id } },
     });
     const problem = reverseCheckInProblem({
       status: stay.status,
@@ -414,7 +415,7 @@ export async function reverseCheckIn(
     });
     // Tasks generated for this stay stay with the room.
     await tx.housekeepingTask.updateMany({
-      where: { propertyId: ctx.propertyId, stayId },
+      where: { ...propertyWhere(ctx), stayId },
       data: { stayId: null },
     });
     await tx.stay.delete({ where: { id: stayId } });

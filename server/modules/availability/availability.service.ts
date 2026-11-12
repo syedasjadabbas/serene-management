@@ -37,6 +37,7 @@ import type {
   AvailabilityView,
   RoomTypeAvailabilityView,
 } from "@serene/shared/modules/availability/availability.types";
+import { propertyFilterSql } from "@/lib/scope";
 
 /** The property must be live, and stays cannot start before its business date. */
 export function requireBookableArrival(ctx: PropertyContext, arrival: string): string {
@@ -471,7 +472,7 @@ export async function reconcileInventoryInTx(
   >`
     SELECT "room_type_id", "stay_date", "physical_rooms", "out_of_order", "sold", "blocked"
     FROM "room_type_inventory"
-    WHERE "property_id" = ${propertyId}::uuid AND "stay_date" >= ${from}::date
+    WHERE ${propertyFilterSql({ propertyId })} AND "stay_date" >= ${from}::date
     ORDER BY "room_type_id", "stay_date"
     FOR UPDATE`;
   if (cells.length === 0) return [];

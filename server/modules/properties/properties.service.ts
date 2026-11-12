@@ -33,6 +33,7 @@ import type {
   PropertyConfigurationView,
   PropertyView,
 } from "@serene/shared/modules/properties/properties.types";
+import { propertyWhere } from "@/lib/scope";
 
 /** Defaults mirror the column defaults, used when a legacy property has no configuration row. */
 const DEFAULT_CONFIGURATION = {
@@ -255,7 +256,7 @@ async function assertNightAuditCodes(
     const code = await tx.transactionCode.findFirst({
       where: {
         id: settings.noShowTransactionCodeId,
-        propertyId,
+        ...propertyWhere({ propertyId }),
         status: "ACTIVE",
         bucket: { notIn: ["PAYMENT", "TAX", "NON_REVENUE"] },
         group: { type: "REVENUE" },
@@ -270,7 +271,12 @@ async function assertNightAuditCodes(
   }
   if (settings.noShowReasonCodeId) {
     const reason = await tx.reasonCode.findFirst({
-      where: { id: settings.noShowReasonCodeId, propertyId, category: "NO_SHOW", status: "ACTIVE" },
+      where: {
+        id: settings.noShowReasonCodeId,
+        ...propertyWhere({ propertyId }),
+        category: "NO_SHOW",
+        status: "ACTIVE",
+      },
       select: { id: true },
     });
     if (!reason) {

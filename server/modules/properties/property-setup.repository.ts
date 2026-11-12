@@ -1,4 +1,5 @@
 import type { Tx } from "@/config/prisma";
+import { organizationFilterSql, organizationWhere, propertyWhere } from "@/lib/scope";
 
 /**
  * Reads and writes of the reference setup a property can copy from another
@@ -12,14 +13,14 @@ const active = (propertyId: string) => ({ propertyId, status: "ACTIVE" as const 
 export async function lockTargetProperty(tx: Tx, organizationId: string, propertyId: string) {
   const rows = await tx.$queryRaw<{ id: string }[]>`
     SELECT "id" FROM "properties"
-    WHERE "id" = ${propertyId}::uuid AND "organization_id" = ${organizationId}::uuid
+    WHERE "id" = ${propertyId}::uuid AND ${organizationFilterSql({ organizationId })}
     FOR UPDATE`;
   return rows.length > 0;
 }
 
 export function findSetupProperty(tx: Tx, organizationId: string, propertyId: string) {
   return tx.property.findFirst({
-    where: { id: propertyId, organizationId, status: "ACTIVE" },
+    where: { id: propertyId, ...organizationWhere({ organizationId }), status: "ACTIVE" },
     select: { id: true, code: true, currencyCode: true },
   });
 }
@@ -44,7 +45,7 @@ export async function readSourceSetup(tx: Tx, propertyId: string) {
     configuration,
   ] = await Promise.all([
     tx.transactionCodeGroup.findMany({
-      where: { propertyId },
+      where: { ...propertyWhere({ propertyId }) },
       select: {
         id: true,
         code: true,
@@ -92,7 +93,7 @@ export async function readSourceSetup(tx: Tx, propertyId: string) {
       orderBy: { code: "asc" },
     }),
     tx.transactionCodeTax.findMany({
-      where: { propertyId },
+      where: { ...propertyWhere({ propertyId }) },
       select: { transactionCodeId: true, taxRuleId: true, sequence: true },
     }),
     tx.reasonCode.findMany({
@@ -188,7 +189,7 @@ export async function readSourceSetup(tx: Tx, propertyId: string) {
       orderBy: { code: "asc" },
     }),
     tx.propertyConfiguration.findUnique({
-      where: { propertyId },
+      where: { ...propertyWhere({ propertyId }) },
       select: {
         noShowTransactionCode: { select: { code: true } },
         noShowReasonCode: { select: { category: true, code: true } },
@@ -219,7 +220,7 @@ export type SourceSetup = Awaited<ReturnType<typeof readSourceSetup>>;
 
 /** Existing codes of the target (all statuses: a retired code is never recreated). */
 export async function readTargetCodes(tx: Tx, propertyId: string) {
-  const where = { propertyId };
+  const where = { ...propertyWhere({ propertyId }) };
   const [
     groups,
     codes,

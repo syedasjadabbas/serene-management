@@ -51,6 +51,7 @@ import type {
   MaintenanceListItem,
   MaintenanceOptions,
 } from "@serene/shared/modules/maintenance/maintenance.types";
+import { propertyWhere } from "@/lib/scope";
 
 /**
  * Maintenance (docs/PMS_WORKFLOWS.md §29): room and public-area requests
@@ -548,7 +549,7 @@ export async function listRequests(
     all: {},
   };
   const where: Prisma.MaintenanceRequestWhereInput = {
-    propertyId: ctx.propertyId,
+    ...propertyWhere(ctx),
     ...byView[query.view],
     ...(query.priority ? { priority: query.priority } : {}),
     ...(query.roomId ? { roomId: query.roomId } : {}),

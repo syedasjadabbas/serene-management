@@ -1,6 +1,7 @@
 import type { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Tx } from "@/config/prisma";
+import { Prisma } from "@/generated/prisma/client";
 import { findUnbalancedFolios } from "@/modules/night-audit/night-audit.repository";
 import { createMigratedDatabase, sqlStateOf, withoutReferentialChecks } from "../support/pglite";
 
@@ -62,10 +63,9 @@ async function production(propertyId: string, businessDate: string): Promise<Row
   let captured: { sql: string; values: unknown[] } | null = null;
   const capture = {
     $queryRaw: (strings: TemplateStringsArray, ...values: unknown[]) => {
-      captured = {
-        sql: strings.reduce((sql, part, i) => `${sql}$${i}${part}`),
-        values,
-      };
+      // Prisma flattens nested fragments (the scope helpers) the same way.
+      const query = Prisma.sql(strings, ...values);
+      captured = { sql: query.text, values: query.values };
       return Promise.resolve([]);
     },
   } as unknown as Tx;

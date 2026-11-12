@@ -59,6 +59,7 @@ import type {
   RatePlanDetail,
   RatePlanListItem,
 } from "@serene/shared/modules/rates/rates.types";
+import { propertyWhere } from "@/lib/scope";
 
 /**
  * Rate administration (Phase 6): rate plans, seasons, package attachment and
@@ -294,7 +295,7 @@ export async function createRatePlan(
       await lockRatePlanChain(tx, ctx.propertyId, input.derivation.parentRatePlanId, "update");
     const columns = await planColumns(tx, ctx, input, null);
     const existing = await tx.ratePlan.findFirst({
-      where: { propertyId: ctx.propertyId, code: input.code },
+      where: { ...propertyWhere(ctx), code: input.code },
       select: { id: true },
     });
     if (existing) throw fieldError("code", `Rate plan ${input.code} already exists`);
@@ -741,7 +742,7 @@ export async function rateCalendar(
   const plan = await findRatePlanDetail(prisma, ctx.propertyId, query.ratePlanId);
   if (!plan) throw notFound("Rate plan");
   const roomType = await prisma.roomType.findFirst({
-    where: { id: query.roomTypeId, propertyId: ctx.propertyId },
+    where: { id: query.roomTypeId, ...propertyWhere(ctx) },
     select: { id: true, code: true, name: true },
   });
   if (!roomType) throw notFound("Room type");

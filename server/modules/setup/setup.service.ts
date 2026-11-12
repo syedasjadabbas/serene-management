@@ -138,7 +138,7 @@ export async function getPropertySetup(ctx: PropertyContext): Promise<PropertySe
 export async function createRoomType(ctx: PropertyContext, input: CreateRoomTypeInput) {
   await runInTransaction(async (tx) => {
     const taken = await tx.roomType.findFirst({
-      where: { propertyId: ctx.propertyId, code: input.code },
+      where: { ...propertyWhere(ctx), code: input.code },
       select: { id: true },
     });
     if (taken) throw fieldError("code", `Room type ${input.code} already exists`, "CODE_TAKEN");
@@ -175,12 +175,12 @@ export async function updateRoomType(
 ) {
   await runInTransaction(async (tx) => {
     const before = await tx.roomType.findFirst({
-      where: { propertyId: ctx.propertyId, id: roomTypeId, isPseudo: false },
+      where: { ...propertyWhere(ctx), id: roomTypeId, isPseudo: false },
     });
     if (!before) throw notFound("Room type");
     if (before.status === "ACTIVE" && input.status === "INACTIVE") {
       const rooms = await tx.room.count({
-        where: { propertyId: ctx.propertyId, roomTypeId, status: "ACTIVE" },
+        where: { ...propertyWhere(ctx), roomTypeId, status: "ACTIVE" },
       });
       if (rooms > 0) {
         throw rule(
@@ -241,7 +241,7 @@ export async function updateRoomType(
 export async function createFloor(ctx: PropertyContext, input: CreateFloorInput) {
   await runInTransaction(async (tx) => {
     const taken = await tx.floor.findFirst({
-      where: { propertyId: ctx.propertyId, code: input.code },
+      where: { ...propertyWhere(ctx), code: input.code },
       select: { id: true },
     });
     if (taken) throw fieldError("code", `Floor ${input.code} already exists`, "CODE_TAKEN");
@@ -269,11 +269,11 @@ export async function createFloor(ctx: PropertyContext, input: CreateFloorInput)
 
 export async function updateFloor(ctx: PropertyContext, floorId: string, input: UpdateFloorInput) {
   await runInTransaction(async (tx) => {
-    const before = await tx.floor.findFirst({ where: { propertyId: ctx.propertyId, id: floorId } });
+    const before = await tx.floor.findFirst({ where: { ...propertyWhere(ctx), id: floorId } });
     if (!before) throw notFound("Floor");
     if (before.status === "ACTIVE" && input.status === "INACTIVE") {
       const rooms = await tx.room.count({
-        where: { propertyId: ctx.propertyId, floorId, status: "ACTIVE" },
+        where: { ...propertyWhere(ctx), floorId, status: "ACTIVE" },
       });
       if (rooms > 0) {
         throw rule(
@@ -308,7 +308,7 @@ export async function updateFloor(ctx: PropertyContext, floorId: string, input: 
 
 async function requireActiveRoomType(tx: Tx, ctx: PropertyContext, roomTypeId: string) {
   const type = await tx.roomType.findFirst({
-    where: { propertyId: ctx.propertyId, id: roomTypeId, isPseudo: false },
+    where: { ...propertyWhere(ctx), id: roomTypeId, isPseudo: false },
     select: { id: true, code: true, status: true },
   });
   if (!type) throw fieldError("roomTypeId", "Choose a room type of this property");
@@ -319,7 +319,7 @@ async function requireActiveRoomType(tx: Tx, ctx: PropertyContext, roomTypeId: s
 async function requireActiveFloor(tx: Tx, ctx: PropertyContext, floorId: string | null) {
   if (!floorId) return null;
   const floor = await tx.floor.findFirst({
-    where: { propertyId: ctx.propertyId, id: floorId },
+    where: { ...propertyWhere(ctx), id: floorId },
     select: { id: true, status: true, name: true },
   });
   if (!floor) throw fieldError("floorId", "Choose a floor of this property");
@@ -341,7 +341,7 @@ export async function createRooms(ctx: PropertyContext, input: CreateRoomsInput)
       );
     }
     const last = await tx.room.aggregate({
-      where: { propertyId: ctx.propertyId },
+      where: { ...propertyWhere(ctx) },
       _max: { sortOrder: true },
     });
     let sort = (last._max.sortOrder ?? 0) + 1;
@@ -358,7 +358,7 @@ export async function createRooms(ctx: PropertyContext, input: CreateRoomsInput)
     }));
     await tx.room.createMany({ data });
     const created = await tx.room.findMany({
-      where: { propertyId: ctx.propertyId, number: { in: input.numbers } },
+      where: { ...propertyWhere(ctx), number: { in: input.numbers } },
       select: { id: true, number: true },
     });
     const repairs = await reconcileInventoryInTx(tx, ctx.propertyId, fromDate(ctx));
@@ -500,13 +500,13 @@ async function requireTaxableCodes(tx: Tx, ctx: PropertyContext, ids: string[]) 
 export async function createTax(ctx: PropertyContext, input: CreateTaxInput) {
   await runInTransaction(async (tx) => {
     const taken = await tx.taxRule.findFirst({
-      where: { propertyId: ctx.propertyId, code: input.code },
+      where: { ...propertyWhere(ctx), code: input.code },
       select: { id: true },
     });
     if (taken) throw fieldError("code", `Tax ${input.code} already exists`, "CODE_TAKEN");
     const appliesTo = await requireTaxableCodes(tx, ctx, input.appliesTo);
     const group = await tx.transactionCodeGroup.findFirst({
-      where: { propertyId: ctx.propertyId, code: "TAX" },
+      where: { ...propertyWhere(ctx), code: "TAX" },
       select: { id: true },
     });
     if (!group) {
@@ -580,7 +580,7 @@ export async function createTax(ctx: PropertyContext, input: CreateTaxInput) {
 export async function updateTax(ctx: PropertyContext, taxRuleId: string, input: UpdateTaxInput) {
   await runInTransaction(async (tx) => {
     const before = await tx.taxRule.findFirst({
-      where: { propertyId: ctx.propertyId, id: taxRuleId },
+      where: { ...propertyWhere(ctx), id: taxRuleId },
       include: { appliesTo: { select: { transactionCodeId: true } } },
     });
     if (!before) throw notFound("Tax");
@@ -603,7 +603,7 @@ export async function updateTax(ctx: PropertyContext, taxRuleId: string, input: 
     const added = appliesTo.filter((id) => !current.has(id));
     if (removed.length > 0) {
       await tx.transactionCodeTax.deleteMany({
-        where: { propertyId: ctx.propertyId, taxRuleId, transactionCodeId: { in: removed } },
+        where: { ...propertyWhere(ctx), taxRuleId, transactionCodeId: { in: removed } },
       });
     }
     if (added.length > 0) {

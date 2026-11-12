@@ -1,5 +1,6 @@
 import { Prisma } from "@/generated/prisma/client";
 import type { Tx } from "@/config/prisma";
+import { propertyFilterSql, propertyWhere } from "@/lib/scope";
 
 /**
  * Groups and blocks data access. Every query is scoped by the property the
@@ -50,9 +51,9 @@ export function findGroupsPage(
     FROM "groups" g
     LEFT JOIN "account_profiles" a ON a."id" = g."account_profile_id"
     LEFT JOIN "guests" cg ON cg."id" = g."contact_guest_id"
-    LEFT JOIN "blocks" b ON b."group_id" = g."id" AND b."property_id" = ${propertyId}::uuid
+    LEFT JOIN "blocks" b ON b."group_id" = g."id" AND ${propertyFilterSql({ propertyId }, "b")}
     LEFT JOIN "block_allocations" al ON al."block_id" = b."id"
-    WHERE g."property_id" = ${propertyId}::uuid ${status} ${q} ${cursor}
+    WHERE ${propertyFilterSql({ propertyId }, "g")} ${status} ${q} ${cursor}
     GROUP BY g."id", a."name", cg."first_name", cg."last_name"
     ORDER BY g."code", g."id"
     LIMIT ${options.limit + 1}`;
@@ -86,13 +87,16 @@ const groupSelect = {
 } as const satisfies Prisma.GroupSelect;
 
 export function findGroup(tx: Tx, propertyId: string, id: string) {
-  return tx.group.findFirst({ where: { id, propertyId }, select: groupSelect });
+  return tx.group.findFirst({
+    where: { id, ...propertyWhere({ propertyId }) },
+    select: groupSelect,
+  });
 }
 
 export async function lockGroup(tx: Tx, propertyId: string, id: string) {
   const rows = await tx.$queryRaw<{ id: string; status: string; code: string }[]>`
     SELECT "id", "status"::text AS "status", "code" FROM "groups"
-    WHERE "id" = ${id}::uuid AND "property_id" = ${propertyId}::uuid
+    WHERE "id" = ${id}::uuid AND ${propertyFilterSql({ propertyId })}
     FOR UPDATE`;
   return rows[0] ?? null;
 }
@@ -134,21 +138,24 @@ export type BlockRow = Prisma.BlockGetPayload<{ select: typeof blockSelect }>;
 
 export function findBlocksOfGroup(tx: Tx, propertyId: string, groupId: string) {
   return tx.block.findMany({
-    where: { propertyId, groupId },
+    where: { ...propertyWhere({ propertyId }), groupId },
     orderBy: [{ startDate: "asc" }, { code: "asc" }],
     select: blockSelect,
   });
 }
 
 export function findBlock(tx: Tx, propertyId: string, id: string) {
-  return tx.block.findFirst({ where: { id, propertyId }, select: blockSelect });
+  return tx.block.findFirst({
+    where: { id, ...propertyWhere({ propertyId }) },
+    select: blockSelect,
+  });
 }
 
 /** Locks a block FOR UPDATE (block commands; ARCHITECTURE §5 — before inventory cells). */
 export async function lockBlock(tx: Tx, propertyId: string, id: string) {
   const rows = await tx.$queryRaw<{ id: string; version: number }[]>`
     SELECT "id", "version" FROM "blocks"
-    WHERE "id" = ${id}::uuid AND "property_id" = ${propertyId}::uuid
+    WHERE "id" = ${id}::uuid AND ${propertyFilterSql({ propertyId })}
     FOR UPDATE`;
   if (rows.length === 0) return null;
   return findBlock(tx, propertyId, id);
@@ -158,7 +165,7 @@ export async function lockBlock(tx: Tx, propertyId: string, id: string) {
 export async function lockBlockShare(tx: Tx, propertyId: string, id: string) {
   const rows = await tx.$queryRaw<{ id: string }[]>`
     SELECT "id" FROM "blocks"
-    WHERE "id" = ${id}::uuid AND "property_id" = ${propertyId}::uuid
+    WHERE "id" = ${id}::uuid AND ${propertyFilterSql({ propertyId })}
     FOR SHARE`;
   if (rows.length === 0) return null;
   return findBlock(tx, propertyId, id);
@@ -182,14 +189,14 @@ export function updateBlockVersioned(
 
 export function findBlockStatus(tx: Tx, propertyId: string, id: string) {
   return tx.blockStatus.findFirst({
-    where: { id, propertyId, status: "ACTIVE" },
+    where: { id, ...propertyWhere({ propertyId }), status: "ACTIVE" },
     select: { id: true, code: true, name: true, type: true, allowsPickup: true },
   });
 }
 
 export function findCancelStatus(tx: Tx, propertyId: string) {
   return tx.blockStatus.findFirst({
-    where: { propertyId, status: "ACTIVE", type: "CANCEL" },
+    where: { ...propertyWhere({ propertyId }), status: "ACTIVE", type: "CANCEL" },
     orderBy: [{ isDefault: "desc" }, { sortOrder: "asc" }],
     select: { id: true, code: true },
   });
@@ -273,7 +280,7 @@ export function countActivePickup(tx: Tx, blockId: string) {
 
 export function findGroupReservations(tx: Tx, propertyId: string, groupId: string) {
   return tx.reservationRoom.findMany({
-    where: { propertyId, reservation: { groupId } },
+    where: { ...propertyWhere({ propertyId }), reservation: { groupId } },
     orderBy: [{ arrivalDate: "asc" }, { createdAt: "asc" }],
     take: 200,
     select: {
@@ -292,7 +299,7 @@ export function findGroupReservations(tx: Tx, propertyId: string, groupId: strin
 }
 
 export async function findGroupOptions(tx: Tx, propertyId: string) {
-  const active = { propertyId, status: "ACTIVE" as const };
+  const active = { ...propertyWhere({ propertyId }), status: "ACTIVE" as const };
   const ref = { id: true, code: true, name: true } as const;
   return {
     statuses: await tx.blockStatus.findMany({

@@ -1,4 +1,5 @@
 import type { Tx } from "@/config/prisma";
+import { propertyFilterSql, propertyWhere } from "@/lib/scope";
 
 /**
  * Availability data access. Every figure is aggregated in PostgreSQL from the
@@ -11,7 +12,7 @@ type Db = Tx;
 export function findSellableRoomTypes(db: Db, propertyId: string, roomTypeIds?: string[]) {
   return db.roomType.findMany({
     where: {
-      propertyId,
+      ...propertyWhere({ propertyId }),
       status: "ACTIVE",
       isSellable: true,
       isPseudo: false,
@@ -34,7 +35,7 @@ export async function countPhysicalRooms(db: Db, propertyId: string, roomTypeIds
   if (roomTypeIds.length === 0) return new Map<string, number>();
   const rows = await db.room.groupBy({
     by: ["roomTypeId"],
-    where: { propertyId, status: "ACTIVE", roomTypeId: { in: roomTypeIds } },
+    where: { ...propertyWhere({ propertyId }), status: "ACTIVE", roomTypeId: { in: roomTypeIds } },
     _count: { _all: true },
   });
   return new Map(rows.map((row) => [row.roomTypeId, row._count._all]));
@@ -52,7 +53,7 @@ export function countOutOfOrder(
     SELECT r."room_type_id", d::date AS "stay_date", count(DISTINCT b."room_id")::int AS "rooms"
     FROM generate_series(${from}::date, ${to}::date - 1, interval '1 day') AS d
     JOIN "room_service_blocks" b
-      ON b."property_id" = ${propertyId}::uuid
+      ON ${propertyFilterSql({ propertyId }, "b")}
      AND b."kind" = 'OUT_OF_ORDER'
      AND b."status" IN ('SCHEDULED', 'ACTIVE')
      AND b."from_date" <= d::date AND b."to_date" > d::date
@@ -83,7 +84,7 @@ export function countCommittedNights(
     FROM "reservation_room_nights" n
     JOIN "reservation_rooms" rr ON rr."id" = n."reservation_room_id"
     JOIN "reservation_types" t ON t."id" = rr."reservation_type_id"
-    WHERE n."property_id" = ${propertyId}::uuid
+    WHERE ${propertyFilterSql({ propertyId }, "n")}
       AND n."stay_date" >= ${from}::date AND n."stay_date" < ${to}::date
       AND n."room_type_id" = ANY(${roomTypeIds}::uuid[])
       AND rr."status" IN ('RESERVED', 'IN_HOUSE')
@@ -127,7 +128,7 @@ export function countBlockedNights(
         AND rr."status" IN ('RESERVED', 'IN_HOUSE', 'CHECKED_OUT') AND t."deducts_inventory"
         AND NOT (rr."id" = ANY(${excluded}::uuid[]))
     ) p ON TRUE
-    WHERE a."property_id" = ${propertyId}::uuid
+    WHERE ${propertyFilterSql({ propertyId }, "a")}
       AND a."room_type_id" = ANY(${roomTypeIds}::uuid[])
       AND a."stay_date" >= ${from}::date AND a."stay_date" < ${to}::date
       AND (${excludeBlock}::uuid IS NULL OR a."block_id" <> ${excludeBlock}::uuid)
@@ -168,7 +169,7 @@ export async function lockBlockForShare(db: Db, propertyId: string, blockId: str
   const rows = await db.$queryRaw<{ id: string; is_elastic: boolean; status_type: string }[]>`
     SELECT b."id", b."is_elastic", s."type"::text AS "status_type"
     FROM "blocks" b JOIN "block_statuses" s ON s."id" = b."status_id"
-    WHERE b."id" = ${blockId}::uuid AND b."property_id" = ${propertyId}::uuid
+    WHERE b."id" = ${blockId}::uuid AND ${propertyFilterSql({ propertyId }, "b")}
     FOR SHARE OF b`;
   return rows[0] ?? null;
 }
@@ -191,7 +192,7 @@ export async function lockAllocationCells(
     JOIN unnest(${cells.map((c) => c.roomTypeId)}::uuid[], ${cells.map((c) => c.stayDate)}::date[])
       AS c("room_type_id", "stay_date")
       ON a."room_type_id" = c."room_type_id" AND a."stay_date" = c."stay_date"
-    WHERE a."property_id" = ${propertyId}::uuid
+    WHERE ${propertyFilterSql({ propertyId }, "a")}
     ORDER BY a."room_type_id", a."stay_date", a."block_id"
     FOR UPDATE OF a`;
 }
@@ -217,7 +218,7 @@ export async function syncAllocationPickup(
         "updated_at" = now()
     FROM unnest(${cells.map((c) => c.roomTypeId)}::uuid[], ${cells.map((c) => c.stayDate)}::date[])
       AS c("room_type_id", "stay_date")
-    WHERE a."property_id" = ${propertyId}::uuid
+    WHERE ${propertyFilterSql({ propertyId }, "a")}
       AND a."room_type_id" = c."room_type_id" AND a."stay_date" = c."stay_date"`;
 }
 
@@ -240,7 +241,7 @@ export function findInventoryControls(
   >`
     SELECT "room_type_id", "stay_date", "blocked", "overbook_limit", "sell_limit"
     FROM "room_type_inventory"
-    WHERE "property_id" = ${propertyId}::uuid
+    WHERE ${propertyFilterSql({ propertyId })}
       AND "room_type_id" = ANY(${roomTypeIds}::uuid[])
       AND "stay_date" >= ${from}::date AND "stay_date" < ${to}::date`;
 }
@@ -249,7 +250,7 @@ export function findInventoryControls(
 export function findRestrictions(db: Db, propertyId: string, arrival: string, departure: string) {
   return db.restriction.findMany({
     where: {
-      propertyId,
+      ...propertyWhere({ propertyId }),
       stayDate: {
         gte: new Date(`${arrival}T00:00:00.000Z`),
         lte: new Date(`${departure}T00:00:00.000Z`),
@@ -289,7 +290,7 @@ export async function lockInventoryCells(
     FROM "room_type_inventory" i
     JOIN unnest(${roomTypeIds}::uuid[], ${dates}::date[]) AS c("room_type_id", "stay_date")
       ON i."room_type_id" = c."room_type_id" AND i."stay_date" = c."stay_date"
-    WHERE i."property_id" = ${propertyId}::uuid
+    WHERE ${propertyFilterSql({ propertyId }, "i")}
     ORDER BY i."room_type_id", i."stay_date"
     FOR UPDATE OF i`;
 }
@@ -320,6 +321,6 @@ export async function writeInventoryCounters(
       ${cells.map((c) => c.sold)}::int[],
       ${cells.map((c) => c.blocked)}::int[]
     ) AS c("room_type_id", "stay_date", "physical", "ooo", "sold", "blocked")
-    WHERE i."property_id" = ${propertyId}::uuid
+    WHERE ${propertyFilterSql({ propertyId }, "i")}
       AND i."room_type_id" = c."room_type_id" AND i."stay_date" = c."stay_date"`;
 }

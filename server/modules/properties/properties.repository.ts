@@ -1,5 +1,6 @@
 import type { Prisma } from "@/generated/prisma/client";
 import type { Tx } from "@/config/prisma";
+import { organizationWhere, propertyFilterSql, propertyWhere } from "@/lib/scope";
 
 export const propertySelect = {
   id: true,
@@ -55,14 +56,14 @@ export function findOrganization(tx: Tx, organizationId: string) {
 /** Always scoped by organization: a property id from another tenant finds nothing. */
 export function findProperty(tx: Tx, organizationId: string, propertyId: string) {
   return tx.property.findFirst({
-    where: { id: propertyId, organizationId, status: "ACTIVE" },
+    where: { id: propertyId, ...organizationWhere({ organizationId }), status: "ACTIVE" },
     select: propertySelect,
   });
 }
 
 export function findPropertiesByIds(tx: Tx, organizationId: string, ids: string[]) {
   return tx.property.findMany({
-    where: { organizationId, status: "ACTIVE", id: { in: ids } },
+    where: { ...organizationWhere({ organizationId }), status: "ACTIVE", id: { in: ids } },
     select: propertySelect,
     orderBy: { code: "asc" },
   });
@@ -74,7 +75,7 @@ export function currencyExists(tx: Tx, code: string) {
 
 /** Properties of the organization in any status (an inactive one still counts). */
 export function countOrganizationProperties(tx: Tx, organizationId: string) {
-  return tx.property.count({ where: { organizationId } });
+  return tx.property.count({ where: { ...organizationWhere({ organizationId }) } });
 }
 
 export function insertProperty(tx: Tx, data: Prisma.PropertyUncheckedCreateInput) {
@@ -87,7 +88,7 @@ export function insertConfiguration(tx: Tx, propertyId: string) {
 
 export function findConfiguration(tx: Tx, propertyId: string) {
   return tx.propertyConfiguration.findUnique({
-    where: { propertyId },
+    where: { ...propertyWhere({ propertyId }) },
     select: configurationSelect,
   });
 }
@@ -98,7 +99,7 @@ export function upsertConfiguration(
   data: Prisma.PropertyConfigurationUncheckedUpdateInput,
 ) {
   return tx.propertyConfiguration.upsert({
-    where: { propertyId },
+    where: { ...propertyWhere({ propertyId }) },
     create: {
       propertyId,
       ...(data as Omit<Prisma.PropertyConfigurationUncheckedCreateInput, "propertyId">),
@@ -130,7 +131,7 @@ export function confirmationPrefixTaken(
 ) {
   return tx.property.count({
     where: {
-      organizationId,
+      ...organizationWhere({ organizationId }),
       confirmationPrefix: prefix,
       ...(exceptPropertyId ? { id: { not: exceptPropertyId } } : {}),
     },
@@ -165,7 +166,7 @@ export async function nextSequenceValue(
   const rows = await tx.$queryRaw<{ value: bigint; prefix: string }[]>`
     UPDATE "property_sequences"
     SET "next_value" = "next_value" + 1, "updated_at" = now()
-    WHERE "property_id" = ${propertyId}::uuid AND "name" = ${name}
+    WHERE ${propertyFilterSql({ propertyId })} AND "name" = ${name}
     RETURNING "next_value" - 1 AS "value", "prefix"`;
   const row = rows[0];
   if (!row) throw new Error(`Sequence ${name} could not be allocated`);

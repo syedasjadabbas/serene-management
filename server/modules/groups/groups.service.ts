@@ -77,6 +77,7 @@ import type {
   PickupResult,
   ReleaseResult,
 } from "@serene/shared/modules/groups/groups.types";
+import { organizationWhere, propertyFilterSql, propertyWhere } from "@/lib/scope";
 
 /**
  * Groups, blocks and pickup (docs/PMS_WORKFLOWS.md §18; docs/DOMAIN_MODEL.md
@@ -316,7 +317,7 @@ async function validateGroupRefs(
 ) {
   if (input.accountProfileId) {
     const account = await tx.accountProfile.findFirst({
-      where: { id: input.accountProfileId, organizationId: ctx.organizationId },
+      where: { id: input.accountProfileId, ...organizationWhere(ctx) },
       select: { id: true },
     });
     if (!account) throw fieldError("accountProfileId", "Unknown company or agent");
@@ -331,7 +332,7 @@ export async function createGroup(
   const id = await runInTransaction(async (tx) => {
     await validateGroupRefs(tx, ctx, input);
     const existing = await tx.group.findFirst({
-      where: { organizationId: ctx.organizationId, code: input.code },
+      where: { ...organizationWhere(ctx), code: input.code },
       select: { id: true },
     });
     if (existing) throw fieldError("code", `Group ${input.code} already exists`);
@@ -484,7 +485,7 @@ export async function createBlock(
     }
     if (
       await tx.block.findFirst({
-        where: { propertyId: ctx.propertyId, code: input.code },
+        where: { ...propertyWhere(ctx), code: input.code },
         select: { id: true },
       })
     ) {
@@ -495,7 +496,7 @@ export async function createBlock(
     if (status.type === "CANCEL") throw fieldError("statusId", "A new block cannot be cancelled");
 
     const plan = await tx.ratePlan.findFirst({
-      where: { id: input.ratePlanId, propertyId: ctx.propertyId, status: "ACTIVE" },
+      where: { id: input.ratePlanId, ...propertyWhere(ctx), status: "ACTIVE" },
       select: {
         id: true,
         defaultMarketCodeId: true,
@@ -513,9 +514,9 @@ export async function createBlock(
     }
     const reservationType = await tx.reservationType.findFirst({
       where: input.reservationTypeId
-        ? { id: input.reservationTypeId, propertyId: ctx.propertyId, status: "ACTIVE" }
+        ? { id: input.reservationTypeId, ...propertyWhere(ctx), status: "ACTIVE" }
         : {
-            propertyId: ctx.propertyId,
+            ...propertyWhere(ctx),
             status: "ACTIVE",
             deductsInventory: true,
             isGuaranteed: true,
@@ -530,13 +531,13 @@ export async function createBlock(
     const sourceCodeId = input.sourceCodeId ?? plan.defaultSourceCodeId;
     if (
       !marketCodeId ||
-      !(await tx.marketCode.findFirst({ where: { id: marketCodeId, propertyId: ctx.propertyId } }))
+      !(await tx.marketCode.findFirst({ where: { id: marketCodeId, ...propertyWhere(ctx) } }))
     ) {
       throw fieldError("marketCodeId", "Select a market segment");
     }
     if (
       !sourceCodeId ||
-      !(await tx.sourceCode.findFirst({ where: { id: sourceCodeId, propertyId: ctx.propertyId } }))
+      !(await tx.sourceCode.findFirst({ where: { id: sourceCodeId, ...propertyWhere(ctx) } }))
     ) {
       throw fieldError("sourceCodeId", "Select a source");
     }
@@ -978,7 +979,7 @@ export async function applyCutoffsInTx(
     SELECT b."id"
     FROM "blocks" b
     JOIN "block_statuses" s ON s."id" = b."status_id"
-    WHERE b."property_id" = ${ctx.propertyId}::uuid
+    WHERE ${propertyFilterSql({ propertyId: ctx.propertyId }, "b")}
       AND s."type" = 'DEDUCT'
       AND b."cutoff_date" IS NOT NULL AND b."cutoff_date" <= ${businessDate}::date
       AND b."end_date" > ${nextDate}::date

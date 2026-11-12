@@ -1,5 +1,6 @@
 import { Prisma, type ReservationStatus } from "@/generated/prisma/client";
 import type { Tx } from "@/config/prisma";
+import { organizationWhere, propertyFilterSql, propertyWhere } from "@/lib/scope";
 
 /**
  * Reservation data access. Every query is scoped by property (and the
@@ -12,21 +13,27 @@ const codeSelect = { id: true, code: true, name: true } as const;
 
 export function findRoomType(tx: Tx, propertyId: string, id: string) {
   return tx.roomType.findFirst({
-    where: { id, propertyId, status: "ACTIVE", isSellable: true, isPseudo: false },
+    where: {
+      id,
+      ...propertyWhere({ propertyId }),
+      status: "ACTIVE",
+      isSellable: true,
+      isPseudo: false,
+    },
     select: { ...codeSelect, maxOccupancy: true, maxAdults: true, maxChildren: true },
   });
 }
 
 export function findReservationType(tx: Tx, propertyId: string, id: string) {
   return tx.reservationType.findFirst({
-    where: { id, propertyId, status: "ACTIVE" },
+    where: { id, ...propertyWhere({ propertyId }), status: "ACTIVE" },
     select: { ...codeSelect, deductsInventory: true, isGuaranteed: true },
   });
 }
 
 export function findRatePlanDefaults(tx: Tx, propertyId: string, id: string) {
   return tx.ratePlan.findFirst({
-    where: { id, propertyId, status: "ACTIVE" },
+    where: { id, ...propertyWhere({ propertyId }), status: "ACTIVE" },
     select: {
       ...codeSelect,
       defaultMarketCodeId: true,
@@ -39,20 +46,23 @@ export function findRatePlanDefaults(tx: Tx, propertyId: string, id: string) {
 
 export function findMarketCode(tx: Tx, propertyId: string, id: string) {
   return tx.marketCode.findFirst({
-    where: { id, propertyId, status: "ACTIVE" },
+    where: { id, ...propertyWhere({ propertyId }), status: "ACTIVE" },
     select: codeSelect,
   });
 }
 
 export function findSourceCode(tx: Tx, propertyId: string, id: string) {
   return tx.sourceCode.findFirst({
-    where: { id, propertyId, status: "ACTIVE" },
+    where: { id, ...propertyWhere({ propertyId }), status: "ACTIVE" },
     select: codeSelect,
   });
 }
 
 export function findChannel(tx: Tx, propertyId: string, id: string) {
-  return tx.channel.findFirst({ where: { id, propertyId, status: "ACTIVE" }, select: codeSelect });
+  return tx.channel.findFirst({
+    where: { id, ...propertyWhere({ propertyId }), status: "ACTIVE" },
+    select: codeSelect,
+  });
 }
 
 export function findReasonCode(
@@ -62,7 +72,7 @@ export function findReasonCode(
   category: "CANCELLATION" | "NO_SHOW" | "ROOM_MOVE" | "EARLY_DEPARTURE",
 ) {
   return tx.reasonCode.findFirst({
-    where: { id, propertyId, category, status: "ACTIVE" },
+    where: { id, ...propertyWhere({ propertyId }), category, status: "ACTIVE" },
     select: { ...codeSelect, requiresComment: true },
   });
 }
@@ -71,13 +81,13 @@ export function findReasonCode(
 export async function lockRoomRow(tx: Tx, propertyId: string, id: string) {
   await tx.$queryRaw`
     SELECT "id" FROM "rooms"
-    WHERE "id" = ${id}::uuid AND "property_id" = ${propertyId}::uuid
+    WHERE "id" = ${id}::uuid AND ${propertyFilterSql({ propertyId })}
     FOR UPDATE`;
 }
 
 export function findRoom(tx: Tx, propertyId: string, id: string) {
   return tx.room.findFirst({
-    where: { id, propertyId, status: "ACTIVE" },
+    where: { id, ...propertyWhere({ propertyId }), status: "ACTIVE" },
     select: { id: true, number: true, roomTypeId: true },
   });
 }
@@ -140,7 +150,7 @@ export function deleteReservationPackage(tx: Tx, id: string) {
 /** A reservation room's stay nights, for room-charge posting (billing). */
 export function findNightsForPosting(tx: Tx, propertyId: string, reservationRoomId: string) {
   return tx.reservationRoomNight.findMany({
-    where: { propertyId, reservationRoomId },
+    where: { ...propertyWhere({ propertyId }), reservationRoomId },
     orderBy: { stayDate: "asc" },
     select: {
       stayDate: true,
@@ -157,7 +167,7 @@ export function findNightsForPosting(tx: Tx, propertyId: string, reservationRoom
 /** Stay nights of many reservation rooms for posting (night audit batch, M8). */
 export function findNightsForPostingMany(tx: Tx, propertyId: string, reservationRoomIds: string[]) {
   return tx.reservationRoomNight.findMany({
-    where: { propertyId, reservationRoomId: { in: reservationRoomIds } },
+    where: { ...propertyWhere({ propertyId }), reservationRoomId: { in: reservationRoomIds } },
     orderBy: [{ reservationRoomId: "asc" }, { stayDate: "asc" }],
     select: {
       reservationRoomId: true,
@@ -332,10 +342,13 @@ const lockedRoomSelect = {
 export async function lockReservationRoom(tx: Tx, propertyId: string, id: string) {
   const locked = await tx.$queryRaw<{ id: string }[]>`
     SELECT "id" FROM "reservation_rooms"
-    WHERE "id" = ${id}::uuid AND "property_id" = ${propertyId}::uuid
+    WHERE "id" = ${id}::uuid AND ${propertyFilterSql({ propertyId })}
     FOR UPDATE`;
   if (locked.length === 0) return null;
-  return tx.reservationRoom.findFirst({ where: { id, propertyId }, select: lockedRoomSelect });
+  return tx.reservationRoom.findFirst({
+    where: { id, ...propertyWhere({ propertyId }) },
+    select: lockedRoomSelect,
+  });
 }
 
 /**
@@ -346,7 +359,7 @@ export async function lockReservationRooms(tx: Tx, propertyId: string, ids: stri
   if (ids.length === 0) return [];
   const locked = await tx.$queryRaw<{ id: string }[]>`
     SELECT "id" FROM "reservation_rooms"
-    WHERE "property_id" = ${propertyId}::uuid AND "id" = ANY(${ids}::uuid[])
+    WHERE ${propertyFilterSql({ propertyId })} AND "id" = ANY(${ids}::uuid[])
     ORDER BY "id"
     FOR UPDATE`;
   return tx.reservationRoom.findMany({
@@ -454,7 +467,7 @@ export function findReservationListRows(
     FROM "reservation_rooms" rr
     JOIN "reservations" res ON res."property_id" = rr."property_id" AND res."id" = rr."reservation_id"
     JOIN "guests" g ON g."id" = rr."primary_guest_id"
-    WHERE rr."property_id" = ${propertyId}::uuid
+    WHERE ${propertyFilterSql({ propertyId }, "rr")}
       AND rr."id" IN (${Prisma.join(ids.map((id) => Prisma.sql`${id}::uuid`))})
     ORDER BY ${key} ${direction}, rr."id" ${direction}`;
 }
@@ -467,7 +480,7 @@ export function findGuestIdsByName(tx: Tx, filters: Prisma.GuestWhereInput[], ta
 /** The property's room with exactly this number (unique per property), if any. */
 export function findRoomByNumber(tx: Tx, propertyId: string, number: string) {
   return tx.room.findUnique({
-    where: { propertyId_number: { propertyId, number } },
+    where: { propertyId_number: { ...propertyWhere({ propertyId }), number } },
     select: { id: true },
   });
 }
@@ -525,7 +538,7 @@ export async function findReservationRoomPageKeysMatching(
 
 export function findReservationDetail(tx: Tx, propertyId: string, reservationId: string) {
   return tx.reservation.findFirst({
-    where: { id: reservationId, propertyId },
+    where: { id: reservationId, ...propertyWhere({ propertyId }) },
     select: {
       id: true,
       confirmationNumber: true,
@@ -623,7 +636,11 @@ export function findAuditHistory(
   resourceIds: string[],
 ) {
   return tx.auditLog.findMany({
-    where: { organizationId, propertyId, resourceId: { in: resourceIds } },
+    where: {
+      ...organizationWhere({ organizationId }),
+      ...propertyWhere({ propertyId }),
+      resourceId: { in: resourceIds },
+    },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: 100,
     select: {
@@ -642,13 +659,13 @@ export function findAuditHistory(
 export function findUserNames(tx: Tx, organizationId: string, ids: string[]) {
   if (ids.length === 0) return Promise.resolve([]);
   return tx.user.findMany({
-    where: { organizationId, id: { in: ids } },
+    where: { ...organizationWhere({ organizationId }), id: { in: ids } },
     select: { id: true, displayName: true },
   });
 }
 
 export async function findBookingOptions(tx: Tx, propertyId: string) {
-  const active = { propertyId, status: "ACTIVE" } as const;
+  const active = { ...propertyWhere({ propertyId }), status: "ACTIVE" } as const;
   const orderByCode = { code: "asc" } as const;
   const roomTypes = await tx.roomType.findMany({
     where: { ...active, isSellable: true, isPseudo: false },
@@ -724,7 +741,7 @@ export function findAvailableRooms(
            ) AS "out_of_service", r."is_accessible", r."is_smoking"
     FROM "rooms" r
     LEFT JOIN "floors" f ON f."id" = r."floor_id"
-    WHERE r."property_id" = ${propertyId}::uuid
+    WHERE ${propertyFilterSql({ propertyId }, "r")}
       AND r."room_type_id" = ${roomTypeId}::uuid
       AND r."status" = 'ACTIVE'
       AND NOT EXISTS (
@@ -748,7 +765,7 @@ export async function lockReservation(tx: Tx, propertyId: string, id: string) {
     { id: string; version: number; company_id: string | null; booker_guest_id: string | null }[]
   >`
     SELECT "id", "version", "company_id", "booker_guest_id" FROM "reservations"
-    WHERE "id" = ${id}::uuid AND "property_id" = ${propertyId}::uuid
+    WHERE "id" = ${id}::uuid AND ${propertyFilterSql({ propertyId })}
     FOR UPDATE`;
   return rows[0] ?? null;
 }
@@ -757,7 +774,7 @@ export async function lockReservation(tx: Tx, propertyId: string, id: string) {
 export function findActiveRoomsForCompany(tx: Tx, propertyId: string, reservationId: string) {
   return tx.reservationRoom.findMany({
     where: {
-      propertyId,
+      ...propertyWhere({ propertyId }),
       reservationId,
       status: { in: ["RESERVED", "WAITLISTED", "IN_HOUSE"] },
     },

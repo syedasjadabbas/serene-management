@@ -1,5 +1,6 @@
 import type { Prisma } from "@/generated/prisma/client";
 import type { Tx } from "@/config/prisma";
+import { organizationFilterSql, organizationWhere } from "@/lib/scope";
 
 const MANAGED_TYPES = ["COMPANY", "TRAVEL_AGENT"] as const;
 
@@ -13,7 +14,7 @@ export function findAccountsPage(
 ) {
   const and: Prisma.AccountProfileWhereInput[] = [
     {
-      organizationId,
+      ...organizationWhere({ organizationId }),
       deletedAt: null,
       status: filters.status,
       type: filters.type ? (filters.type as "COMPANY") : { in: [...MANAGED_TYPES] },
@@ -53,7 +54,12 @@ export function findAccountsPage(
 
 export function findAccount(tx: Tx, organizationId: string, id: string) {
   return tx.accountProfile.findFirst({
-    where: { id, organizationId, deletedAt: null, status: { in: ["ACTIVE", "INACTIVE"] } },
+    where: {
+      id,
+      ...organizationWhere({ organizationId }),
+      deletedAt: null,
+      status: { in: ["ACTIVE", "INACTIVE"] },
+    },
     select: {
       id: true,
       version: true,
@@ -103,7 +109,13 @@ export type AccountRow = NonNullable<Awaited<ReturnType<typeof findAccount>>>;
 /** Account usable on a reservation: active company of the organization. */
 export function findBookableAccount(tx: Tx, organizationId: string, id: string) {
   return tx.accountProfile.findFirst({
-    where: { id, organizationId, deletedAt: null, status: "ACTIVE", type: "COMPANY" },
+    where: {
+      id,
+      ...organizationWhere({ organizationId }),
+      deletedAt: null,
+      status: "ACTIVE",
+      type: "COMPANY",
+    },
     select: { id: true, code: true, name: true, isRestricted: true },
   });
 }
@@ -111,7 +123,7 @@ export function findBookableAccount(tx: Tx, organizationId: string, id: string) 
 export async function lockAccount(tx: Tx, organizationId: string, id: string) {
   const rows = await tx.$queryRaw<{ id: string; version: number; type: string }[]>`
     SELECT "id", "version", "type"::text AS "type" FROM "account_profiles"
-    WHERE "id" = ${id}::uuid AND "organization_id" = ${organizationId}::uuid
+    WHERE "id" = ${id}::uuid AND ${organizationFilterSql({ organizationId })}
       AND "deleted_at" IS NULL AND "status" IN ('ACTIVE', 'INACTIVE')
     FOR UPDATE`;
   return rows[0] ?? null;
@@ -119,7 +131,7 @@ export async function lockAccount(tx: Tx, organizationId: string, id: string) {
 
 export function accountCodeTaken(tx: Tx, organizationId: string, type: string, code: string) {
   return tx.accountProfile.count({
-    where: { organizationId, type: type as "COMPANY", code },
+    where: { ...organizationWhere({ organizationId }), type: type as "COMPANY", code },
   });
 }
 
@@ -135,7 +147,7 @@ export function updateAccountVersioned(
   data: Prisma.AccountProfileUncheckedUpdateManyInput,
 ) {
   return tx.accountProfile.updateMany({
-    where: { id, organizationId, version },
+    where: { id, ...organizationWhere({ organizationId }), version },
     data: { ...data, version: { increment: 1 } },
   });
 }

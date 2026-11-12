@@ -1,6 +1,7 @@
 import { Prisma } from "@/generated/prisma/client";
 import type { Tx } from "@/config/prisma";
 import { consonantSkeleton } from "@serene/shared/lib/utils/text-match";
+import { organizationFilterSql, organizationWhere } from "@/lib/scope";
 
 const assignmentSelect = {
   id: true,
@@ -51,7 +52,7 @@ export async function findUsersPage(
     });
   }
   const where: Prisma.UserWhereInput = {
-    organizationId,
+    ...organizationWhere({ organizationId }),
     ...(conditions.length > 0 ? { AND: conditions } : {}),
   };
   const [rows, total] = await Promise.all([
@@ -68,12 +69,15 @@ export async function findUsersPage(
 }
 
 export function findUserInOrganization(tx: Tx, organizationId: string, userId: string) {
-  return tx.user.findFirst({ where: { id: userId, organizationId }, select: userSelect });
+  return tx.user.findFirst({
+    where: { id: userId, ...organizationWhere({ organizationId }) },
+    select: userSelect,
+  });
 }
 
 export function findRolesWithPermissions(tx: Tx, organizationId: string) {
   return tx.role.findMany({
-    where: { organizationId },
+    where: { ...organizationWhere({ organizationId }) },
     select: {
       id: true,
       code: true,
@@ -87,14 +91,14 @@ export function findRolesWithPermissions(tx: Tx, organizationId: string) {
 
 export function findOrganizationRole(tx: Tx, organizationId: string, roleId: string) {
   return tx.role.findFirst({
-    where: { id: roleId, organizationId },
+    where: { id: roleId, ...organizationWhere({ organizationId }) },
     select: { id: true, code: true, name: true, permissions: { select: { permissionKey: true } } },
   });
 }
 
 export function findPropertyInOrganization(tx: Tx, organizationId: string, propertyId: string) {
   return tx.property.findFirst({
-    where: { id: propertyId, organizationId, status: "ACTIVE" },
+    where: { id: propertyId, ...organizationWhere({ organizationId }), status: "ACTIVE" },
     select: { id: true },
   });
 }
@@ -118,7 +122,7 @@ export function findRoleAssignment(
   assignmentId: string,
 ) {
   return tx.userRoleAssignment.findFirst({
-    where: { id: assignmentId, userId, user: { organizationId } },
+    where: { id: assignmentId, userId, user: { ...organizationWhere({ organizationId }) } },
     select: {
       ...assignmentSelect,
       propertyId: true,
@@ -155,7 +159,7 @@ export async function lockOrganization(tx: Tx, organizationId: string) {
 
 export function findUserAuthority(tx: Tx, organizationId: string, userId: string) {
   return tx.user.findFirst({
-    where: { id: userId, organizationId },
+    where: { id: userId, ...organizationWhere({ organizationId }) },
     select: { id: true, status: true, isSuperAdmin: true },
   });
 }
@@ -177,7 +181,7 @@ export async function countOrganizationAdministrators(
   const rows = await tx.$queryRaw<{ n: number }[]>`
     SELECT count(*)::int AS "n"
     FROM "users" u
-    WHERE u."organization_id" = ${organizationId}::uuid
+    WHERE ${organizationFilterSql({ organizationId }, "u")}
       AND u."status" = 'ACTIVE'
       ${change.excludeUserId ? Prisma.sql`AND u."id" <> ${change.excludeUserId}::uuid` : Prisma.empty}
       AND (

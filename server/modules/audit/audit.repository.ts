@@ -4,6 +4,7 @@ import type {
   AuditLogQuery,
   OrganizationAuditLogQuery,
 } from "@serene/shared/modules/audit/audit.schema";
+import { organizationWhere, propertyWhere } from "@/lib/scope";
 
 export function insertAuditLog(tx: Tx, data: Prisma.AuditLogUncheckedCreateInput) {
   return tx.auditLog.create({ data, select: { id: true } });
@@ -21,7 +22,7 @@ export function findPropertyAuditLogs(
 ) {
   return tx.auditLog.findMany({
     where: {
-      propertyId,
+      ...propertyWhere({ propertyId }),
       ...(query.risk ? { risk: query.risk } : {}),
       ...(query.resourceType ? { resourceType: query.resourceType } : {}),
       ...(query.resourceId ? { resourceId: query.resourceId } : {}),
@@ -99,7 +100,7 @@ export function findOrganizationAuditLogs(
   }
   return tx.auditLog.findMany({
     where: {
-      organizationId: scope.organizationId,
+      ...organizationWhere(scope),
       ...(query.risk ? { risk: query.risk } : {}),
       ...(query.resourceType ? { resourceType: query.resourceType } : {}),
       ...(query.resourceId ? { resourceId: query.resourceId } : {}),
@@ -116,7 +117,7 @@ export function findOrganizationAuditLogs(
 export function findPropertyCodes(tx: Tx, organizationId: string, ids: string[]) {
   if (ids.length === 0) return Promise.resolve([]);
   return tx.property.findMany({
-    where: { organizationId, id: { in: ids } },
+    where: { ...organizationWhere({ organizationId }), id: { in: ids } },
     select: { id: true, code: true },
   });
 }
@@ -124,7 +125,7 @@ export function findPropertyCodes(tx: Tx, organizationId: string, ids: string[])
 export function findUserNames(tx: Tx, organizationId: string, userIds: string[]) {
   if (userIds.length === 0) return Promise.resolve([]);
   return tx.user.findMany({
-    where: { organizationId, id: { in: userIds } },
+    where: { ...organizationWhere({ organizationId }), id: { in: userIds } },
     select: { id: true, displayName: true },
   });
 }
@@ -145,7 +146,7 @@ export function findResourceHistory(
 ) {
   return tx.auditLog.findMany({
     where: {
-      organizationId: scope.organizationId,
+      ...organizationWhere(scope),
       resourceId: { in: resourceIds },
       OR: [
         { propertyId: { in: scope.propertyIds } },

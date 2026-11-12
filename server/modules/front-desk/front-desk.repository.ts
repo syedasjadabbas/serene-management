@@ -1,6 +1,7 @@
 import { confirmationMatchSql } from "@/modules/properties/confirmation-number.sql";
 import { Prisma } from "@/generated/prisma/client";
 import type { Tx } from "@/config/prisma";
+import { propertyFilterSql, propertyWhere } from "@/lib/scope";
 
 /**
  * Front desk data access. The front desk is part of the "Reservations &
@@ -15,7 +16,7 @@ import type { Tx } from "@/config/prisma";
 
 export function findStayRef(tx: Tx, propertyId: string, stayId: string) {
   return tx.stay.findFirst({
-    where: { id: stayId, propertyId },
+    where: { id: stayId, ...propertyWhere({ propertyId }) },
     select: { id: true, reservationRoomId: true },
   });
 }
@@ -36,7 +37,7 @@ export async function lockStay(tx: Tx, propertyId: string, stayId: string) {
     SELECT "id", "reservation_room_id", "room_id", "primary_guest_id", "status"::text AS "status",
            "version", "arrival_business_date"
     FROM "stays"
-    WHERE "id" = ${stayId}::uuid AND "property_id" = ${propertyId}::uuid
+    WHERE "id" = ${stayId}::uuid AND ${propertyFilterSql({ propertyId })}
     FOR UPDATE`;
   return rows[0] ?? null;
 }
@@ -59,7 +60,7 @@ export function updateStayVersioned(
 
 export function findStayDetail(tx: Tx, propertyId: string, stayId: string) {
   return tx.stay.findFirst({
-    where: { id: stayId, propertyId },
+    where: { id: stayId, ...propertyWhere({ propertyId }) },
     select: {
       id: true,
       status: true,
@@ -135,7 +136,7 @@ export function findStayDetail(tx: Tx, propertyId: string, stayId: string) {
 
 export function findReservationRoomForOptions(tx: Tx, propertyId: string, id: string) {
   return tx.reservationRoom.findFirst({
-    where: { id, propertyId },
+    where: { id, ...propertyWhere({ propertyId }) },
     select: {
       id: true,
       status: true,
@@ -149,7 +150,11 @@ export function findReservationRoomForOptions(tx: Tx, propertyId: string, id: st
 
 export function findOperationalReasonCodes(tx: Tx, propertyId: string) {
   return tx.reasonCode.findMany({
-    where: { propertyId, status: "ACTIVE", category: { in: ["ROOM_MOVE", "EARLY_DEPARTURE"] } },
+    where: {
+      ...propertyWhere({ propertyId }),
+      status: "ACTIVE",
+      category: { in: ["ROOM_MOVE", "EARLY_DEPARTURE"] },
+    },
     orderBy: { code: "asc" },
     select: { id: true, code: true, name: true, category: true },
   });
@@ -268,7 +273,7 @@ export function findArrivals(
     LEFT JOIN "rooms" r ON r."id" = rr."room_id"
     LEFT JOIN "stays" s ON s."reservation_room_id" = rr."id"
     ${latestNote}
-    WHERE rr."property_id" = ${propertyId}::uuid
+    WHERE ${propertyFilterSql({ propertyId }, "rr")}
       AND rr."arrival_date" = ${businessDate}::date
       ${filter ?? Prisma.empty}
       ${searchCondition(options.search)}
@@ -360,7 +365,7 @@ export function findStayRows(
     LEFT JOIN "vip_levels" v ON v."id" = g."vip_level_id"
     JOIN "rooms" r ON r."id" = s."room_id"
     ${latestNote}
-    WHERE s."property_id" = ${propertyId}::uuid
+    WHERE ${propertyFilterSql({ propertyId }, "s")}
       AND ${stayListCondition(selection, businessDate)}
       ${searchCondition(options.search)}
       ${cursorCondition(options.cursor, Prisma.sql`s."id"`)}
@@ -388,10 +393,10 @@ export async function findSummaryCounts(tx: Tx, propertyId: string, businessDate
       count(*) FILTER (WHERE rr."status" = 'IN_HOUSE' AND rr."arrival_date" = ${businessDate}::date)::int AS "in_house_arrived_today",
       count(*) FILTER (WHERE rr."status" = 'IN_HOUSE' AND rr."departure_date" <= ${businessDate}::date)::int AS "due_out",
       (SELECT count(*) FROM "stays" s
-        WHERE s."property_id" = ${propertyId}::uuid AND s."status" = 'CHECKED_OUT'
+        WHERE ${propertyFilterSql({ propertyId }, "s")} AND s."status" = 'CHECKED_OUT'
           AND s."departure_business_date" = ${businessDate}::date)::int AS "departed"
     FROM "reservation_rooms" rr
-    WHERE rr."property_id" = ${propertyId}::uuid
+    WHERE ${propertyFilterSql({ propertyId }, "rr")}
       AND ((rr."arrival_date" = ${businessDate}::date AND rr."status" IN ('RESERVED', 'IN_HOUSE'))
            OR rr."status" = 'IN_HOUSE')`;
   return rows[0]!;

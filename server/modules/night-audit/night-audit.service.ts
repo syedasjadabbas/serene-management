@@ -97,6 +97,7 @@ import type {
   RunStepView,
   RunView,
 } from "@serene/shared/modules/night-audit/night-audit.types";
+import { propertyWhere } from "@/lib/scope";
 
 /**
  * Night audit (docs/PMS_WORKFLOWS.md §26, ARCHITECTURE D7, D30–D34).
@@ -323,7 +324,7 @@ export async function getReadiness(
 ): Promise<ReadinessView> {
   const propertyLocalDate = localDateInZone(now, ctx.timezone);
   const current = await prisma.businessDate.findFirst({
-    where: { propertyId: ctx.propertyId, isCurrent: true },
+    where: { ...propertyWhere(ctx), isCurrent: true },
     select: { date: true, status: true },
   });
   const running = await findRunningRun(prisma, ctx.propertyId);

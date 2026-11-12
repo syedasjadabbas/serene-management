@@ -1,5 +1,6 @@
 import { Prisma } from "@/generated/prisma/client";
 import type { Tx } from "@/config/prisma";
+import { organizationFilterSql, organizationWhere } from "@/lib/scope";
 
 export const guestSummarySelect = {
   id: true,
@@ -77,7 +78,7 @@ export async function searchGuests(
   if (!terms) return listGuests(tx, organizationId, status, after, limit);
   const window = sizes.window ?? SEARCH_WINDOW;
   const cap = sizes.cap ?? SEARCH_CANDIDATE_CAP;
-  const eligible = Prisma.sql`g."organization_id" = ${organizationId}::uuid
+  const eligible = Prisma.sql`${organizationFilterSql({ organizationId }, "g")}
     AND g."status" = ${status}::"profile_status" AND g."deleted_at" IS NULL`;
   const afterCursor = after
     ? Prisma.sql`AND (g."last_name" > ${after.lastName}
@@ -156,7 +157,7 @@ export async function searchGuests(
              g."vip_level_id"
       FROM (
         SELECT g.* FROM "guests" g
-        WHERE g."organization_id" = ${organizationId}::uuid ${windowCursor}
+        WHERE ${organizationFilterSql({ organizationId }, "g")} ${windowCursor}
         ORDER BY g."last_name", g."first_name", g."id"
         LIMIT ${window}
       ) g
@@ -229,7 +230,9 @@ function listGuests(
   after: { lastName: string; firstName: string; id: string } | null,
   limit: number,
 ) {
-  const and: Prisma.GuestWhereInput[] = [{ organizationId, status, deletedAt: null }];
+  const and: Prisma.GuestWhereInput[] = [
+    { ...organizationWhere({ organizationId }), status, deletedAt: null },
+  ];
   if (after) {
     and.push({
       OR: [
@@ -274,7 +277,7 @@ export async function findGuestIdsByConfirmation(
 
 export function findGuest(tx: Tx, organizationId: string, guestId: string) {
   return tx.guest.findFirst({
-    where: { id: guestId, organizationId, ...activeProfile },
+    where: { id: guestId, ...organizationWhere({ organizationId }), ...activeProfile },
     select: guestSummarySelect,
   });
 }
@@ -282,7 +285,12 @@ export function findGuest(tx: Tx, organizationId: string, guestId: string) {
 /** Any status except merged / anonymized / deleted (the profile page shows inactive ones). */
 export function findGuestAnyStatus(tx: Tx, organizationId: string, guestId: string) {
   return tx.guest.findFirst({
-    where: { id: guestId, organizationId, deletedAt: null, status: { in: ["ACTIVE", "INACTIVE"] } },
+    where: {
+      id: guestId,
+      ...organizationWhere({ organizationId }),
+      deletedAt: null,
+      status: { in: ["ACTIVE", "INACTIVE"] },
+    },
     select: { id: true },
   });
 }
@@ -291,7 +299,7 @@ export function findGuestAnyStatus(tx: Tx, organizationId: string, guestId: stri
 export async function lockGuest(tx: Tx, organizationId: string, guestId: string) {
   const rows = await tx.$queryRaw<{ id: string; version: number; status: string }[]>`
     SELECT "id", "version", "status"::text AS "status" FROM "guests"
-    WHERE "id" = ${guestId}::uuid AND "organization_id" = ${organizationId}::uuid
+    WHERE "id" = ${guestId}::uuid AND ${organizationFilterSql({ organizationId })}
       AND "deleted_at" IS NULL AND "status" IN ('ACTIVE', 'INACTIVE')
     FOR UPDATE`;
   return rows[0] ?? null;
@@ -302,7 +310,7 @@ export function insertGuest(tx: Tx, data: Prisma.GuestUncheckedCreateInput) {
 }
 
 export function profileNumberExists(tx: Tx, organizationId: string, profileNumber: string) {
-  return tx.guest.count({ where: { organizationId, profileNumber } });
+  return tx.guest.count({ where: { ...organizationWhere({ organizationId }), profileNumber } });
 }
 
 /** Active profiles sharing an e-mail or phone (duplicate warning on create). */
@@ -318,7 +326,7 @@ export function findPossibleDuplicates(
   if (digits && digits.length >= 6) or.push({ phoneDigits: digits });
   if (or.length === 0) return Promise.resolve([]);
   return tx.guest.findMany({
-    where: { organizationId, ...activeProfile, OR: or },
+    where: { ...organizationWhere({ organizationId }), ...activeProfile, OR: or },
     select: guestSummarySelect,
     orderBy: { id: "asc" },
     take: 5,
@@ -431,7 +439,12 @@ export type GuestProfileRow = Prisma.GuestGetPayload<{ select: typeof guestProfi
 
 export function findGuestProfile(tx: Tx, organizationId: string, guestId: string) {
   return tx.guest.findFirst({
-    where: { id: guestId, organizationId, deletedAt: null, status: { in: ["ACTIVE", "INACTIVE"] } },
+    where: {
+      id: guestId,
+      ...organizationWhere({ organizationId }),
+      deletedAt: null,
+      status: { in: ["ACTIVE", "INACTIVE"] },
+    },
     select: guestProfileSelect,
   });
 }
@@ -439,7 +452,7 @@ export function findGuestProfile(tx: Tx, organizationId: string, guestId: string
 export function findUserNames(tx: Tx, organizationId: string, ids: string[]) {
   if (ids.length === 0) return Promise.resolve([]);
   return tx.user.findMany({
-    where: { organizationId, id: { in: [...new Set(ids)] } },
+    where: { ...organizationWhere({ organizationId }), id: { in: [...new Set(ids)] } },
     select: { id: true, displayName: true },
   });
 }
@@ -452,7 +465,7 @@ export function updateGuestVersioned(
   data: Prisma.GuestUncheckedUpdateManyInput,
 ) {
   return tx.guest.updateMany({
-    where: { id: guestId, organizationId, version },
+    where: { id: guestId, ...organizationWhere({ organizationId }), version },
     data: { ...data, version: { increment: 1 } },
   });
 }
@@ -490,7 +503,7 @@ export async function replaceAddresses(
 
 export function findVipLevel(tx: Tx, organizationId: string, id: string) {
   return tx.vipLevel.findFirst({
-    where: { id, organizationId, status: "ACTIVE" },
+    where: { id, ...organizationWhere({ organizationId }), status: "ACTIVE" },
     select: { id: true, code: true },
   });
 }
@@ -498,12 +511,12 @@ export function findVipLevel(tx: Tx, organizationId: string, id: string) {
 export function findGuestOptions(tx: Tx, organizationId: string) {
   return Promise.all([
     tx.vipLevel.findMany({
-      where: { organizationId, status: "ACTIVE" },
+      where: { ...organizationWhere({ organizationId }), status: "ACTIVE" },
       orderBy: [{ rank: "asc" }, { code: "asc" }],
       select: { id: true, code: true, name: true },
     }),
     tx.preferenceCode.findMany({
-      where: { organizationId, status: "ACTIVE" },
+      where: { ...organizationWhere({ organizationId }), status: "ACTIVE" },
       orderBy: [{ groupCode: "asc" }, { code: "asc" }],
       select: { id: true, code: true, name: true, groupCode: true },
     }),
@@ -512,14 +525,14 @@ export function findGuestOptions(tx: Tx, organizationId: string) {
 
 export function findPreferenceCodes(tx: Tx, organizationId: string, ids: string[]) {
   return tx.preferenceCode.findMany({
-    where: { organizationId, status: "ACTIVE", id: { in: ids } },
+    where: { ...organizationWhere({ organizationId }), status: "ACTIVE", id: { in: ids } },
     select: { id: true, code: true, groupCode: true },
   });
 }
 
 export function findPreferenceRows(tx: Tx, organizationId: string, guestId: string) {
   return tx.guestPreference.findMany({
-    where: { guestId, guest: { organizationId } },
+    where: { guestId, guest: { ...organizationWhere({ organizationId }) } },
     select: {
       id: true,
       propertyId: true,
@@ -558,7 +571,12 @@ export function insertNote(tx: Tx, data: Prisma.GuestNoteUncheckedCreateInput) {
 
 export function findNote(tx: Tx, organizationId: string, guestId: string, noteId: string) {
   return tx.guestNote.findFirst({
-    where: { id: noteId, guestId, guest: { organizationId }, deletedAt: null },
+    where: {
+      id: noteId,
+      guestId,
+      guest: { ...organizationWhere({ organizationId }) },
+      deletedAt: null,
+    },
     select: { id: true, visibility: true, propertyId: true, createdById: true, isAlert: true },
   });
 }
@@ -698,7 +716,7 @@ export function findGuestHistory(
 
 export function findPropertiesByIds(tx: Tx, organizationId: string, ids: string[]) {
   return tx.property.findMany({
-    where: { organizationId, id: { in: ids } },
+    where: { ...organizationWhere({ organizationId }), id: { in: ids } },
     orderBy: { code: "asc" },
     select: { id: true, code: true, name: true },
   });

@@ -1,9 +1,10 @@
 import type { Prisma } from "@/generated/prisma/client";
 import type { Tx } from "@/config/prisma";
+import { organizationFilterSql, organizationWhere } from "@/lib/scope";
 
 export function findPrograms(tx: Tx, organizationId: string) {
   return tx.loyaltyProgram.findMany({
-    where: { organizationId },
+    where: { ...organizationWhere({ organizationId }) },
     orderBy: [{ status: "asc" }, { code: "asc" }],
     select: {
       id: true,
@@ -31,13 +32,13 @@ export function findPrograms(tx: Tx, organizationId: string) {
 
 export function findProgram(tx: Tx, organizationId: string, id: string) {
   return tx.loyaltyProgram.findFirst({
-    where: { id, organizationId },
+    where: { id, ...organizationWhere({ organizationId }) },
     select: { id: true, code: true, name: true, isExternal: true, status: true },
   });
 }
 
 export function programCodeTaken(tx: Tx, organizationId: string, code: string) {
-  return tx.loyaltyProgram.count({ where: { organizationId, code } });
+  return tx.loyaltyProgram.count({ where: { ...organizationWhere({ organizationId }), code } });
 }
 
 export function insertProgram(tx: Tx, data: Prisma.LoyaltyProgramUncheckedCreateInput) {
@@ -50,7 +51,7 @@ export function updateProgramRow(tx: Tx, id: string, data: Prisma.LoyaltyProgram
 
 export function findTier(tx: Tx, organizationId: string, id: string) {
   return tx.loyaltyTier.findFirst({
-    where: { id, program: { organizationId } },
+    where: { id, program: { ...organizationWhere({ organizationId }) } },
     select: {
       id: true,
       programId: true,
@@ -83,7 +84,7 @@ export function findMembershipOfGuest(
   guestId: string,
 ) {
   return tx.loyaltyMembership.findFirst({
-    where: { programId, guestId, program: { organizationId } },
+    where: { programId, guestId, program: { ...organizationWhere({ organizationId }) } },
     select: { id: true, status: true },
   });
 }
@@ -113,7 +114,7 @@ export async function lockMembership(tx: Tx, organizationId: string, id: string)
            m."points_balance"::text AS "points_balance", m."version"
     FROM "loyalty_memberships" m
     JOIN "loyalty_programs" p ON p."id" = m."program_id"
-    WHERE m."id" = ${id}::uuid AND p."organization_id" = ${organizationId}::uuid
+    WHERE m."id" = ${id}::uuid AND ${organizationFilterSql({ organizationId }, "p")}
     FOR UPDATE OF m`;
   return rows[0] ?? null;
 }
@@ -126,7 +127,7 @@ export function updateMembershipVersioned(
   data: Prisma.LoyaltyMembershipUncheckedUpdateManyInput,
 ) {
   return tx.loyaltyMembership.updateMany({
-    where: { id, version, program: { organizationId } },
+    where: { id, version, program: { ...organizationWhere({ organizationId }) } },
     data: { ...data, version: { increment: 1 } },
   });
 }
@@ -149,7 +150,7 @@ export function findMembersPage(
   return tx.loyaltyMembership.findMany({
     where: {
       programId,
-      program: { organizationId },
+      program: { ...organizationWhere({ organizationId }) },
       ...(after
         ? {
             OR: [

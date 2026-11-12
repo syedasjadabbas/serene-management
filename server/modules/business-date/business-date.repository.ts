@@ -1,8 +1,9 @@
 import type { Tx } from "@/config/prisma";
+import { propertyFilterSql, propertyWhere } from "@/lib/scope";
 
 export function findCurrentBusinessDate(tx: Tx, propertyId: string) {
   return tx.businessDate.findFirst({
-    where: { propertyId, isCurrent: true },
+    where: { ...propertyWhere({ propertyId }), isCurrent: true },
     select: { id: true, date: true, status: true },
   });
 }
@@ -16,7 +17,7 @@ export function findCurrentBusinessDates(tx: Tx, propertyIds: string[]) {
 }
 
 export function countBusinessDates(tx: Tx, propertyId: string) {
-  return tx.businessDate.count({ where: { propertyId } });
+  return tx.businessDate.count({ where: { ...propertyWhere({ propertyId }) } });
 }
 
 export function insertBusinessDate(tx: Tx, propertyId: string, date: Date) {
@@ -35,7 +36,7 @@ export async function lockCurrentBusinessDateForShare(tx: Tx, propertyId: string
   const rows = await tx.$queryRaw<{ date: Date; status: string }[]>`
     SELECT "date", "status"::text AS "status"
     FROM "business_dates"
-    WHERE "property_id" = ${propertyId}::uuid AND "is_current"
+    WHERE ${propertyFilterSql({ propertyId })} AND "is_current"
     FOR SHARE`;
   return rows[0] ?? null;
 }

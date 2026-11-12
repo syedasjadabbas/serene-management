@@ -24,6 +24,7 @@ import type {
 } from "@serene/shared/modules/rates/rates.schema";
 import { currencyMinorUnits } from "./rates.service";
 import type { PackageView } from "@serene/shared/modules/rates/rates.types";
+import { propertyWhere } from "@/lib/scope";
 
 /**
  * Package configuration (Phase 6). Packages are priced and posted by the
@@ -120,7 +121,7 @@ export async function createPackage(
 ): Promise<PackageView> {
   const id = await runInTransaction(async (tx) => {
     const existing = await tx.package.findFirst({
-      where: { propertyId: ctx.propertyId, code: input.code },
+      where: { ...propertyWhere(ctx), code: input.code },
       select: { id: true },
     });
     if (existing) throw fieldError("code", `Package ${input.code} already exists`);

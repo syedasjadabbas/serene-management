@@ -1,5 +1,6 @@
 import { Prisma } from "@/generated/prisma/client";
 import type { Tx } from "@/config/prisma";
+import { propertyFilterSql, propertyWhere } from "@/lib/scope";
 
 /**
  * Room status data access: rooms, room_status_history, room_service_blocks,
@@ -43,7 +44,7 @@ export function lockRooms(tx: Tx, propertyId: string, ids: string[], businessDat
            ${liveBlock(Prisma.sql`r`, "OUT_OF_ORDER", businessDate)} AS "out_of_order",
            ${liveBlock(Prisma.sql`r`, "OUT_OF_SERVICE", businessDate)} AS "out_of_service"
     FROM "rooms" r
-    WHERE r."property_id" = ${propertyId}::uuid AND r."id" = ANY(${sorted}::uuid[])
+    WHERE ${propertyFilterSql({ propertyId }, "r")} AND r."id" = ANY(${sorted}::uuid[])
     ORDER BY r."id"
     FOR UPDATE OF r`;
 }
@@ -66,7 +67,7 @@ export function insertStatusHistory(tx: Tx, rows: Prisma.RoomStatusHistoryCreate
 
 export function findStatusHistory(tx: Tx, propertyId: string, roomIds: string[], take: number) {
   return tx.roomStatusHistory.findMany({
-    where: { propertyId, roomId: { in: roomIds } },
+    where: { ...propertyWhere({ propertyId }), roomId: { in: roomIds } },
     orderBy: { createdAt: "desc" },
     take,
     select: {
@@ -89,7 +90,7 @@ export function findStatusHistory(tx: Tx, propertyId: string, roomIds: string[],
 
 export function findRoomRef(tx: Tx, propertyId: string, id: string) {
   return tx.room.findFirst({
-    where: { id, propertyId },
+    where: { id, ...propertyWhere({ propertyId }) },
     select: { id: true, number: true, roomTypeId: true, status: true },
   });
 }
@@ -101,14 +102,18 @@ export function findServiceReasonCode(
   category: "OUT_OF_ORDER" | "OUT_OF_SERVICE",
 ) {
   return tx.reasonCode.findFirst({
-    where: { id, propertyId, category, status: "ACTIVE" },
+    where: { id, ...propertyWhere({ propertyId }), category, status: "ACTIVE" },
     select: { id: true, code: true, name: true },
   });
 }
 
 export function findServiceReasonCodes(tx: Tx, propertyId: string) {
   return tx.reasonCode.findMany({
-    where: { propertyId, status: "ACTIVE", category: { in: ["OUT_OF_ORDER", "OUT_OF_SERVICE"] } },
+    where: {
+      ...propertyWhere({ propertyId }),
+      status: "ACTIVE",
+      category: { in: ["OUT_OF_ORDER", "OUT_OF_SERVICE"] },
+    },
     orderBy: { code: "asc" },
     select: { id: true, code: true, name: true, category: true },
   });
@@ -143,7 +148,7 @@ export function findOverlappingAssignments(tx: Tx, roomId: string, from: Date, t
 }
 
 export function countInHouseStays(tx: Tx, propertyId: string, roomId: string) {
-  return tx.stay.count({ where: { propertyId, roomId, status: "IN_HOUSE" } });
+  return tx.stay.count({ where: { ...propertyWhere({ propertyId }), roomId, status: "IN_HOUSE" } });
 }
 
 export function insertServiceBlock(tx: Tx, data: Prisma.RoomServiceBlockUncheckedCreateInput) {
@@ -166,21 +171,25 @@ export async function lockServiceBlock(tx: Tx, propertyId: string, id: string) {
     SELECT "id", "room_id", "kind"::text AS "kind", "status"::text AS "status", "from_date",
            "to_date", "return_status"::text AS "return_status", "maintenance_request_id"
     FROM "room_service_blocks"
-    WHERE "id" = ${id}::uuid AND "property_id" = ${propertyId}::uuid
+    WHERE "id" = ${id}::uuid AND ${propertyFilterSql({ propertyId })}
     FOR UPDATE`;
   return rows[0] ?? null;
 }
 
 export function findLiveBlockIds(tx: Tx, propertyId: string, maintenanceRequestId: string) {
   return tx.roomServiceBlock.findMany({
-    where: { propertyId, maintenanceRequestId, status: { in: ["SCHEDULED", "ACTIVE"] } },
+    where: {
+      ...propertyWhere({ propertyId }),
+      maintenanceRequestId,
+      status: { in: ["SCHEDULED", "ACTIVE"] },
+    },
     select: { id: true },
   });
 }
 
 export function releaseBlockRow(tx: Tx, propertyId: string, id: string, userId: string) {
   return tx.roomServiceBlock.update({
-    where: { id, propertyId },
+    where: { id, ...propertyWhere({ propertyId }) },
     data: { status: "RELEASED", releasedAt: new Date(), releasedById: userId },
     select: { id: true },
   });
@@ -188,7 +197,7 @@ export function releaseBlockRow(tx: Tx, propertyId: string, id: string, userId: 
 
 export function findRoomDetail(tx: Tx, propertyId: string, id: string) {
   return tx.room.findFirst({
-    where: { id, propertyId },
+    where: { id, ...propertyWhere({ propertyId }) },
     select: {
       id: true,
       number: true,
@@ -330,7 +339,7 @@ export function findRoomBoard(
       FROM "maintenance_requests" m
       WHERE m."property_id" = r."property_id" AND m."room_id" = r."id"
         AND m."status" IN ('OPEN', 'ASSIGNED', 'IN_PROGRESS', 'ON_HOLD')) mnt ON TRUE
-    WHERE r."property_id" = ${propertyId}::uuid AND r."status" = 'ACTIVE'
+    WHERE ${propertyFilterSql({ propertyId }, "r")} AND r."status" = 'ACTIVE'
       ${filters.roomTypeId ? Prisma.sql`AND r."room_type_id" = ${filters.roomTypeId}::uuid` : Prisma.empty}
       ${filters.floorId ? Prisma.sql`AND r."floor_id" = ${filters.floorId}::uuid` : Prisma.empty}
     ORDER BY r."sort_order", r."number"`;
@@ -339,7 +348,7 @@ export function findRoomBoard(
 /** Active rooms for pickers (maintenance): no statuses, no laterals (M11). */
 export function findRoomPicker(tx: Tx, propertyId: string) {
   return tx.room.findMany({
-    where: { propertyId, status: "ACTIVE", roomType: { isPseudo: false } },
+    where: { ...propertyWhere({ propertyId }), status: "ACTIVE", roomType: { isPseudo: false } },
     orderBy: [{ sortOrder: "asc" }, { number: "asc" }],
     select: { id: true, number: true, roomType: { select: { code: true } } },
   });
@@ -367,19 +376,19 @@ export function findRoomsForSearch(tx: Tx, propertyId: string) {
     FROM "rooms" r
     JOIN "room_types" rt ON rt."property_id" = r."property_id" AND rt."id" = r."room_type_id"
     LEFT JOIN "floors" f ON f."property_id" = r."property_id" AND f."id" = r."floor_id"
-    WHERE r."property_id" = ${propertyId}::uuid AND r."status" = 'ACTIVE' AND NOT rt."is_pseudo"
+    WHERE ${propertyFilterSql({ propertyId }, "r")} AND r."status" = 'ACTIVE' AND NOT rt."is_pseudo"
     ORDER BY r."sort_order", r."number"`;
 }
 
 export function findBoardReferenceData(tx: Tx, propertyId: string) {
   return Promise.all([
     tx.floor.findMany({
-      where: { propertyId },
+      where: { ...propertyWhere({ propertyId }) },
       orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
       select: { id: true, name: true },
     }),
     tx.roomType.findMany({
-      where: { propertyId, status: "ACTIVE", isPseudo: false },
+      where: { ...propertyWhere({ propertyId }), status: "ACTIVE", isPseudo: false },
       orderBy: [{ sortOrder: "asc" }, { code: "asc" }],
       select: { id: true, code: true, name: true },
     }),

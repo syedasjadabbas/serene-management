@@ -1,11 +1,12 @@
 import type { Tx } from "@/config/prisma";
 import { fromDateOnly } from "@serene/shared/modules/business-date/business-date.policy";
+import { propertyFilterSql, propertyWhere } from "@/lib/scope";
 
 /** Data access for property setup (modules/setup). Every query is scoped by property. */
 
 export function findSetupRoomTypes(tx: Tx, propertyId: string) {
   return tx.roomType.findMany({
-    where: { propertyId, isPseudo: false },
+    where: { ...propertyWhere({ propertyId }), isPseudo: false },
     orderBy: [{ sortOrder: "asc" }, { code: "asc" }],
     select: {
       id: true,
@@ -25,7 +26,7 @@ export function findSetupRoomTypes(tx: Tx, propertyId: string) {
 
 export function findSetupFloors(tx: Tx, propertyId: string) {
   return tx.floor.findMany({
-    where: { propertyId },
+    where: { ...propertyWhere({ propertyId }) },
     orderBy: [{ sortOrder: "asc" }, { level: "asc" }, { code: "asc" }],
     select: {
       id: true,
@@ -41,7 +42,7 @@ export function findSetupFloors(tx: Tx, propertyId: string) {
 
 export function findSetupRooms(tx: Tx, propertyId: string) {
   return tx.room.findMany({
-    where: { propertyId, roomType: { isPseudo: false } },
+    where: { ...propertyWhere({ propertyId }), roomType: { isPseudo: false } },
     orderBy: [{ sortOrder: "asc" }, { number: "asc" }],
     select: {
       id: true,
@@ -63,7 +64,7 @@ export function findSetupRooms(tx: Tx, propertyId: string) {
 
 export function findSetupTaxes(tx: Tx, propertyId: string) {
   return tx.taxRule.findMany({
-    where: { propertyId },
+    where: { ...propertyWhere({ propertyId }) },
     orderBy: [{ code: "asc" }],
     select: {
       id: true,
@@ -88,7 +89,7 @@ export function findSetupTaxes(tx: Tx, propertyId: string) {
 export function findTaxableCodes(tx: Tx, propertyId: string) {
   return tx.transactionCode.findMany({
     where: {
-      propertyId,
+      ...propertyWhere({ propertyId }),
       status: "ACTIVE",
       bucket: { notIn: ["TAX", "SERVICE_CHARGE", "PAYMENT", "NON_REVENUE"] },
       group: { type: "REVENUE" },
@@ -100,10 +101,14 @@ export function findTaxableCodes(tx: Tx, propertyId: string) {
 
 export async function countSetup(tx: Tx, propertyId: string) {
   const [roomTypes, rooms, taxes, ratePlans] = await Promise.all([
-    tx.roomType.count({ where: { propertyId, status: "ACTIVE", isPseudo: false } }),
-    tx.room.count({ where: { propertyId, status: "ACTIVE", roomType: { isPseudo: false } } }),
-    tx.taxRule.count({ where: { propertyId, status: "ACTIVE" } }),
-    tx.ratePlan.count({ where: { propertyId, status: "ACTIVE" } }),
+    tx.roomType.count({
+      where: { ...propertyWhere({ propertyId }), status: "ACTIVE", isPseudo: false },
+    }),
+    tx.room.count({
+      where: { ...propertyWhere({ propertyId }), status: "ACTIVE", roomType: { isPseudo: false } },
+    }),
+    tx.taxRule.count({ where: { ...propertyWhere({ propertyId }), status: "ACTIVE" } }),
+    tx.ratePlan.count({ where: { ...propertyWhere({ propertyId }), status: "ACTIVE" } }),
   ]);
   return { roomTypes, rooms, taxes, ratePlans };
 }
@@ -112,7 +117,7 @@ export async function countSetup(tx: Tx, propertyId: string) {
 export async function lockSetupRoom(tx: Tx, propertyId: string, roomId: string) {
   const rows = await tx.$queryRaw<{ id: string; version: number }[]>`
     SELECT "id", "version" FROM "rooms"
-    WHERE "property_id" = ${propertyId}::uuid AND "id" = ${roomId}::uuid
+    WHERE ${propertyFilterSql({ propertyId })} AND "id" = ${roomId}::uuid
     FOR UPDATE`;
   return rows[0] ?? null;
 }
@@ -123,10 +128,10 @@ export async function lockSetupRoom(tx: Tx, propertyId: string, roomId: string) 
  */
 export async function roomCommitments(tx: Tx, propertyId: string, roomId: string, from: string) {
   const [inHouse, assigned] = await Promise.all([
-    tx.stay.count({ where: { propertyId, roomId, status: "IN_HOUSE" } }),
+    tx.stay.count({ where: { ...propertyWhere({ propertyId }), roomId, status: "IN_HOUSE" } }),
     tx.reservationRoom.count({
       where: {
-        propertyId,
+        ...propertyWhere({ propertyId }),
         roomId,
         status: { in: ["RESERVED", "IN_HOUSE"] },
         departureDate: { gt: fromDateOnly(from) },
@@ -140,7 +145,7 @@ export async function roomCommitments(tx: Tx, propertyId: string, roomId: string
 export function roomTypeBookings(tx: Tx, propertyId: string, roomTypeId: string, from: string) {
   return tx.reservationRoom.count({
     where: {
-      propertyId,
+      ...propertyWhere({ propertyId }),
       roomTypeId,
       status: { in: ["WAITLISTED", "RESERVED", "IN_HOUSE"] },
       departureDate: { gt: fromDateOnly(from) },
@@ -151,7 +156,7 @@ export function roomTypeBookings(tx: Tx, propertyId: string, roomTypeId: string,
 /** Room numbers of the list that already exist at the property. */
 export async function existingRoomNumbers(tx: Tx, propertyId: string, numbers: string[]) {
   const rows = await tx.room.findMany({
-    where: { propertyId, number: { in: numbers } },
+    where: { ...propertyWhere({ propertyId }), number: { in: numbers } },
     select: { number: true },
   });
   return rows.map((r) => r.number);
@@ -160,7 +165,7 @@ export async function existingRoomNumbers(tx: Tx, propertyId: string, numbers: s
 /** The next free tax posting code (8000, 8010, …) for a new tax rule. */
 export async function nextTaxPostingCode(tx: Tx, propertyId: string): Promise<string> {
   const rows = await tx.transactionCode.findMany({
-    where: { propertyId, code: { startsWith: "8" } },
+    where: { ...propertyWhere({ propertyId }), code: { startsWith: "8" } },
     select: { code: true },
   });
   const used = new Set(rows.map((r) => r.code));

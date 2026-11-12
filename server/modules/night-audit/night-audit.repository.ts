@@ -1,5 +1,6 @@
 import type { Prisma } from "@/generated/prisma/client";
 import type { Tx } from "@/config/prisma";
+import { propertyFilterSql, propertyWhere } from "@/lib/scope";
 
 /**
  * Night-audit data access. Every query is scoped by property; dates are
@@ -14,7 +15,7 @@ export async function lockCurrentBusinessDateForUpdate(tx: Tx, propertyId: strin
   const rows = await tx.$queryRaw<{ id: string; date: string; status: string }[]>`
     SELECT "id", "date"::text AS "date", "status"::text AS "status"
     FROM "business_dates"
-    WHERE "property_id" = ${propertyId}::uuid AND "is_current"
+    WHERE ${propertyFilterSql({ propertyId })} AND "is_current"
     FOR UPDATE`;
   return rows[0] ?? null;
 }
@@ -24,7 +25,7 @@ export async function lockCurrentBusinessDateNoWait(tx: Tx, propertyId: string) 
   const rows = await tx.$queryRaw<{ id: string; date: string; status: string }[]>`
     SELECT "id", "date"::text AS "date", "status"::text AS "status"
     FROM "business_dates"
-    WHERE "property_id" = ${propertyId}::uuid AND "is_current"
+    WHERE ${propertyFilterSql({ propertyId })} AND "is_current"
     FOR UPDATE NOWAIT`;
   return rows[0] ?? null;
 }
@@ -64,7 +65,7 @@ export async function nextAttempt(tx: Tx, propertyId: string, businessDate: stri
   const rows = await tx.$queryRaw<{ attempt: number }[]>`
     SELECT COALESCE(max("attempt"), 0)::int + 1 AS "attempt"
     FROM "night_audit_runs"
-    WHERE "property_id" = ${propertyId}::uuid AND "business_date" = ${businessDate}::date`;
+    WHERE ${propertyFilterSql({ propertyId })} AND "business_date" = ${businessDate}::date`;
   return rows[0]!.attempt;
 }
 
@@ -90,7 +91,7 @@ export async function lockRun(tx: Tx, propertyId: string, runId: string) {
   >`
     SELECT "id", "status"::text AS "status", "business_date"::text AS "business_date", "started_at"
     FROM "night_audit_runs"
-    WHERE "id" = ${runId}::uuid AND "property_id" = ${propertyId}::uuid
+    WHERE "id" = ${runId}::uuid AND ${propertyFilterSql({ propertyId })}
     FOR UPDATE`;
   return rows[0] ?? null;
 }
@@ -137,7 +138,7 @@ const runSelect = {
 
 export function findRun(db: Tx, propertyId: string, runId: string) {
   return db.nightAuditRun.findFirst({
-    where: { id: runId, propertyId },
+    where: { id: runId, ...propertyWhere({ propertyId }) },
     select: {
       ...runSelect,
       steps: {
@@ -164,7 +165,7 @@ export function findRunsPage(
 ) {
   return db.nightAuditRun.findMany({
     where: {
-      propertyId,
+      ...propertyWhere({ propertyId }),
       ...(cursor
         ? {
             OR: [
@@ -182,14 +183,14 @@ export function findRunsPage(
 
 export function findRunningRun(db: Tx, propertyId: string) {
   return db.nightAuditRun.findFirst({
-    where: { propertyId, status: "RUNNING" },
+    where: { ...propertyWhere({ propertyId }), status: "RUNNING" },
     select: runSelect,
   });
 }
 
 export function findLastFinishedRun(db: Tx, propertyId: string) {
   return db.nightAuditRun.findFirst({
-    where: { propertyId, status: { not: "RUNNING" } },
+    where: { ...propertyWhere({ propertyId }), status: { not: "RUNNING" } },
     orderBy: [{ startedAt: "desc" }, { id: "desc" }],
     select: runSelect,
   });
@@ -199,7 +200,7 @@ export function findLastFinishedRun(db: Tx, propertyId: string) {
 
 export async function findAuditConfiguration(db: Tx, propertyId: string) {
   const config = await db.propertyConfiguration.findUnique({
-    where: { propertyId },
+    where: { ...propertyWhere({ propertyId }) },
     select: {
       autoNoShowOnNightAudit: true,
       postNoShowCharges: true,
@@ -225,13 +226,18 @@ export async function findNoShowReasonCode(
 ) {
   if (configuredId) {
     const configured = await db.reasonCode.findFirst({
-      where: { id: configuredId, propertyId, category: "NO_SHOW", status: "ACTIVE" },
+      where: {
+        id: configuredId,
+        ...propertyWhere({ propertyId }),
+        category: "NO_SHOW",
+        status: "ACTIVE",
+      },
       select: { id: true, code: true },
     });
     if (configured) return configured;
   }
   return db.reasonCode.findFirst({
-    where: { propertyId, category: "NO_SHOW", status: "ACTIVE" },
+    where: { ...propertyWhere({ propertyId }), category: "NO_SHOW", status: "ACTIVE" },
     orderBy: { code: "asc" },
     select: { id: true, code: true },
   });
@@ -266,7 +272,7 @@ export function findOverdueDepartures(db: Tx, propertyId: string, businessDate: 
     JOIN "guests" g ON g."id" = rr."primary_guest_id"
     LEFT JOIN "rooms" r ON r."id" = rr."room_id"
     LEFT JOIN "stays" s ON s."reservation_room_id" = rr."id" AND s."status" = 'IN_HOUSE'
-    WHERE rr."property_id" = ${propertyId}::uuid AND rr."status" = 'IN_HOUSE'
+    WHERE ${propertyFilterSql({ propertyId }, "rr")} AND rr."status" = 'IN_HOUSE'
       AND rr."departure_date" <= ${businessDate}::date
     ORDER BY rr."departure_date", r."number", rr."id"`;
 }
@@ -284,7 +290,7 @@ export function findDueArrivals(db: Tx, propertyId: string, businessDate: string
     JOIN "reservation_types" t ON t."id" = rr."reservation_type_id"
     JOIN "guests" g ON g."id" = rr."primary_guest_id"
     LEFT JOIN "rooms" r ON r."id" = rr."room_id"
-    WHERE rr."property_id" = ${propertyId}::uuid AND rr."status" = 'RESERVED'
+    WHERE ${propertyFilterSql({ propertyId }, "rr")} AND rr."status" = 'RESERVED'
       AND rr."arrival_date" <= ${businessDate}::date
     ORDER BY rr."arrival_date", res."confirmation_number", rr."line_number"`;
 }
@@ -320,15 +326,15 @@ export function findUnbalancedFolios(db: Tx, propertyId: string, businessDate: s
       SELECT f."id", f."reservation_room_id", f."window", f."balance", f."charges_total",
              f."credits_total"
       FROM "folios" f
-      WHERE f."property_id" = ${propertyId}::uuid
+      WHERE ${propertyFilterSql({ propertyId }, "f")}
         AND (f."status" <> 'CLOSED'
              OR EXISTS (SELECT 1 FROM "folio_items" d
-                        WHERE d."folio_id" = f."id" AND d."property_id" = ${propertyId}::uuid
+                        WHERE d."folio_id" = f."id" AND ${propertyFilterSql({ propertyId }, "d")}
                           AND d."business_date" = ${businessDate}::date))
     ), ledger AS (
       SELECT i."folio_id", sum(i."amount") AS "ledger"
       FROM "folio_items" i
-      WHERE i."property_id" = ${propertyId}::uuid
+      WHERE ${propertyFilterSql({ propertyId }, "i")}
         AND i."folio_id" IN (SELECT "id" FROM candidates)
       GROUP BY i."folio_id"
     )
@@ -346,7 +352,7 @@ export function findPaymentMismatches(db: Tx, propertyId: string, businessDate: 
   return db.$queryRaw<{ id: string; folio_id: string; receipt_number: string; problem: string }[]>`
     SELECT p."id", p."folio_id", p."receipt_number", 'LEDGER_LINE_MISSING' AS "problem"
     FROM "payments" p
-    WHERE p."property_id" = ${propertyId}::uuid AND p."business_date" = ${businessDate}::date
+    WHERE ${propertyFilterSql({ propertyId }, "p")} AND p."business_date" = ${businessDate}::date
       AND NOT EXISTS (
         SELECT 1 FROM "folio_items" i
         WHERE i."payment_id" = p."id" AND i."kind" = 'PAYMENT' AND i."refund_id" IS NULL
@@ -354,7 +360,7 @@ export function findPaymentMismatches(db: Tx, propertyId: string, businessDate: 
     UNION ALL
     SELECT p."id", p."folio_id", p."receipt_number", 'VOID_NOT_REVERSED'
     FROM "payments" p
-    WHERE p."property_id" = ${propertyId}::uuid AND p."business_date" = ${businessDate}::date
+    WHERE ${propertyFilterSql({ propertyId }, "p")} AND p."business_date" = ${businessDate}::date
       AND p."status" = 'VOIDED'
       AND NOT EXISTS (
         SELECT 1 FROM "folio_items" i
@@ -364,7 +370,7 @@ export function findPaymentMismatches(db: Tx, propertyId: string, businessDate: 
     SELECT f."id", p."folio_id", p."receipt_number", 'REFUND_LINE_MISSING'
     FROM "refunds" f
     JOIN "payments" p ON p."id" = f."payment_id"
-    WHERE f."property_id" = ${propertyId}::uuid AND f."business_date" = ${businessDate}::date
+    WHERE ${propertyFilterSql({ propertyId }, "f")} AND f."business_date" = ${businessDate}::date
       AND f."status" = 'SUCCEEDED'
       AND NOT EXISTS (
         SELECT 1 FROM "folio_items" i WHERE i."refund_id" = f."id" AND i."amount" = f."amount")`;
@@ -378,13 +384,13 @@ export function findRoomStatusDiscrepancies(db: Tx, propertyId: string) {
     SELECT r."id" AS "room_id", r."number" AS "room_number", NULL::uuid AS "stay_id",
            'OCCUPIED_WITHOUT_STAY' AS "problem"
     FROM "rooms" r
-    WHERE r."property_id" = ${propertyId}::uuid AND r."front_office_status" = 'OCCUPIED'
+    WHERE ${propertyFilterSql({ propertyId }, "r")} AND r."front_office_status" = 'OCCUPIED'
       AND NOT EXISTS (SELECT 1 FROM "stays" s WHERE s."room_id" = r."id" AND s."status" = 'IN_HOUSE')
     UNION ALL
     SELECT r."id", r."number", s."id", 'STAY_IN_VACANT_ROOM'
     FROM "stays" s
     JOIN "rooms" r ON r."id" = s."room_id"
-    WHERE s."property_id" = ${propertyId}::uuid AND s."status" = 'IN_HOUSE'
+    WHERE ${propertyFilterSql({ propertyId }, "s")} AND s."status" = 'IN_HOUSE'
       AND r."front_office_status" <> 'OCCUPIED'
     ORDER BY 2`;
 }
@@ -410,7 +416,7 @@ export function findUnpostedNights(db: Tx, propertyId: string, businessDate: str
     JOIN "reservation_rooms" rr ON rr."id" = n."reservation_room_id"
     JOIN "reservations" res ON res."id" = rr."reservation_id"
     JOIN "guests" g ON g."id" = rr."primary_guest_id"
-    WHERE n."property_id" = ${propertyId}::uuid AND n."posted_at" IS NULL
+    WHERE ${propertyFilterSql({ propertyId }, "n")} AND n."posted_at" IS NULL
       AND n."stay_date" < ${businessDate}::date
       AND rr."status" IN ('IN_HOUSE', 'CHECKED_OUT')
     GROUP BY rr."id", res."confirmation_number", g."first_name", g."last_name"
@@ -422,7 +428,7 @@ export function findUnpostedNights(db: Tx, propertyId: string, businessDate: str
 export async function findInHouseReservationRoomIds(tx: Tx, propertyId: string) {
   const rows = await tx.$queryRaw<{ id: string }[]>`
     SELECT "id" FROM "reservation_rooms"
-    WHERE "property_id" = ${propertyId}::uuid AND "status" = 'IN_HOUSE'
+    WHERE ${propertyFilterSql({ propertyId })} AND "status" = 'IN_HOUSE'
     ORDER BY "id"`;
   return rows.map((row) => row.id);
 }
@@ -430,7 +436,7 @@ export async function findInHouseReservationRoomIds(tx: Tx, propertyId: string) 
 export async function findNoShowCandidateIds(tx: Tx, propertyId: string, businessDate: string) {
   const rows = await tx.$queryRaw<{ id: string }[]>`
     SELECT "id" FROM "reservation_rooms"
-    WHERE "property_id" = ${propertyId}::uuid AND "status" = 'RESERVED'
+    WHERE ${propertyFilterSql({ propertyId })} AND "status" = 'RESERVED'
       AND "arrival_date" <= ${businessDate}::date
     ORDER BY "id"`;
   return rows.map((row) => row.id);
@@ -476,18 +482,18 @@ export async function countRoomsForNight(tx: Tx, propertyId: string, businessDat
       JOIN "reservation_rooms" rr ON rr."id" = n."reservation_room_id"
       JOIN "rate_plans" p ON p."id" = n."rate_plan_id"
       JOIN "stays" s ON s."reservation_room_id" = rr."id" AND s."status" = 'IN_HOUSE'
-      WHERE n."property_id" = ${propertyId}::uuid AND n."stay_date" = ${businessDate}::date
+      WHERE ${propertyFilterSql({ propertyId }, "n")} AND n."stay_date" = ${businessDate}::date
         AND rr."status" = 'IN_HOUSE'
     ),
     physical AS (
       SELECT r."id" FROM "rooms" r
       JOIN "room_types" rt ON rt."id" = r."room_type_id"
-      WHERE r."property_id" = ${propertyId}::uuid AND r."status" = 'ACTIVE' AND NOT rt."is_pseudo"
+      WHERE ${propertyFilterSql({ propertyId }, "r")} AND r."status" = 'ACTIVE' AND NOT rt."is_pseudo"
     ),
     blocked AS (
       SELECT b."kind"::text AS "kind", count(DISTINCT b."room_id")::int AS "rooms"
       FROM "room_service_blocks" b
-      WHERE b."property_id" = ${propertyId}::uuid AND b."status" IN ('SCHEDULED', 'ACTIVE')
+      WHERE ${propertyFilterSql({ propertyId }, "b")} AND b."status" IN ('SCHEDULED', 'ACTIVE')
         AND b."from_date" <= ${businessDate}::date AND b."to_date" > ${businessDate}::date
       GROUP BY 1
     )
@@ -500,24 +506,24 @@ export async function countRoomsForNight(tx: Tx, propertyId: string, businessDat
          WHERE "is_complimentary" OR "plan_kind" = 'COMPLIMENTARY')::int AS "complimentary_rooms",
       (SELECT count(DISTINCT "room_id") FROM tonight WHERE "plan_kind" = 'HOUSE_USE')::int AS "house_use_rooms",
       (SELECT count(*) FROM "stays" s JOIN "reservation_rooms" rr ON rr."id" = s."reservation_room_id"
-         WHERE s."property_id" = ${propertyId}::uuid AND rr."is_day_use"
+         WHERE ${propertyFilterSql({ propertyId }, "s")} AND rr."is_day_use"
            AND s."arrival_business_date" = ${businessDate}::date)::int AS "day_use_rooms",
       (SELECT count(*) FROM "stays" s
-         WHERE s."property_id" = ${propertyId}::uuid
+         WHERE ${propertyFilterSql({ propertyId }, "s")}
            AND s."arrival_business_date" = ${businessDate}::date)::int AS "arrivals",
       (SELECT count(*) FROM "stays" s
-         WHERE s."property_id" = ${propertyId}::uuid
+         WHERE ${propertyFilterSql({ propertyId }, "s")}
            AND s."departure_business_date" = ${businessDate}::date)::int AS "departures",
       (SELECT count(DISTINCT "room_id") FROM tonight
          WHERE "arrival_business_date" < ${businessDate}::date)::int AS "stayovers",
       (SELECT count(*) FROM "reservation_rooms" rr
-         WHERE rr."property_id" = ${propertyId}::uuid
+         WHERE ${propertyFilterSql({ propertyId }, "rr")}
            AND rr."no_show_business_date" = ${businessDate}::date)::int AS "no_shows",
       (SELECT count(*) FROM "reservation_rooms" rr
-         WHERE rr."property_id" = ${propertyId}::uuid
+         WHERE ${propertyFilterSql({ propertyId }, "rr")}
            AND rr."cancellation_business_date" = ${businessDate}::date)::int AS "cancellations",
       (SELECT count(*) FROM "stays" s JOIN "reservation_rooms" rr ON rr."id" = s."reservation_room_id"
-         WHERE s."property_id" = ${propertyId}::uuid AND rr."is_walk_in"
+         WHERE ${propertyFilterSql({ propertyId }, "s")} AND rr."is_walk_in"
            AND s."arrival_business_date" = ${businessDate}::date)::int AS "walk_ins",
       COALESCE((SELECT sum("adults") FROM tonight), 0)::int AS "adults",
       COALESCE((SELECT sum("children") FROM tonight), 0)::int AS "children"`;
@@ -557,7 +563,7 @@ export function countRoomTypesForNight(tx: Tx, propertyId: string, businessDate:
          WHERE rr."room_type_id" = rt."id"
            AND s."departure_business_date" = ${businessDate}::date)::int AS "departures"
     FROM "room_types" rt
-    WHERE rt."property_id" = ${propertyId}::uuid AND NOT rt."is_pseudo" AND rt."status" = 'ACTIVE'
+    WHERE ${propertyFilterSql({ propertyId }, "rt")} AND NOT rt."is_pseudo" AND rt."status" = 'ACTIVE'
     ORDER BY rt."id"`;
 }
 
@@ -592,7 +598,7 @@ export async function sumMoneyForDate(
       SELECT i."amount", i."kind"::text AS "kind", tc."bucket"::text AS "bucket", i."transaction_code_id"
       FROM "folio_items" i
       JOIN "transaction_codes" tc ON tc."id" = i."transaction_code_id"
-      WHERE i."property_id" = ${propertyId}::uuid AND i."business_date" = ${businessDate}::date
+      WHERE ${propertyFilterSql({ propertyId }, "i")} AND i."business_date" = ${businessDate}::date
         AND i."kind" IN ('CHARGE', 'TAX', 'ADJUSTMENT', 'REVERSAL')
         AND tc."bucket" NOT IN ('PAYMENT', 'NON_REVENUE')
     )
@@ -606,16 +612,16 @@ export async function sumMoneyForDate(
       COALESCE(sum("amount") FILTER (WHERE "transaction_code_id" = ${noShowCodeId}::uuid), 0)::text
         AS "no_show_revenue",
       (SELECT COALESCE(sum(i."amount"), 0) FROM "folio_items" i
-         WHERE i."property_id" = ${propertyId}::uuid AND i."business_date" = ${businessDate}::date
+         WHERE ${propertyFilterSql({ propertyId }, "i")} AND i."business_date" = ${businessDate}::date
            AND i."kind" = 'ADJUSTMENT')::text AS "adjustments_total",
       (SELECT COALESCE(sum(p."amount"), 0) FROM "payments" p
-         WHERE p."property_id" = ${propertyId}::uuid AND p."business_date" = ${businessDate}::date
+         WHERE ${propertyFilterSql({ propertyId }, "p")} AND p."business_date" = ${businessDate}::date
            AND p."status" = 'CAPTURED')::text AS "payments_total",
       (SELECT COALESCE(sum(p."amount"), 0) FROM "payments" p
-         WHERE p."property_id" = ${propertyId}::uuid AND p."business_date" = ${businessDate}::date
+         WHERE ${propertyFilterSql({ propertyId }, "p")} AND p."business_date" = ${businessDate}::date
            AND p."status" = 'VOIDED')::text AS "voids_total",
       (SELECT COALESCE(sum(r."amount"), 0) FROM "refunds" r
-         WHERE r."property_id" = ${propertyId}::uuid AND r."business_date" = ${businessDate}::date
+         WHERE ${propertyFilterSql({ propertyId }, "r")} AND r."business_date" = ${businessDate}::date
            AND r."status" = 'SUCCEEDED')::text AS "refunds_total"
     FROM lines`;
   return rows[0]!;
@@ -634,15 +640,15 @@ export async function ledgerBalancesForDate(tx: Tx, propertyId: string, business
     WITH opening AS (
       SELECT COALESCE(
         (SELECT s."ledger_closing_balance" FROM "daily_statistics" s
-          WHERE s."property_id" = ${propertyId}::uuid
+          WHERE ${propertyFilterSql({ propertyId }, "s")}
             AND s."business_date" = ${businessDate}::date - 1),
         (SELECT COALESCE(sum(i."amount"), 0) FROM "folio_items" i
-          WHERE i."property_id" = ${propertyId}::uuid
+          WHERE ${propertyFilterSql({ propertyId }, "i")}
             AND i."business_date" < ${businessDate}::date)
       ) AS "amount"
     ), movement AS (
       SELECT COALESCE(sum(i."amount"), 0) AS "amount" FROM "folio_items" i
-      WHERE i."property_id" = ${propertyId}::uuid AND i."business_date" = ${businessDate}::date
+      WHERE ${propertyFilterSql({ propertyId }, "i")} AND i."business_date" = ${businessDate}::date
     )
     SELECT o."amount"::text AS "ledger_opening", (o."amount" + m."amount")::text AS "ledger_closing"
     FROM opening o, movement m`;
@@ -661,7 +667,7 @@ export function sumRoomRevenueByType(
     FROM "folio_items" i
     JOIN "transaction_codes" tc ON tc."id" = i."transaction_code_id"
     JOIN "reservation_rooms" rr ON rr."id" = i."origin_reservation_room_id"
-    WHERE i."property_id" = ${propertyId}::uuid AND i."business_date" = ${businessDate}::date
+    WHERE ${propertyFilterSql({ propertyId }, "i")} AND i."business_date" = ${businessDate}::date
       AND i."kind" IN ('CHARGE', 'ADJUSTMENT', 'REVERSAL') AND tc."bucket" = 'ROOM'
       AND i."transaction_code_id" IS DISTINCT FROM ${noShowCodeId}::uuid
     GROUP BY rr."room_type_id"`;

@@ -71,6 +71,7 @@ import type {
   TaskTypeView,
   TaskView,
 } from "@serene/shared/modules/housekeeping/housekeeping.types";
+import { propertyFilterSql, propertyWhere } from "@/lib/scope";
 
 /**
  * Housekeeping (docs/PMS_WORKFLOWS.md §13): cleaning tasks, assignment to
@@ -703,7 +704,7 @@ export async function listTasks(
   // task waits for inspection whatever its date (night audit leaves it), so
   // the list shows exactly what the summary's awaitingInspection counts.
   const where: Prisma.HousekeepingTaskWhereInput = {
-    propertyId: ctx.propertyId,
+    ...propertyWhere(ctx),
     ...(query.view === "inspections"
       ? {}
       : query.view === "scheduled"
@@ -761,7 +762,7 @@ export async function getHousekeepingSummary(ctx: PropertyContext): Promise<Hous
   const rules = await frontOfficeRules(prisma, ctx.propertyId);
   const awaiting = await prisma.housekeepingTask.count({
     where: {
-      propertyId: ctx.propertyId,
+      ...propertyWhere(ctx),
       ...awaitingInspectionWhere(rules.requireInspectedForCheckIn),
     },
   });
@@ -815,14 +816,14 @@ export async function rollTasksInTx(
     SET "status" = 'CANCELLED',
         "notes" = left(concat_ws(' · ', "notes", 'Closed by night audit'), 2000),
         "version" = "version" + 1, "updated_at" = now()
-    WHERE "property_id" = ${ctx.propertyId}::uuid
+    WHERE ${propertyFilterSql({ propertyId: ctx.propertyId })}
       AND "business_date" <= ${businessDate}::date
       AND "status"::text = ANY(${open}::text[])`;
 
   let cleaning = 0;
   const dirtyVacant = await tx.room.findMany({
     where: {
-      propertyId: ctx.propertyId,
+      ...propertyWhere(ctx),
       status: "ACTIVE",
       frontOfficeStatus: "VACANT",
       housekeepingStatus: "DIRTY",
@@ -846,7 +847,7 @@ export async function rollTasksInTx(
       SELECT s."room_id", s."id" AS "stay_id"
       FROM "stays" s
       JOIN "reservation_rooms" rr ON rr."id" = s."reservation_room_id"
-      WHERE s."property_id" = ${ctx.propertyId}::uuid AND s."status" = 'IN_HOUSE'
+      WHERE ${propertyFilterSql({ propertyId: ctx.propertyId }, "s")} AND s."status" = 'IN_HOUSE'
         AND rr."departure_date" > ${nextDate}::date
       ORDER BY s."room_id"`;
     const date = fromDateOnly(nextDate);
@@ -855,7 +856,7 @@ export async function rollTasksInTx(
       (
         await tx.housekeepingTask.findMany({
           where: {
-            propertyId: ctx.propertyId,
+            ...propertyWhere(ctx),
             roomId: { in: staying.map((row) => row.room_id) },
             businessDate: date,
             taskTypeId: type.id,

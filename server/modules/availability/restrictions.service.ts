@@ -14,6 +14,7 @@ import type {
   RestrictionsQuery,
   SetRestrictionsInput,
 } from "@serene/shared/modules/availability/availability.schema";
+import { propertyWhere } from "@/lib/scope";
 
 /**
  * Restriction management (Phase 6). Writes the sparse `restrictions` rows the
@@ -43,7 +44,7 @@ export async function listRestrictions(
 ): Promise<RestrictionListRow[]> {
   const rows = await prisma.restriction.findMany({
     where: {
-      propertyId: ctx.propertyId,
+      ...propertyWhere(ctx),
       stayDate: { gte: fromDateOnly(query.from), lte: fromDateOnly(query.to) },
       ...(query.roomTypeId ? { OR: [{ roomTypeId: null }, { roomTypeId: query.roomTypeId }] } : {}),
       ...(query.ratePlanId
@@ -81,14 +82,14 @@ export async function setRestrictions(
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`restrictions:${ctx.propertyId}`}))`;
     if (input.roomTypeId) {
       const roomType = await tx.roomType.findFirst({
-        where: { id: input.roomTypeId, propertyId: ctx.propertyId },
+        where: { id: input.roomTypeId, ...propertyWhere(ctx) },
         select: { id: true },
       });
       if (!roomType) throw appError("NOT_FOUND", "Room type not found");
     }
     if (input.ratePlanId) {
       const plan = await tx.ratePlan.findFirst({
-        where: { id: input.ratePlanId, propertyId: ctx.propertyId },
+        where: { id: input.ratePlanId, ...propertyWhere(ctx) },
         select: { id: true },
       });
       if (!plan) throw appError("NOT_FOUND", "Rate plan not found");
@@ -104,7 +105,7 @@ export async function setRestrictions(
     const scope = { roomTypeId: input.roomTypeId, ratePlanId: input.ratePlanId };
     const { count: removed } = await tx.restriction.deleteMany({
       where: {
-        propertyId: ctx.propertyId,
+        ...propertyWhere(ctx),
         type: input.type,
         stayDate: { in: days.map(fromDateOnly) },
         ...scope,

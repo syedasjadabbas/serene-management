@@ -1,6 +1,7 @@
 import type { Prisma } from "@/generated/prisma/client";
 import type { Tx } from "@/config/prisma";
 import type { MaintenanceStatus } from "@serene/shared/modules/maintenance/maintenance.policy";
+import { propertyFilterSql, propertyWhere } from "@/lib/scope";
 
 /**
  * Maintenance data access (maintenance_requests, maintenance_activities,
@@ -9,7 +10,7 @@ import type { MaintenanceStatus } from "@serene/shared/modules/maintenance/maint
 
 export function findCategories(tx: Tx, propertyId: string) {
   return tx.maintenanceCategory.findMany({
-    where: { propertyId, status: "ACTIVE" },
+    where: { ...propertyWhere({ propertyId }), status: "ACTIVE" },
     orderBy: { code: "asc" },
     select: { id: true, code: true, name: true },
   });
@@ -17,14 +18,14 @@ export function findCategories(tx: Tx, propertyId: string) {
 
 export function findCategory(tx: Tx, propertyId: string, id: string) {
   return tx.maintenanceCategory.findFirst({
-    where: { id, propertyId, status: "ACTIVE" },
+    where: { id, ...propertyWhere({ propertyId }), status: "ACTIVE" },
     select: { id: true, code: true },
   });
 }
 
 export function findActiveRoom(tx: Tx, propertyId: string, id: string) {
   return tx.room.findFirst({
-    where: { id, propertyId, status: "ACTIVE" },
+    where: { id, ...propertyWhere({ propertyId }), status: "ACTIVE" },
     select: { id: true, number: true },
   });
 }
@@ -54,7 +55,7 @@ export async function lockRequest(tx: Tx, propertyId: string, id: string) {
     SELECT "id", "request_number", "room_id", "status"::text AS "status",
            "priority"::text AS "priority", "assigned_to_id", "version", "title"
     FROM "maintenance_requests"
-    WHERE "id" = ${id}::uuid AND "property_id" = ${propertyId}::uuid
+    WHERE "id" = ${id}::uuid AND ${propertyFilterSql({ propertyId })}
     FOR UPDATE`;
   return rows[0] ?? null;
 }
@@ -112,7 +113,7 @@ export function findRequestsPage(
 
 export function findRequestDetail(tx: Tx, propertyId: string, id: string) {
   return tx.maintenanceRequest.findFirst({
-    where: { id, propertyId },
+    where: { id, ...propertyWhere({ propertyId }) },
     select: {
       ...listSelect,
       description: true,
@@ -145,13 +146,15 @@ export function countOpenRequests(tx: Tx, propertyId: string, userId: string) {
   return Promise.all([
     tx.maintenanceRequest.groupBy({
       by: ["status"],
-      where: { propertyId },
+      where: { ...propertyWhere({ propertyId }) },
       _count: { _all: true },
     }),
-    tx.maintenanceRequest.count({ where: { propertyId, status: active, assignedToId: userId } }),
+    tx.maintenanceRequest.count({
+      where: { ...propertyWhere({ propertyId }), status: active, assignedToId: userId },
+    }),
     tx.maintenanceRequest.count({
       where: {
-        propertyId,
+        ...propertyWhere({ propertyId }),
         status: active,
         serviceBlocks: { some: { status: { in: ["SCHEDULED", "ACTIVE"] } } },
       },

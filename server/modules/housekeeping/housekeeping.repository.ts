@@ -1,6 +1,7 @@
 import type { Prisma } from "@/generated/prisma/client";
 import type { Tx } from "@/config/prisma";
 import type { TaskStatus } from "@serene/shared/modules/housekeeping/housekeeping.policy";
+import { propertyFilterSql, propertyWhere } from "@/lib/scope";
 
 /**
  * Housekeeping data access (housekeeping_tasks, task types, attendants).
@@ -9,7 +10,7 @@ import type { TaskStatus } from "@serene/shared/modules/housekeeping/housekeepin
 
 export function findTaskTypes(tx: Tx, propertyId: string) {
   return tx.housekeepingTaskType.findMany({
-    where: { propertyId, status: "ACTIVE" },
+    where: { ...propertyWhere({ propertyId }), status: "ACTIVE" },
     orderBy: { code: "asc" },
     select: {
       id: true,
@@ -25,7 +26,7 @@ export function findTaskTypes(tx: Tx, propertyId: string) {
 
 export function findTaskType(tx: Tx, propertyId: string, where: { id?: string; code?: string }) {
   return tx.housekeepingTaskType.findFirst({
-    where: { propertyId, status: "ACTIVE", ...where },
+    where: { ...propertyWhere({ propertyId }), status: "ACTIVE", ...where },
     select: { id: true, code: true, name: true, requiresInspection: true, credits: true },
   });
 }
@@ -34,7 +35,7 @@ export function findTaskType(tx: Tx, propertyId: string, where: { id?: string; c
 
 export function findAttendantByUser(tx: Tx, propertyId: string, userId: string) {
   return tx.housekeepingAttendant.findFirst({
-    where: { propertyId, userId },
+    where: { ...propertyWhere({ propertyId }), userId },
     select: { id: true, name: true, status: true },
   });
 }
@@ -61,7 +62,7 @@ export function insertTask(tx: Tx, data: Prisma.HousekeepingTaskUncheckedCreateI
 
 export function findTaskRef(tx: Tx, propertyId: string, id: string) {
   return tx.housekeepingTask.findFirst({
-    where: { id, propertyId },
+    where: { id, ...propertyWhere({ propertyId }) },
     select: { id: true, roomId: true },
   });
 }
@@ -97,7 +98,7 @@ export async function lockTask(tx: Tx, propertyId: string, id: string) {
     FROM "housekeeping_tasks" t
     JOIN "housekeeping_task_types" tt ON tt."id" = t."task_type_id"
     LEFT JOIN "housekeeping_attendants" a ON a."id" = t."attendant_id"
-    WHERE t."id" = ${id}::uuid AND t."property_id" = ${propertyId}::uuid
+    WHERE t."id" = ${id}::uuid AND ${propertyFilterSql({ propertyId }, "t")}
     FOR UPDATE OF t`;
   return rows[0] ?? null;
 }
@@ -123,7 +124,13 @@ export function findLiveTask(
   taskTypeId: string,
 ) {
   return tx.housekeepingTask.findFirst({
-    where: { propertyId, roomId, businessDate, taskTypeId, status: { not: "CANCELLED" } },
+    where: {
+      ...propertyWhere({ propertyId }),
+      roomId,
+      businessDate,
+      taskTypeId,
+      status: { not: "CANCELLED" },
+    },
     select: { id: true, status: true, priority: true, version: true, notes: true },
   });
 }
@@ -135,7 +142,7 @@ export async function lockTaskAwaitingInspection(tx: Tx, propertyId: string, roo
   >`
     SELECT t."id", t."version", t."completed_by_id"
     FROM "housekeeping_tasks" t
-    WHERE t."property_id" = ${propertyId}::uuid AND t."room_id" = ${roomId}::uuid
+    WHERE ${propertyFilterSql({ propertyId }, "t")} AND t."room_id" = ${roomId}::uuid
       AND t."status" = 'COMPLETED'
     ORDER BY t."completed_at" DESC
     LIMIT 1
@@ -193,7 +200,10 @@ export function findTasksPage(
 }
 
 export function findTask(tx: Tx, propertyId: string, id: string) {
-  return tx.housekeepingTask.findFirst({ where: { id, propertyId }, select: taskSelect });
+  return tx.housekeepingTask.findFirst({
+    where: { id, ...propertyWhere({ propertyId }) },
+    select: taskSelect,
+  });
 }
 
 /** Rooms (of the given ids) with a reservation arriving on the business date. */
@@ -206,7 +216,7 @@ export async function findRoomsWithArrival(
   if (roomIds.length === 0) return new Set<string>();
   const rows = await tx.reservationRoom.findMany({
     where: {
-      propertyId,
+      ...propertyWhere({ propertyId }),
       roomId: { in: roomIds },
       status: "RESERVED",
       arrivalDate: businessDate,
@@ -243,7 +253,7 @@ export async function countTasks(
 ) {
   const open = { in: ["PENDING", "IN_PROGRESS", "PAUSED", "FAILED_INSPECTION"] as TaskStatus[] };
   const carried = {
-    propertyId,
+    ...propertyWhere({ propertyId }),
     OR: [{ businessDate }, { businessDate: { lt: businessDate }, status: open }],
   } satisfies Prisma.HousekeepingTaskWhereInput;
   const grouped = await tx.housekeepingTask.groupBy({
@@ -259,7 +269,7 @@ export async function countTasks(
     : 0;
   // Added by hand for a later business date (the Scheduled view).
   const scheduled = await tx.housekeepingTask.count({
-    where: { propertyId, businessDate: { gt: businessDate }, status: open },
+    where: { ...propertyWhere({ propertyId }), businessDate: { gt: businessDate }, status: open },
   });
   return { grouped, unassigned, mine, scheduled };
 }

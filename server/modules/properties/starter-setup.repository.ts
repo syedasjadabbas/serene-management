@@ -1,5 +1,6 @@
 import type { Prisma } from "@/generated/prisma/client";
 import type { Tx } from "@/config/prisma";
+import { propertyWhere } from "@/lib/scope";
 
 /**
  * Standard starter reference setup of a property (D49): the codes a property
@@ -73,7 +74,10 @@ export async function applyStarterSetup(db: Tx, propertyId: string): Promise<Sta
 
   // Reference codes --------------------------------------------------------------
   const marketGroup = await upsertByCode(
-    await db.marketGroup.findFirst({ where: { propertyId, code: "TRN" }, select: { id: true } }),
+    await db.marketGroup.findFirst({
+      where: { ...propertyWhere({ propertyId }), code: "TRN" },
+      select: { id: true },
+    }),
     () =>
       db.marketGroup.create({
         data: { propertyId, code: "TRN", name: "Transient" },
@@ -89,7 +93,10 @@ export async function applyStarterSetup(db: Tx, propertyId: string): Promise<Sta
     ["GRP", "Groups"],
   ] as const) {
     const row = await upsertByCode(
-      await db.marketCode.findFirst({ where: { propertyId, code }, select: { id: true } }),
+      await db.marketCode.findFirst({
+        where: { ...propertyWhere({ propertyId }), code },
+        select: { id: true },
+      }),
       () =>
         db.marketCode.create({
           data: { propertyId, code, name, marketGroupId: marketGroup.id },
@@ -107,7 +114,10 @@ export async function applyStarterSetup(db: Tx, propertyId: string): Promise<Sta
     ["OTA", "Online travel agency"],
   ] as const) {
     const row = await upsertByCode(
-      await db.sourceCode.findFirst({ where: { propertyId, code }, select: { id: true } }),
+      await db.sourceCode.findFirst({
+        where: { ...propertyWhere({ propertyId }), code },
+        select: { id: true },
+      }),
       () => db.sourceCode.create({ data: { propertyId, code, name }, select: { id: true } }),
     );
     sourceCodes[code] = row.id;
@@ -119,7 +129,10 @@ export async function applyStarterSetup(db: Tx, propertyId: string): Promise<Sta
     ["WEB", "Booking engine"],
   ] as const) {
     const row = await upsertByCode(
-      await db.channel.findFirst({ where: { propertyId, code }, select: { id: true } }),
+      await db.channel.findFirst({
+        where: { ...propertyWhere({ propertyId }), code },
+        select: { id: true },
+      }),
       () => db.channel.create({ data: { propertyId, code, name }, select: { id: true } }),
     );
     channels[code] = row.id;
@@ -152,7 +165,7 @@ export async function applyStarterSetup(db: Tx, propertyId: string): Promise<Sta
   ] as const) {
     const row = await upsertByCode(
       await db.reasonCode.findFirst({
-        where: { propertyId, category, code },
+        where: { ...propertyWhere({ propertyId }), category, code },
         select: { id: true },
       }),
       () =>
@@ -168,7 +181,10 @@ export async function applyStarterSetup(db: Tx, propertyId: string): Promise<Sta
     ["COMP", "Company guaranteed", true, true],
   ] as const) {
     const row = await upsertByCode(
-      await db.reservationType.findFirst({ where: { propertyId, code }, select: { id: true } }),
+      await db.reservationType.findFirst({
+        where: { ...propertyWhere({ propertyId }), code },
+        select: { id: true },
+      }),
       () =>
         db.reservationType.create({
           data: {
@@ -217,7 +233,10 @@ export async function applyStarterSetup(db: Tx, propertyId: string): Promise<Sta
     ],
   ] as const) {
     const row = await upsertByCode(
-      await db.cancellationPolicy.findFirst({ where: { propertyId, code }, select: { id: true } }),
+      await db.cancellationPolicy.findFirst({
+        where: { ...propertyWhere({ propertyId }), code },
+        select: { id: true },
+      }),
       () =>
         db.cancellationPolicy.create({
           data: { propertyId, code, name, deadlineHours, penaltyType, penaltyValue, description },
@@ -230,7 +249,7 @@ export async function applyStarterSetup(db: Tx, propertyId: string): Promise<Sta
   // Room charge transaction code ---------------------------------------------------
   const group = await upsertByCode(
     await db.transactionCodeGroup.findFirst({
-      where: { propertyId, code: "LODG" },
+      where: { ...propertyWhere({ propertyId }), code: "LODG" },
       select: { id: true },
     }),
     () =>
@@ -241,7 +260,7 @@ export async function applyStarterSetup(db: Tx, propertyId: string): Promise<Sta
   );
   const roomCharge = await upsertByCode(
     await db.transactionCode.findFirst({
-      where: { propertyId, code: "1000" },
+      where: { ...propertyWhere({ propertyId }), code: "1000" },
       select: { id: true },
     }),
     () =>
@@ -261,7 +280,7 @@ export async function applyStarterSetup(db: Tx, propertyId: string): Promise<Sta
   // Night audit (Phase 8): the no-show fee code (room revenue, kept out of ADR).
   const noShowCharge = await upsertByCode(
     await db.transactionCode.findFirst({
-      where: { propertyId, code: "1090" },
+      where: { ...propertyWhere({ propertyId }), code: "1090" },
       select: { id: true },
     }),
     () =>
@@ -284,7 +303,7 @@ export async function applyStarterSetup(db: Tx, propertyId: string): Promise<Sta
   for (const [code, name, type, sortOrder] of CHARGE_GROUPS) {
     const row = await upsertByCode(
       await db.transactionCodeGroup.findFirst({
-        where: { propertyId, code },
+        where: { ...propertyWhere({ propertyId }), code },
         select: { id: true },
       }),
       () =>
@@ -300,7 +319,10 @@ export async function applyStarterSetup(db: Tx, propertyId: string): Promise<Sta
     data: Omit<Prisma.TransactionCodeUncheckedCreateInput, "propertyId" | "code">,
   ) => {
     const row = await upsertByCode(
-      await db.transactionCode.findFirst({ where: { propertyId, code }, select: { id: true } }),
+      await db.transactionCode.findFirst({
+        where: { ...propertyWhere({ propertyId }), code },
+        select: { id: true },
+      }),
       () =>
         db.transactionCode.create({ data: { propertyId, code, ...data }, select: { id: true } }),
     );
@@ -319,7 +341,10 @@ export async function applyStarterSetup(db: Tx, propertyId: string): Promise<Sta
       isManualPostAllowed: false,
     });
     const row = await upsertByCode(
-      await db.paymentMethod.findFirst({ where: { propertyId, code }, select: { id: true } }),
+      await db.paymentMethod.findFirst({
+        where: { ...propertyWhere({ propertyId }), code },
+        select: { id: true },
+      }),
       () =>
         db.paymentMethod.create({
           data: { propertyId, code, name, kind, transactionCodeId, requiresReference },
@@ -332,11 +357,11 @@ export async function applyStarterSetup(db: Tx, propertyId: string): Promise<Sta
   // Night audit configuration (Phase 8): fee code and automatic no-show reason,
   // unless the property already chose its own.
   await db.propertyConfiguration.updateMany({
-    where: { propertyId, noShowTransactionCodeId: null },
+    where: { ...propertyWhere({ propertyId }), noShowTransactionCodeId: null },
     data: { noShowTransactionCodeId: noShowCharge.id },
   });
   await db.propertyConfiguration.updateMany({
-    where: { propertyId, noShowReasonCodeId: null },
+    where: { ...propertyWhere({ propertyId }), noShowReasonCodeId: null },
     data: { noShowReasonCodeId: reasonCodes["NO_SHOW:AUTO"]! },
   });
   const blockStatuses: Record<string, string> = {};
@@ -347,7 +372,10 @@ export async function applyStarterSetup(db: Tx, propertyId: string): Promise<Sta
     ["LOST", "Lost / cancelled", "CANCEL", false, false, 4],
   ] as const) {
     const row = await upsertByCode(
-      await db.blockStatus.findFirst({ where: { propertyId, code }, select: { id: true } }),
+      await db.blockStatus.findFirst({
+        where: { ...propertyWhere({ propertyId }), code },
+        select: { id: true },
+      }),
       () =>
         db.blockStatus.create({
           data: { propertyId, code, name, type, allowsPickup, isDefault, sortOrder },
@@ -367,7 +395,7 @@ export async function applyStarterSetup(db: Tx, propertyId: string): Promise<Sta
   ] as const) {
     const row = await upsertByCode(
       await db.housekeepingTaskType.findFirst({
-        where: { propertyId, code },
+        where: { ...propertyWhere({ propertyId }), code },
         select: { id: true },
       }),
       () =>
@@ -394,7 +422,10 @@ export async function applyStarterSetup(db: Tx, propertyId: string): Promise<Sta
     ["GEN", "General"],
   ] as const) {
     const row = await upsertByCode(
-      await db.maintenanceCategory.findFirst({ where: { propertyId, code }, select: { id: true } }),
+      await db.maintenanceCategory.findFirst({
+        where: { ...propertyWhere({ propertyId }), code },
+        select: { id: true },
+      }),
       () =>
         db.maintenanceCategory.create({ data: { propertyId, code, name }, select: { id: true } }),
     );

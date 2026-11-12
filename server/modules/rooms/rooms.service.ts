@@ -49,6 +49,7 @@ import type {
   RoomDetail,
   RoomPickerItem,
 } from "@serene/shared/modules/rooms/rooms.types";
+import { propertyFilterSql, propertyWhere } from "@/lib/scope";
 
 /**
  * Rooms: locked status changes with history, out-of-order / out-of-service
@@ -667,7 +668,7 @@ export async function rollServiceBlocksInTx(
     SELECT "id", "room_id", "kind"::text AS "kind", "status"::text AS "status", "from_date",
            "to_date", "return_status"::text AS "return_status"
     FROM "room_service_blocks"
-    WHERE "property_id" = ${actor.propertyId}::uuid
+    WHERE ${propertyFilterSql({ propertyId: actor.propertyId })}
       AND "status" IN ('SCHEDULED', 'ACTIVE')
       AND ("to_date" <= ${nextDate}::date OR ("status" = 'SCHEDULED' AND "from_date" <= ${nextDate}::date))
     ORDER BY "id"
@@ -731,7 +732,7 @@ export async function rollOccupiedRoomsInTx(
   const ids = (
     await tx.room.findMany({
       where: {
-        propertyId: actor.propertyId,
+        ...propertyWhere(actor),
         frontOfficeStatus: "OCCUPIED",
         housekeepingStatus: { not: "DIRTY" },
       },

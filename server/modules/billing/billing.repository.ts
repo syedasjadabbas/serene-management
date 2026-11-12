@@ -1,6 +1,7 @@
 import { confirmationMatchSql } from "@/modules/properties/confirmation-number.sql";
 import { Prisma } from "@/generated/prisma/client";
 import type { Tx } from "@/config/prisma";
+import { propertyFilterSql, propertyWhere } from "@/lib/scope";
 
 /**
  * Billing data access: folios, folio_items (append-only ledger), transaction
@@ -32,7 +33,7 @@ export async function lockFolios(tx: Tx, propertyId: string, ids: string[]) {
     SELECT "id", "property_id", "reservation_room_id", "window", "status"::text AS "status", "currency_code",
            "balance"::text AS "balance", "version"
     FROM "folios"
-    WHERE "property_id" = ${propertyId}::uuid AND "id" IN (${Prisma.join(ids.map((id) => Prisma.sql`${id}::uuid`))})
+    WHERE ${propertyFilterSql({ propertyId })} AND "id" IN (${Prisma.join(ids.map((id) => Prisma.sql`${id}::uuid`))})
     ORDER BY "id"
     FOR UPDATE`;
 }
@@ -43,7 +44,7 @@ export function lockReservationRoomFolios(tx: Tx, propertyId: string, reservatio
     SELECT "id", "property_id", "reservation_room_id", "window", "status"::text AS "status", "currency_code",
            "balance"::text AS "balance", "version"
     FROM "folios"
-    WHERE "property_id" = ${propertyId}::uuid AND "reservation_room_id" = ${reservationRoomId}::uuid
+    WHERE ${propertyFilterSql({ propertyId })} AND "reservation_room_id" = ${reservationRoomId}::uuid
     ORDER BY "id"
     FOR UPDATE`;
 }
@@ -52,7 +53,7 @@ export function lockReservationRoomFolios(tx: Tx, propertyId: string, reservatio
 export async function ledgerBalance(tx: Tx, propertyId: string, folioId: string): Promise<string> {
   const rows = await tx.$queryRaw<{ total: string }[]>`
     SELECT COALESCE(SUM("amount"), 0)::text AS "total" FROM "folio_items"
-    WHERE "folio_id" = ${folioId}::uuid AND "property_id" = ${propertyId}::uuid`;
+    WHERE "folio_id" = ${folioId}::uuid AND ${propertyFilterSql({ propertyId })}`;
   return rows[0]!.total;
 }
 
@@ -62,10 +63,10 @@ export function folioBalancesWithLedger(tx: Tx, propertyId: string, folioIds: st
   return tx.$queryRaw<{ id: string; balance: string; ledger: string }[]>`
     SELECT f."id", f."balance"::text AS "balance",
            COALESCE((SELECT sum(i."amount") FROM "folio_items" i
-                      WHERE i."folio_id" = f."id" AND i."property_id" = ${propertyId}::uuid), 0)::text
+                      WHERE i."folio_id" = f."id" AND ${propertyFilterSql({ propertyId }, "i")}), 0)::text
              AS "ledger"
     FROM "folios" f
-    WHERE f."property_id" = ${propertyId}::uuid AND f."id" = ANY(${folioIds}::uuid[])`;
+    WHERE ${propertyFilterSql({ propertyId }, "f")} AND f."id" = ANY(${folioIds}::uuid[])`;
 }
 
 /**
@@ -75,7 +76,7 @@ export function folioBalancesWithLedger(tx: Tx, propertyId: string, folioIds: st
  */
 export async function findFolioRef(tx: Tx, propertyId: string, id: string) {
   const ref = await tx.folio.findFirst({
-    where: { id, propertyId, reservationRoomId: { not: null } },
+    where: { id, ...propertyWhere({ propertyId }), reservationRoomId: { not: null } },
     select: {
       id: true,
       reservationRoomId: true,
@@ -94,7 +95,7 @@ export async function findFolioRef(tx: Tx, propertyId: string, id: string) {
 
 export function findWindows(tx: Tx, propertyId: string, reservationRoomId: string) {
   return tx.folio.findMany({
-    where: { propertyId, reservationRoomId },
+    where: { ...propertyWhere({ propertyId }), reservationRoomId },
     orderBy: { window: "asc" },
     select: {
       id: true,
@@ -121,7 +122,7 @@ export function findWindowRef(
   window: number,
 ) {
   return tx.folio.findFirst({
-    where: { propertyId, reservationRoomId, window },
+    where: { ...propertyWhere({ propertyId }), reservationRoomId, window },
     select: { id: true },
   });
 }
@@ -129,13 +130,17 @@ export function findWindowRef(
 /** Window-1 folios of many reservation rooms (night audit batch, M8). */
 export function findWindowOneRefs(tx: Tx, propertyId: string, reservationRoomIds: string[]) {
   return tx.folio.findMany({
-    where: { propertyId, reservationRoomId: { in: reservationRoomIds }, window: 1 },
+    where: {
+      ...propertyWhere({ propertyId }),
+      reservationRoomId: { in: reservationRoomIds },
+      window: 1,
+    },
     select: { id: true, reservationRoomId: true },
   });
 }
 
 export function countWindows(tx: Tx, propertyId: string, reservationRoomId: string) {
-  return tx.folio.count({ where: { propertyId, reservationRoomId } });
+  return tx.folio.count({ where: { ...propertyWhere({ propertyId }), reservationRoomId } });
 }
 
 export function insertFolio(tx: Tx, data: Prisma.FolioUncheckedCreateInput) {
@@ -150,7 +155,7 @@ export function updateFolioVersioned(
   data: Prisma.FolioUncheckedUpdateManyInput,
 ) {
   return tx.folio.updateMany({
-    where: { id, propertyId, version },
+    where: { id, ...propertyWhere({ propertyId }), version },
     data: { ...data, version: { increment: 1 } },
   });
 }
@@ -158,7 +163,7 @@ export function updateFolioVersioned(
 /** Folio header: the reservation room, its guest, room and stay (read model). */
 export function findAccountHeader(tx: Tx, propertyId: string, reservationRoomId: string) {
   return tx.reservationRoom.findFirst({
-    where: { id: reservationRoomId, propertyId },
+    where: { id: reservationRoomId, ...propertyWhere({ propertyId }) },
     select: {
       id: true,
       status: true,
@@ -197,12 +202,15 @@ const codeSelect = {
 } as const satisfies Prisma.TransactionCodeSelect;
 
 export function findTransactionCode(tx: Tx, propertyId: string, id: string) {
-  return tx.transactionCode.findFirst({ where: { id, propertyId }, select: codeSelect });
+  return tx.transactionCode.findFirst({
+    where: { id, ...propertyWhere({ propertyId }) },
+    select: codeSelect,
+  });
 }
 
 export function findTransactionCodes(tx: Tx, propertyId: string, ids: string[]) {
   return tx.transactionCode.findMany({
-    where: { propertyId, id: { in: ids } },
+    where: { ...propertyWhere({ propertyId }), id: { in: ids } },
     select: codeSelect,
   });
 }
@@ -211,7 +219,7 @@ export function findTransactionCodes(tx: Tx, propertyId: string, ids: string[]) 
 export function findTaxRules(tx: Tx, propertyId: string, codeIds: string[], date: Date) {
   return tx.transactionCodeTax.findMany({
     where: {
-      propertyId,
+      ...propertyWhere({ propertyId }),
       transactionCodeId: { in: codeIds },
       taxRule: {
         status: "ACTIVE",
@@ -240,7 +248,7 @@ export function findTaxRules(tx: Tx, propertyId: string, codeIds: string[], date
 export function findManualChargeCodes(tx: Tx, propertyId: string) {
   return tx.transactionCode.findMany({
     where: {
-      propertyId,
+      ...propertyWhere({ propertyId }),
       status: "ACTIVE",
       isManualPostAllowed: true,
       isPaidOut: false,
@@ -264,12 +272,15 @@ const methodSelect = {
 } as const satisfies Prisma.PaymentMethodSelect;
 
 export function findPaymentMethod(tx: Tx, propertyId: string, id: string) {
-  return tx.paymentMethod.findFirst({ where: { id, propertyId }, select: methodSelect });
+  return tx.paymentMethod.findFirst({
+    where: { id, ...propertyWhere({ propertyId }) },
+    select: methodSelect,
+  });
 }
 
 export function findPaymentMethods(tx: Tx, propertyId: string) {
   return tx.paymentMethod.findMany({
-    where: { propertyId, status: "ACTIVE" },
+    where: { ...propertyWhere({ propertyId }), status: "ACTIVE" },
     orderBy: { code: "asc" },
     select: methodSelect,
   });
@@ -284,14 +295,18 @@ export function findReasonCode(
   category: FinancialReasonCategory,
 ) {
   return tx.reasonCode.findFirst({
-    where: { id, propertyId, category, status: "ACTIVE" },
+    where: { id, ...propertyWhere({ propertyId }), category, status: "ACTIVE" },
     select: { id: true, code: true, name: true, requiresComment: true },
   });
 }
 
 export function findFinancialReasonCodes(tx: Tx, propertyId: string) {
   return tx.reasonCode.findMany({
-    where: { propertyId, status: "ACTIVE", category: { in: ["ADJUSTMENT", "VOID", "REFUND"] } },
+    where: {
+      ...propertyWhere({ propertyId }),
+      status: "ACTIVE",
+      category: { in: ["ADJUSTMENT", "VOID", "REFUND"] },
+    },
     orderBy: [{ category: "asc" }, { code: "asc" }],
     select: { id: true, category: true, code: true, name: true },
   });
@@ -308,7 +323,7 @@ const correctionSelect = { kind: true, amount: true } as const;
 /** A posted line with what is needed to reverse or adjust it (and its generated taxes). */
 export function findItemForCorrection(tx: Tx, propertyId: string, id: string) {
   return tx.folioItem.findFirst({
-    where: { id, propertyId },
+    where: { id, ...propertyWhere({ propertyId }) },
     select: {
       id: true,
       folioId: true,
@@ -349,7 +364,7 @@ export function findItemForCorrection(tx: Tx, propertyId: string, id: string) {
 /** The ledger line that recorded a payment (not its refunds). */
 export function findPaymentLine(tx: Tx, propertyId: string, paymentId: string) {
   return tx.folioItem.findFirst({
-    where: { propertyId, paymentId, kind: "PAYMENT", refundId: null },
+    where: { ...propertyWhere({ propertyId }), paymentId, kind: "PAYMENT", refundId: null },
     select: { id: true, folioId: true, amount: true, transactionCodeId: true, description: true },
   });
 }
@@ -361,7 +376,7 @@ export function findPostingKeys(tx: Tx, propertyId: string, reservationRoomId: s
            EXISTS (SELECT 1 FROM "folio_items" r
                    WHERE r."corrects_item_id" = i."id" AND r."kind" = 'REVERSAL') AS "reversed"
     FROM "folio_items" i
-    WHERE i."property_id" = ${propertyId}::uuid
+    WHERE ${propertyFilterSql({ propertyId }, "i")}
       AND i."origin_reservation_room_id" = ${reservationRoomId}::uuid
       AND i."posting_key" IS NOT NULL`;
 }
@@ -374,7 +389,7 @@ export function findPostingKeysMany(tx: Tx, propertyId: string, reservationRoomI
            EXISTS (SELECT 1 FROM "folio_items" r
                    WHERE r."corrects_item_id" = i."id" AND r."kind" = 'REVERSAL') AS "reversed"
     FROM "folio_items" i
-    WHERE i."property_id" = ${propertyId}::uuid
+    WHERE ${propertyFilterSql({ propertyId }, "i")}
       AND i."origin_reservation_room_id" = ANY(${reservationRoomIds}::uuid[])
       AND i."posting_key" IS NOT NULL`;
 }
@@ -431,7 +446,7 @@ export function findLedgerPage(
     WITH ledger AS (
       SELECT i.*, SUM(i."amount") OVER (ORDER BY i."posted_at", i."id") AS "running"
       FROM "folio_items" i
-      WHERE i."folio_id" = ${folioId}::uuid AND i."property_id" = ${propertyId}::uuid
+      WHERE i."folio_id" = ${folioId}::uuid AND ${propertyFilterSql({ propertyId }, "i")}
     )
     SELECT l."id", l."folio_id", l."kind"::text AS "kind", l."source"::text AS "source",
            l."business_date", l."revenue_date", l."posted_at", l."description", l."reference",
@@ -482,14 +497,14 @@ export async function lockPayment(tx: Tx, propertyId: string, id: string) {
            "amount"::text AS "amount", "refunded_amount"::text AS "refunded_amount",
            "currency_code", "business_date", "method_id", "receipt_number", "version"
     FROM "payments"
-    WHERE "id" = ${id}::uuid AND "property_id" = ${propertyId}::uuid
+    WHERE "id" = ${id}::uuid AND ${propertyFilterSql({ propertyId })}
     FOR UPDATE`;
   return rows[0] ?? null;
 }
 
 export function findPaymentRef(tx: Tx, propertyId: string, id: string) {
   return tx.payment.findFirst({
-    where: { id, propertyId },
+    where: { id, ...propertyWhere({ propertyId }) },
     select: { id: true, folioId: true, methodId: true },
   });
 }
@@ -506,7 +521,7 @@ export function updatePaymentVersioned(
   data: Prisma.PaymentUncheckedUpdateManyInput,
 ) {
   return tx.payment.updateMany({
-    where: { id, propertyId, version },
+    where: { id, ...propertyWhere({ propertyId }), version },
     data: { ...data, version: { increment: 1 } },
   });
 }
@@ -552,7 +567,7 @@ export function findFolioListPage(
       ? Prisma.sql`AND rr."status" = 'IN_HOUSE'`
       : options.view === "open_balance"
         ? Prisma.sql`AND rr."id" IN (SELECT x."reservation_room_id" FROM "folios" x
-                                      WHERE x."property_id" = ${propertyId}::uuid AND x."balance" <> 0)
+                                      WHERE ${propertyFilterSql({ propertyId }, "x")} AND x."balance" <> 0)
                      AND (SELECT sum(y."balance") FROM "folios" y
                           WHERE y."reservation_room_id" = rr."id") <> 0`
         : Prisma.sql`AND EXISTS (SELECT 1 FROM "folios" x WHERE x."reservation_room_id" = rr."id")`;
@@ -581,7 +596,7 @@ export function findFolioListPage(
                     FROM "guests" g
                     JOIN LATERAL (
                       SELECT rr."id" FROM "reservation_rooms" rr
-                      WHERE rr."primary_guest_id" = g."id" AND rr."property_id" = ${propertyId}::uuid
+                      WHERE rr."primary_guest_id" = g."id" AND ${propertyFilterSql({ propertyId }, "rr")}
                         ${scope}
                     ) rr ON TRUE
                     WHERE ${Prisma.join(
@@ -597,7 +612,7 @@ export function findFolioListPage(
               FROM "reservations" res
               JOIN "reservation_rooms" rr ON rr."reservation_id" = res."id"
               JOIN "guests" g ON g."id" = rr."primary_guest_id"
-              WHERE res."property_id" = ${propertyId}::uuid AND rr."property_id" = ${propertyId}::uuid
+              WHERE ${propertyFilterSql({ propertyId }, "res")} AND ${propertyFilterSql({ propertyId }, "rr")}
                 AND ${confirmationMatchSql(Prisma.sql`res."confirmation_number"`, search.raw)}
                 ${scope}
                 ${cursor}
@@ -607,7 +622,7 @@ export function findFolioListPage(
               FROM "rooms" rm
               JOIN "reservation_rooms" rr ON rr."room_id" = rm."id"
               JOIN "guests" g ON g."id" = rr."primary_guest_id"
-              WHERE rm."property_id" = ${propertyId}::uuid AND rr."property_id" = ${propertyId}::uuid
+              WHERE ${propertyFilterSql({ propertyId }, "rm")} AND ${propertyFilterSql({ propertyId }, "rr")}
                 AND upper(rm."number") = ${search.raw.trim().toUpperCase()}
                 ${scope}
                 ${cursor}
@@ -623,7 +638,7 @@ export function findFolioListPage(
       SELECT rr."id", g."search_name"
       FROM "reservation_rooms" rr
       JOIN "guests" g ON g."id" = rr."primary_guest_id"
-      WHERE rr."property_id" = ${propertyId}::uuid
+      WHERE ${propertyFilterSql({ propertyId }, "rr")}
         ${scope}
         ${cursor}
       ORDER BY g."search_name", rr."id"

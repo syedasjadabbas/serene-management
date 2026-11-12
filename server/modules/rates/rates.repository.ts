@@ -1,5 +1,6 @@
 import { Prisma } from "@/generated/prisma/client";
 import type { Tx } from "@/config/prisma";
+import { organizationWhere, propertyFilterSql, propertyWhere } from "@/lib/scope";
 
 /**
  * Active rate plans of a property with the seasons overlapping the stay and
@@ -17,7 +18,7 @@ export function findRatePlansForStay(
   const first = new Date(`${firstNight}T00:00:00.000Z`);
   const last = new Date(`${lastNight}T00:00:00.000Z`);
   return tx.ratePlan.findMany({
-    where: { propertyId, ...where },
+    where: { ...propertyWhere({ propertyId }), ...where },
     select: {
       id: true,
       code: true,
@@ -79,7 +80,7 @@ export function findCurrencyMinorUnits(tx: Tx, code: string) {
 /** Active plans deriving directly from `ratePlanId` (they would lose their parent on deactivation). */
 export function findActiveChildCodes(tx: Tx, propertyId: string, ratePlanId: string) {
   return tx.ratePlan.findMany({
-    where: { propertyId, parentRatePlanId: ratePlanId, status: "ACTIVE" },
+    where: { ...propertyWhere({ propertyId }), parentRatePlanId: ratePlanId, status: "ACTIVE" },
     select: { code: true },
     orderBy: { code: "asc" },
   });
@@ -94,7 +95,7 @@ export async function findPlanChainIds(
   const rows = await tx.$queryRaw<{ id: string }[]>`
     WITH RECURSIVE chain AS (
       SELECT "id", "parent_rate_plan_id", 0 AS depth FROM "rate_plans"
-      WHERE "id" = ${ratePlanId}::uuid AND "property_id" = ${propertyId}::uuid
+      WHERE "id" = ${ratePlanId}::uuid AND ${propertyFilterSql({ propertyId })}
       UNION ALL
       SELECT r."id", r."parent_rate_plan_id", c.depth + 1 FROM "rate_plans" r
       JOIN chain c ON r."id" = c."parent_rate_plan_id" WHERE c.depth < 5
@@ -127,7 +128,7 @@ export async function lockRatePlanChain(
 
 export function findRatePlanList(tx: Tx, propertyId: string) {
   return tx.ratePlan.findMany({
-    where: { propertyId },
+    where: { ...propertyWhere({ propertyId }) },
     orderBy: [{ status: "asc" }, { displayOrder: "asc" }, { code: "asc" }],
     select: {
       id: true,
@@ -153,7 +154,7 @@ export function findRatePlanList(tx: Tx, propertyId: string) {
 /** The rate plan list's rows and order, display fields only (global search: one statement). */
 export function findRatePlansForSearch(tx: Tx, propertyId: string) {
   return tx.ratePlan.findMany({
-    where: { propertyId },
+    where: { ...propertyWhere({ propertyId }) },
     orderBy: [{ status: "asc" }, { displayOrder: "asc" }, { code: "asc" }],
     select: { id: true, code: true, name: true, kind: true, status: true, currencyCode: true },
   });
@@ -161,7 +162,7 @@ export function findRatePlansForSearch(tx: Tx, propertyId: string) {
 
 export function findRatePlanDetail(tx: Tx, propertyId: string, id: string) {
   return tx.ratePlan.findFirst({
-    where: { id, propertyId },
+    where: { id, ...propertyWhere({ propertyId }) },
     select: {
       id: true,
       code: true,
@@ -230,7 +231,7 @@ export function findRatePlanDetail(tx: Tx, propertyId: string, id: string) {
 /** Every plan of the property with its derivation link (for chain validation). */
 export function findPlanLinks(tx: Tx, propertyId: string) {
   return tx.ratePlan.findMany({
-    where: { propertyId },
+    where: { ...propertyWhere({ propertyId }) },
     select: { id: true, code: true, parentRatePlanId: true, status: true, currencyCode: true },
   });
 }
@@ -319,7 +320,7 @@ export function deleteSeason(tx: Tx, id: string) {
 
 /** Reference data for validation and form options (sequential: may run in a transaction). */
 export async function findRateReferenceData(tx: Tx, propertyId: string) {
-  const active = { propertyId, status: "ACTIVE" as const };
+  const active = { ...propertyWhere({ propertyId }), status: "ACTIVE" as const };
   const ref = { id: true, code: true, name: true } as const;
   return {
     roomTypes: await tx.roomType.findMany({
@@ -368,7 +369,7 @@ export async function findRateReferenceData(tx: Tx, propertyId: string) {
     }),
     ratePlans: (
       await tx.ratePlan.findMany({
-        where: { propertyId },
+        where: { ...propertyWhere({ propertyId }) },
         orderBy: [{ displayOrder: "asc" }, { code: "asc" }],
         select: {
           ...ref,
@@ -382,7 +383,7 @@ export async function findRateReferenceData(tx: Tx, propertyId: string) {
       roomTypeIds: roomTypes.map((rt) => rt.roomTypeId),
     })),
     packages: await tx.package.findMany({
-      where: { propertyId },
+      where: { ...propertyWhere({ propertyId }) },
       orderBy: { code: "asc" },
       select: { ...ref, status: true, sellSeparately: true },
     }),
@@ -418,21 +419,24 @@ export type PackageRow = Prisma.PackageGetPayload<{ select: typeof packageSelect
 
 export function findPackages(tx: Tx, propertyId: string) {
   return tx.package.findMany({
-    where: { propertyId },
+    where: { ...propertyWhere({ propertyId }) },
     orderBy: { code: "asc" },
     select: packageSelect,
   });
 }
 
 export function findPackage(tx: Tx, propertyId: string, id: string) {
-  return tx.package.findFirst({ where: { id, propertyId }, select: packageSelect });
+  return tx.package.findFirst({
+    where: { id, ...propertyWhere({ propertyId }) },
+    select: packageSelect,
+  });
 }
 
 /** Serializes package edits (packages carry no version column). */
 export async function lockPackage(tx: Tx, propertyId: string, id: string) {
   const rows = await tx.$queryRaw<{ id: string }[]>`
     SELECT "id" FROM "packages"
-    WHERE "id" = ${id}::uuid AND "property_id" = ${propertyId}::uuid
+    WHERE "id" = ${id}::uuid AND ${propertyFilterSql({ propertyId })}
     FOR UPDATE`;
   return rows.length === 1;
 }
@@ -469,7 +473,7 @@ export function countComponentPostings(tx: Tx, componentIds: string[]) {
 
 export function findActivePackages(tx: Tx, propertyId: string, ids: string[]) {
   return tx.package.findMany({
-    where: { propertyId, id: { in: ids }, status: "ACTIVE" },
+    where: { ...propertyWhere({ propertyId }), id: { in: ids }, status: "ACTIVE" },
     select: { id: true, code: true, sellSeparately: true },
   });
 }
@@ -481,7 +485,7 @@ export async function replacePlanAccounts(
   ratePlanId: string,
   rows: { accountProfileId: string; validFrom: Date | null; validTo: Date | null }[],
 ) {
-  await tx.negotiatedRate.deleteMany({ where: { propertyId, ratePlanId } });
+  await tx.negotiatedRate.deleteMany({ where: { ...propertyWhere({ propertyId }), ratePlanId } });
   if (rows.length > 0) {
     await tx.negotiatedRate.createMany({
       data: rows.map((r) => ({ ...r, propertyId, ratePlanId })),
@@ -493,7 +497,13 @@ export async function replacePlanAccounts(
 export function findCompanies(tx: Tx, organizationId: string, ids: string[]) {
   if (ids.length === 0) return Promise.resolve([]);
   return tx.accountProfile.findMany({
-    where: { organizationId, id: { in: ids }, type: "COMPANY", status: "ACTIVE", deletedAt: null },
+    where: {
+      ...organizationWhere({ organizationId }),
+      id: { in: ids },
+      type: "COMPANY",
+      status: "ACTIVE",
+      deletedAt: null,
+    },
     select: { id: true, code: true, name: true },
   });
 }
