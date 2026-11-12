@@ -13,14 +13,19 @@ import { PageHeader } from "@/global/components/ui/PageHeader";
 import { StatusPanel } from "@/global/components/ui/StatusPanel";
 import { PageSkeleton } from "@/global/components/ui/PageSkeleton";
 import { SkeletonRows } from "@/global/components/ui/Skeleton";
-import { TextArea } from "@/global/components/ui/TextArea";
-import { TextField } from "@/global/components/ui/TextField";
+import {
+  FormTextArea,
+  FormTextField,
+  applyServerError,
+  useZodForm,
+} from "@/global/components/ui/form";
 import { usePermissions } from "@/global/hooks/usePermissions";
 import { useProperty } from "@/global/hooks/useProperty";
 import { useCreateGroupMutation, useGroupsQuery } from "@/global/api/endpoints/groupsApi";
 import { toClientApiError } from "@/global/api/errors";
 import { formatDate } from "@serene/shared/lib/utils/format";
 import type { GroupListItem } from "@serene/shared/modules/groups/groups.types";
+import { newGroupBody, newGroupDefaults, newGroupFormSchema } from "../_lib/groupForms";
 
 const STATUSES = [
   ["ACTIVE", "Active"],
@@ -66,15 +71,6 @@ export function GroupsWorkspace() {
   const [creating, setCreating] = useState(false);
 
   if (isLoading) return <PageSkeleton title="Loading groups" />;
-  if (!can("groups:read")) {
-    return (
-      <StatusPanel
-        kind="forbidden"
-        title="Access denied"
-        description="You need the groups:read permission."
-      />
-    );
-  }
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
@@ -292,48 +288,37 @@ function NewGroupDialog({
 }) {
   const property = useProperty();
   const [create, state] = useCreateGroupMutation();
-  const [code, setCode] = useState("");
-  const [name, setName] = useState("");
-  const [notes, setNotes] = useState("");
+  const { control, handleSubmit, setError, setValue, formState } = useZodForm(
+    newGroupFormSchema,
+    newGroupDefaults,
+  );
   const error = toClientApiError(state.error);
   return (
     <FormDialog
       title="New group"
       onClose={onClose}
-      onSubmit={async () => {
-        const result = await create({
-          propertyId: property.id,
-          body: { code: code.trim(), name: name.trim(), notes: notes.trim() || null },
-        });
+      onSubmit={handleSubmit(async (values) => {
+        const result = await create({ propertyId: property.id, body: newGroupBody(values) });
         if ("data" in result && result.data) {
           onClose();
           onCreated(result.data.id);
+        } else if ("error" in result) {
+          applyServerError(setError, toClientApiError(result.error));
         }
-      }}
+      })}
       submitLabel="Create group"
-      disabled={!code.trim() || !name.trim()}
-      pending={state.isLoading}
+      pending={state.isLoading || formState.isSubmitting}
       error={error}
     >
-      <TextField
+      <FormTextField
+        control={control}
+        name="code"
         label="Code"
-        value={code}
-        onChange={(e) => setCode(e.target.value.toUpperCase())}
         maxLength={20}
-        errors={error?.fieldErrors.code}
+        onChange={(e) => setValue("code", e.target.value.toUpperCase())}
       />
-      <TextField
-        label="Name"
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-        maxLength={200}
-      />
-      <TextArea
-        label="Notes (optional)"
-        value={notes}
-        onChange={(e) => setNotes(e.target.value)}
-        maxLength={4000}
-      />
+      <FormTextField control={control} name="name" label="Name" maxLength={200} />
+      <FormTextArea control={control} name="notes" label="Notes (optional)" maxLength={4000} />
     </FormDialog>
   );
 }

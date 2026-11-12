@@ -6,16 +6,15 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Badge } from "@/global/components/ui/Badge";
 import { Button } from "@/global/components/ui/Button";
-import { FormDialog } from "@/global/components/ui/FormDialog";
 import { Select } from "@/global/components/ui/Select";
 import { StatusPanel } from "@/global/components/ui/StatusPanel";
-import { TextArea } from "@/global/components/ui/TextArea";
 import { TextField } from "@/global/components/ui/TextField";
 import { useDebouncedValue } from "@/global/hooks/useDebouncedValue";
 import { usePermissions } from "@/global/hooks/usePermissions";
 import { useProperty } from "@/global/hooks/useProperty";
-import { useAccountsQuery, useCreateAccountMutation } from "@/global/api/endpoints/accountsApi";
+import { useAccountsQuery } from "@/global/api/endpoints/accountsApi";
 import { toClientApiError } from "@/global/api/errors";
+import { NewCompanyDialog } from "./NewCompanyDialog";
 
 const TYPE_LABELS: Record<string, string> = { COMPANY: "Company", TRAVEL_AGENT: "Travel agent" };
 
@@ -185,99 +184,5 @@ export function CompaniesPanel() {
         />
       ) : null}
     </section>
-  );
-}
-
-function NewCompanyDialog({
-  onClose,
-  onCreated,
-}: {
-  onClose: () => void;
-  onCreated: (id: string) => void;
-}) {
-  const [create, state] = useCreateAccountMutation();
-  const [form, setForm] = useState({
-    type: "COMPANY",
-    code: "",
-    name: "",
-    email: "",
-    phone: "",
-    city: "",
-    countryCode: "",
-    notes: "",
-  });
-  const error = toClientApiError(state.error);
-  const set = (key: keyof typeof form) => (e: { target: { value: string } }) =>
-    setForm((f) => ({ ...f, [key]: e.target.value }));
-  return (
-    <FormDialog
-      title="New company"
-      onClose={onClose}
-      onSubmit={async () => {
-        const result = await create({
-          type: form.type as "COMPANY" | "TRAVEL_AGENT",
-          code: form.code.trim(),
-          name: form.name.trim(),
-          email: form.email || null,
-          phone: form.phone || null,
-          city: form.city || null,
-          countryCode: form.countryCode || null,
-          notes: form.notes || null,
-        });
-        if ("data" in result && result.data) {
-          onClose();
-          onCreated(result.data.id);
-        }
-      }}
-      submitLabel="Create company"
-      disabled={!form.code.trim() || !form.name.trim()}
-      pending={state.isLoading}
-      error={error}
-    >
-      <div className="grid gap-3 sm:grid-cols-2">
-        <Select
-          label="Type"
-          options={Object.entries(TYPE_LABELS).map(([value, label]) => ({ value, label }))}
-          value={form.type}
-          onChange={set("type")}
-        />
-        <TextField
-          label="Code"
-          value={form.code}
-          onChange={(e) => setForm((f) => ({ ...f, code: e.target.value.toUpperCase() }))}
-          maxLength={20}
-          errors={error?.fieldErrors.code}
-        />
-        <TextField
-          label="Name"
-          value={form.name}
-          onChange={set("name")}
-          maxLength={200}
-          className="sm:col-span-2"
-        />
-        <TextField
-          label="E-mail"
-          type="email"
-          value={form.email}
-          onChange={set("email")}
-          errors={error?.fieldErrors.email}
-        />
-        <TextField label="Phone" inputMode="tel" value={form.phone} onChange={set("phone")} />
-        <TextField label="City" value={form.city} onChange={set("city")} maxLength={100} />
-        <TextField
-          label="Country (2 letters)"
-          value={form.countryCode}
-          onChange={(e) => setForm((f) => ({ ...f, countryCode: e.target.value.toUpperCase() }))}
-          maxLength={2}
-          errors={error?.fieldErrors.countryCode}
-        />
-      </div>
-      <TextArea
-        label="Notes (optional)"
-        value={form.notes}
-        onChange={set("notes")}
-        maxLength={4000}
-      />
-    </FormDialog>
   );
 }

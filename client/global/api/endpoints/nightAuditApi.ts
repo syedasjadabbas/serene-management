@@ -1,9 +1,5 @@
-import type {
-  RunListItem,
-  ReadinessView,
-  RunView,
-} from "@serene/shared/modules/night-audit/night-audit.types";
-import type { ApiSuccess, CursorPageMeta } from "@serene/shared/types/api";
+import { API } from "@/global/constants/api";
+import type { ApiSuccess, CursorPageMeta, ReadinessView, RunListItem, RunView } from "../types";
 import { baseApi } from "../baseApi";
 import { optionsTag } from "./optionsTags";
 
@@ -42,7 +38,7 @@ export const NIGHT_AUDIT_ROLLED_TAGS = [
 export const nightAuditApi = baseApi.injectEndpoints({
   endpoints: (build) => ({
     nightAuditReadiness: build.query<ReadinessView, string>({
-      query: (propertyId) => `/properties/${propertyId}/night-audits/readiness`,
+      query: (propertyId) => API.nightAudit.nightAuditsReadiness(propertyId),
       transformResponse: (response: ApiSuccess<ReadinessView>) => response.data,
       providesTags: ["NightAudit"],
     }),
@@ -51,7 +47,7 @@ export const nightAuditApi = baseApi.injectEndpoints({
       { propertyId: string; cursor?: string }
     >({
       query: ({ propertyId, cursor }) =>
-        `/properties/${propertyId}/night-audits${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`,
+        `${API.nightAudit.nightAudits(propertyId)}${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`,
       transformResponse: (response: ApiSuccess<RunListItem[], CursorPageMeta>) => ({
         items: response.data,
         meta: response.meta ?? { nextCursor: null, limit: 0 },
@@ -59,7 +55,7 @@ export const nightAuditApi = baseApi.injectEndpoints({
       providesTags: ["NightAudit"],
     }),
     nightAuditRun: build.query<RunView, { propertyId: string; runId: string }>({
-      query: ({ propertyId, runId }) => `/properties/${propertyId}/night-audits/${runId}`,
+      query: ({ propertyId, runId }) => API.nightAudit.nightAudit(propertyId, runId),
       transformResponse: (response: ApiSuccess<RunView>) => response.data,
       providesTags: (_r, _e, { runId }) => [{ type: "NightAudit", id: runId }],
     }),
@@ -68,7 +64,7 @@ export const nightAuditApi = baseApi.injectEndpoints({
       { propertyId: string; reason: string; idempotencyKey: string }
     >({
       query: ({ propertyId, reason, idempotencyKey }) => ({
-        url: `/properties/${propertyId}/night-audits`,
+        url: API.nightAudit.nightAudits(propertyId),
         method: "POST",
         body: { reason },
         headers: { "Idempotency-Key": idempotencyKey },
@@ -81,7 +77,7 @@ export const nightAuditApi = baseApi.injectEndpoints({
       { propertyId: string; runId: string; reason: string }
     >({
       query: ({ propertyId, runId, reason }) => ({
-        url: `/properties/${propertyId}/night-audits/${runId}/recover`,
+        url: API.nightAudit.nightAuditRecover(propertyId, runId),
         method: "POST",
         body: { reason },
       }),

@@ -1,24 +1,24 @@
-import { baseApi } from "../baseApi";
+import { API } from "@/global/constants/api";
 import type {
+  ApiSuccess,
   ChangeMembershipInput,
   CreateProgramInput,
   CreateTierInput,
+  CursorPageMeta,
+  GuestProfileView,
+  LoyaltyMemberRow,
+  LoyaltyOverview,
   PointsAdjustmentInput,
   UpdateProgramInput,
   UpdateTierInput,
-} from "@serene/shared/modules/loyalty/loyalty.schema";
-import type {
-  LoyaltyMemberRow,
-  LoyaltyOverview,
-} from "@serene/shared/modules/loyalty/loyalty.types";
-import type { GuestProfileView } from "@serene/shared/modules/guests/guests.types";
-import type { ApiSuccess, CursorPageMeta } from "@serene/shared/types/api";
+} from "../types";
+import { baseApi } from "../baseApi";
 
 /** Loyalty programs, tiers and memberships (Phase 7 foundation). */
 export const loyaltyApi = baseApi.injectEndpoints({
   endpoints: (build) => ({
     loyaltyOverview: build.query<LoyaltyOverview, void>({
-      query: () => "/loyalty/programs",
+      query: () => API.loyalty.loyaltyPrograms(),
       transformResponse: (response: ApiSuccess<LoyaltyOverview>) => response.data,
       providesTags: ["Loyalty"],
     }),
@@ -27,7 +27,7 @@ export const loyaltyApi = baseApi.injectEndpoints({
       { programId: string; cursor?: string }
     >({
       query: ({ programId, cursor }) =>
-        `/loyalty/programs/${programId}/members${cursor ? `?cursor=${cursor}` : ""}`,
+        `${API.loyalty.loyaltyProgramMembers(programId)}${cursor ? `?cursor=${cursor}` : ""}`,
       transformResponse: (response: ApiSuccess<LoyaltyMemberRow[], CursorPageMeta>) => ({
         items: response.data,
         meta: response.meta ?? { nextCursor: null, limit: 0 },
@@ -35,14 +35,14 @@ export const loyaltyApi = baseApi.injectEndpoints({
       providesTags: ["Loyalty"],
     }),
     createProgram: build.mutation<LoyaltyOverview, CreateProgramInput>({
-      query: (body) => ({ url: "/loyalty/programs", method: "POST", body }),
+      query: (body) => ({ url: API.loyalty.loyaltyPrograms(), method: "POST", body }),
       transformResponse: (response: ApiSuccess<LoyaltyOverview>) => response.data,
       invalidatesTags: ["Loyalty"],
     }),
     updateProgram: build.mutation<LoyaltyOverview, { programId: string; body: UpdateProgramInput }>(
       {
         query: ({ programId, body }) => ({
-          url: `/loyalty/programs/${programId}`,
+          url: API.loyalty.loyaltyProgram(programId),
           method: "PATCH",
           body,
         }),
@@ -52,7 +52,7 @@ export const loyaltyApi = baseApi.injectEndpoints({
     ),
     createTier: build.mutation<LoyaltyOverview, { programId: string; body: CreateTierInput }>({
       query: ({ programId, body }) => ({
-        url: `/loyalty/programs/${programId}/tiers`,
+        url: API.loyalty.loyaltyProgramTiers(programId),
         method: "POST",
         body,
       }),
@@ -60,7 +60,11 @@ export const loyaltyApi = baseApi.injectEndpoints({
       invalidatesTags: ["Loyalty"],
     }),
     updateTier: build.mutation<LoyaltyOverview, { tierId: string; body: UpdateTierInput }>({
-      query: ({ tierId, body }) => ({ url: `/loyalty/tiers/${tierId}`, method: "PATCH", body }),
+      query: ({ tierId, body }) => ({
+        url: API.loyalty.loyaltyTier(tierId),
+        method: "PATCH",
+        body,
+      }),
       transformResponse: (response: ApiSuccess<LoyaltyOverview>) => response.data,
       invalidatesTags: ["Loyalty"],
     }),
@@ -69,7 +73,7 @@ export const loyaltyApi = baseApi.injectEndpoints({
       { membershipId: string; guestId: string; body: ChangeMembershipInput }
     >({
       query: ({ membershipId, body }) => ({
-        url: `/loyalty/memberships/${membershipId}`,
+        url: API.loyalty.loyaltyMembership(membershipId),
         method: "PATCH",
         body,
       }),
@@ -81,7 +85,7 @@ export const loyaltyApi = baseApi.injectEndpoints({
       { membershipId: string; guestId: string; body: PointsAdjustmentInput }
     >({
       query: ({ membershipId, body }) => ({
-        url: `/loyalty/memberships/${membershipId}/adjustments`,
+        url: API.loyalty.loyaltyMembershipAdjustments(membershipId),
         method: "POST",
         body,
       }),

@@ -81,15 +81,6 @@ export function MaintenanceWorkspace() {
   const q = params.get("q") ?? "";
 
   if (isLoading) return <PageSkeleton title="Loading maintenance" />;
-  if (!allowed) {
-    return (
-      <StatusPanel
-        kind="forbidden"
-        title="Access denied"
-        description="You need the maintenance:read permission."
-      />
-    );
-  }
 
   function navigate(next: { view?: MaintenanceView; priority?: string; q?: string }) {
     const search = new URLSearchParams();

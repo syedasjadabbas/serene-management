@@ -30,7 +30,7 @@ const VIEW_LABELS: Record<FolioListView, string> = {
 /** Guest accounts: pick a stay to open its folio. Balances come from the ledger. */
 export function BillingWorkspace() {
   const property = useProperty();
-  const { can, isLoading: permissionsLoading } = usePermissions(property.id);
+  const { isLoading: permissionsLoading } = usePermissions(property.id);
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
@@ -58,15 +58,6 @@ export function BillingWorkspace() {
   };
 
   if (permissionsLoading) return <PageSkeleton title="Loading billing" />;
-  if (!can("billing:read")) {
-    return (
-      <StatusPanel
-        kind="forbidden"
-        title="Access denied"
-        description="You need the billing:read permission."
-      />
-    );
-  }
 
   return (
     <div className="flex flex-col gap-6">

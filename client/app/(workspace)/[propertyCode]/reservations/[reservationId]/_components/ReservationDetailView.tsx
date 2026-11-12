@@ -39,15 +39,6 @@ export function ReservationDetailView({
   const [editingCompany, setEditingCompany] = useState(false);
 
   if (permissionsLoading) return <PageSkeleton title="Loading reservation" layout="detail" />;
-  if (!can("reservations:read")) {
-    return (
-      <StatusPanel
-        kind="forbidden"
-        title="Access denied"
-        description="You need the reservations:read permission."
-      />
-    );
-  }
   if (query.isLoading) return <PageSkeleton title="Loading reservation" layout="detail" />;
   if (error || !query.data) {
     return (

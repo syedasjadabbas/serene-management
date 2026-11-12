@@ -1,10 +1,11 @@
-import type { ReportQuery } from "@serene/shared/modules/reports/reports.schema";
+import { API } from "@/global/constants/api";
 import type {
+  ApiSuccess,
   DashboardView,
   ReportCatalogItem,
+  ReportQuery,
   ReportResult,
-} from "@serene/shared/modules/reports/reports.types";
-import type { ApiSuccess } from "@serene/shared/types/api";
+} from "../types";
 import { baseApi } from "../baseApi";
 
 /** Reports and the property dashboard (Phase 8): read-only, refreshed after night audit. */
@@ -22,13 +23,13 @@ export function reportExportPath(
   query: ReportQuery,
 ): string {
   const qs = reportQueryString(query);
-  return `/properties/${propertyId}/reports/${reportKey}/export${qs ? `?${qs}` : ""}`;
+  return `${API.reports.reportExport(propertyId, reportKey)}${qs ? `?${qs}` : ""}`;
 }
 
 export const reportsApi = baseApi.injectEndpoints({
   endpoints: (build) => ({
     reportCatalog: build.query<{ reports: ReportCatalogItem[]; canExport: boolean }, string>({
-      query: (propertyId) => `/properties/${propertyId}/reports`,
+      query: (propertyId) => API.reports.reports(propertyId),
       transformResponse: (
         response: ApiSuccess<{ reports: ReportCatalogItem[]; canExport: boolean }>,
       ) => response.data,
@@ -40,13 +41,13 @@ export const reportsApi = baseApi.injectEndpoints({
     >({
       query: ({ propertyId, reportKey, query }) => {
         const qs = reportQueryString(query);
-        return `/properties/${propertyId}/reports/${reportKey}${qs ? `?${qs}` : ""}`;
+        return `${API.reports.report(propertyId, reportKey)}${qs ? `?${qs}` : ""}`;
       },
       transformResponse: (response: ApiSuccess<ReportResult>) => response.data,
       providesTags: ["Report"],
     }),
     dashboard: build.query<DashboardView, string>({
-      query: (propertyId) => `/properties/${propertyId}/dashboard`,
+      query: (propertyId) => API.reports.dashboard(propertyId),
       transformResponse: (response: ApiSuccess<DashboardView>) => response.data,
       providesTags: ["Report"],
     }),

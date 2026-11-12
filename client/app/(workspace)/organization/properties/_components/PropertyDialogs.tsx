@@ -3,14 +3,25 @@
 import { useState } from "react";
 import { Alert } from "@/global/components/ui/Alert";
 import { FormDialog } from "@/global/components/ui/FormDialog";
-import { Select } from "@/global/components/ui/Select";
-import { TextArea } from "@/global/components/ui/TextArea";
-import { TextField } from "@/global/components/ui/TextField";
+import {
+  FormSelect,
+  FormTextArea,
+  FormTextField,
+  applyServerError,
+  useZodForm,
+} from "@/global/components/ui/form";
 import {
   useCopyPropertySetupMutation,
   useCreatePropertyMutation,
 } from "@/global/api/endpoints/organizationApi";
 import { toClientApiError } from "@/global/api/errors";
+import {
+  copySetupDefaults,
+  copySetupFormSchema,
+  createPropertyDefaults,
+  createPropertyFormSchema,
+  toCreatePropertyBody,
+} from "../_lib/propertyForms";
 import type {
   PropertySetupCopyResult,
   PropertyView,
@@ -19,96 +30,62 @@ import type {
 /** A new property: code, identity, zone and currency. Rooms and rates are set up afterwards. */
 export function CreatePropertyDialog({ onClose }: { onClose: () => void }) {
   const [create, state] = useCreatePropertyMutation();
-  const [form, setForm] = useState({
-    code: "",
-    name: "",
-    timezone: "",
-    currencyCode: "",
-    countryCode: "",
-    confirmationPrefix: "",
-    reason: "",
-  });
+  const { control, handleSubmit, setError, formState } = useZodForm(
+    createPropertyFormSchema,
+    createPropertyDefaults,
+  );
   const error = toClientApiError(state.error);
-  const set = (key: keyof typeof form) => (e: { target: { value: string } }) =>
-    setForm({ ...form, [key]: e.target.value });
   return (
     <FormDialog
       title="New property"
       description="The confirmation prefix defaults to the code. The property goes live when its business date is initialized."
       onClose={onClose}
-      onSubmit={async () => {
-        const result = await create({
-          code: form.code.trim().toUpperCase(),
-          name: form.name.trim(),
-          timezone: form.timezone.trim(),
-          currencyCode: form.currencyCode.trim().toUpperCase(),
-          countryCode: form.countryCode.trim().toUpperCase(),
-          ...(form.confirmationPrefix.trim()
-            ? { confirmationPrefix: form.confirmationPrefix.trim().toUpperCase() }
-            : {}),
-          reason: form.reason.trim(),
-        });
+      onSubmit={handleSubmit(async (values) => {
+        const result = await create(toCreatePropertyBody(values));
         if ("data" in result) onClose();
-      }}
+        else applyServerError(setError, toClientApiError(result.error));
+      })}
       submitLabel="Create property"
-      disabled={!form.code || !form.name || form.reason.trim().length < 3}
-      pending={state.isLoading}
+      pending={state.isLoading || formState.isSubmitting}
       error={error}
     >
       <div className="grid gap-3 sm:grid-cols-2">
-        <TextField
+        <FormTextField
+          control={control}
+          name="code"
           label="Code"
-          value={form.code}
-          onChange={set("code")}
           maxLength={10}
-          errors={error?.fieldErrors.code}
           hint="2–10 letters or digits"
         />
-        <TextField
-          label="Name"
-          value={form.name}
-          onChange={set("name")}
-          maxLength={200}
-          errors={error?.fieldErrors.name}
-        />
-        <TextField
+        <FormTextField control={control} name="name" label="Name" maxLength={200} />
+        <FormTextField
+          control={control}
+          name="timezone"
           label="Time zone"
-          value={form.timezone}
-          onChange={set("timezone")}
           placeholder="Asia/Karachi"
-          errors={error?.fieldErrors.timezone}
         />
-        <TextField
+        <FormTextField
+          control={control}
+          name="currencyCode"
           label="Currency"
-          value={form.currencyCode}
-          onChange={set("currencyCode")}
           maxLength={3}
           placeholder="PKR"
-          errors={error?.fieldErrors.currencyCode}
         />
-        <TextField
+        <FormTextField
+          control={control}
+          name="countryCode"
           label="Country"
-          value={form.countryCode}
-          onChange={set("countryCode")}
           maxLength={2}
           placeholder="PK"
-          errors={error?.fieldErrors.countryCode}
         />
-        <TextField
+        <FormTextField
+          control={control}
+          name="confirmationPrefix"
           label="Confirmation prefix (optional)"
-          value={form.confirmationPrefix}
-          onChange={set("confirmationPrefix")}
           maxLength={10}
-          errors={error?.fieldErrors.confirmationPrefix}
         />
       </div>
-      <TextArea
-        label="Reason (required)"
-        value={form.reason}
-        onChange={set("reason")}
-        maxLength={1000}
-        errors={error?.fieldErrors.reason}
-      />
+      <FormTextArea control={control} name="reason" label="Reason (required)" maxLength={1000} />
     </FormDialog>
   );
 }
@@ -128,8 +105,11 @@ export function CopySetupDialog({
   onClose: () => void;
 }) {
   const [copy, state] = useCopyPropertySetupMutation();
-  const [sourceId, setSourceId] = useState(sources[0]?.id ?? "");
-  const [reason, setReason] = useState("");
+  const { control, handleSubmit, setError, watch, formState } = useZodForm(
+    copySetupFormSchema,
+    copySetupDefaults(sources[0]?.id ?? ""),
+  );
+  const sourceId = watch("sourceId");
   const [result, setResult] = useState<PropertySetupCopyResult | null>(null);
   const error = toClientApiError(state.error);
   const source = sources.find((s) => s.id === sourceId);
@@ -191,19 +171,19 @@ export function CopySetupDialog({
       title={`Copy setup into ${target.code}`}
       description="Copies charge and payment codes, taxes, reason, market, source and channel codes, housekeeping task types, block statuses, reservation types and cancellation and deposit policies. Rooms, room types, rates, reservations and history are never copied."
       onClose={onClose}
-      onSubmit={async () => {
-        const response = await copy({ targetId: target.id, sourceId, reason: reason.trim() });
+      onSubmit={handleSubmit(async (values) => {
+        const response = await copy({ targetId: target.id, ...values });
         if ("data" in response && response.data) setResult(response.data);
-      }}
+        else applyServerError(setError, toClientApiError(response.error));
+      })}
       submitLabel="Copy setup"
-      disabled={!sourceId || reason.trim().length < 3}
-      pending={state.isLoading}
+      pending={state.isLoading || formState.isSubmitting}
       error={error}
     >
-      <Select
+      <FormSelect
+        control={control}
+        name="sourceId"
         label="Copy from"
-        value={sourceId}
-        onChange={(e) => setSourceId(e.target.value)}
         options={sources.map((s) => ({
           value: s.id,
           label: `${s.code} · ${s.name} (${s.currencyCode})`,
@@ -216,13 +196,7 @@ export function CopySetupDialog({
           review.
         </Alert>
       ) : null}
-      <TextArea
-        label="Reason (required)"
-        value={reason}
-        onChange={(e) => setReason(e.target.value)}
-        maxLength={1000}
-        errors={error?.fieldErrors.reason}
-      />
+      <FormTextArea control={control} name="reason" label="Reason (required)" maxLength={1000} />
     </FormDialog>
   );
 }

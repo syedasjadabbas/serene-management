@@ -1,20 +1,23 @@
 "use client";
 
 import Link from "next/link";
-import { type FormEvent, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Alert } from "@/global/components/ui/Alert";
 import { Button } from "@/global/components/ui/Button";
-import { PasswordField } from "@/global/components/ui/PasswordField";
+import { FormPasswordField, applyServerError, useZodForm } from "@/global/components/ui/form";
 import { PASSWORD_MIN_LENGTH } from "@serene/shared/lib/auth/password-policy";
 import { useCompletePasswordResetMutation } from "@/global/api/endpoints/sessionApi";
 import { toClientApiError } from "@/global/api/errors";
+import { resetPasswordDefaults, resetPasswordFormSchema } from "../_lib/resetPasswordForm";
 
 /** Reads the one-time token from the fragment and sets the new password. */
 export function ResetPasswordForm() {
   // undefined: not read yet; null: the link carries no token.
   const [token, setToken] = useState<string | null | undefined>(undefined);
-  const [password, setPassword] = useState("");
-  const [confirm, setConfirm] = useState("");
+  const { control, handleSubmit, setError, formState } = useZodForm(
+    resetPasswordFormSchema,
+    resetPasswordDefaults,
+  );
   const [complete, { isLoading, error, isSuccess }] = useCompletePasswordResetMutation();
   const apiError = toClientApiError(error);
 
@@ -45,15 +48,16 @@ export function ResetPasswordForm() {
     );
   }
 
-  async function onSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function onSubmit(values: { newPassword: string }) {
     if (!token) return;
-    await complete({ token, newPassword: password });
+    const result = await complete({ token, newPassword: values.newPassword });
+    if ("error" in result) {
+      applyServerError(setError, toClientApiError(result.error), ["newPassword"]);
+    }
   }
 
-  const mismatch = confirm.length > 0 && confirm !== password;
   return (
-    <form onSubmit={onSubmit} noValidate className="flex flex-col gap-4">
+    <form onSubmit={handleSubmit(onSubmit)} noValidate className="flex flex-col gap-4">
       {token === null ? (
         <Alert tone="danger">
           This reset link is incomplete. Ask an administrator for a new one.
@@ -66,28 +70,26 @@ export function ResetPasswordForm() {
             : apiError.message}
         </Alert>
       ) : null}
-      <PasswordField
+      <FormPasswordField
+        control={control}
+        name="newPassword"
         label="New password"
         autoComplete="new-password"
         controlSize="lg"
         hint={`At least ${PASSWORD_MIN_LENGTH} characters`}
-        value={password}
-        onChange={(e) => setPassword(e.target.value)}
-        errors={apiError?.fieldErrors.newPassword}
       />
-      <PasswordField
+      <FormPasswordField
+        control={control}
+        name="confirm"
         label="Repeat the new password"
         autoComplete="new-password"
         controlSize="lg"
-        value={confirm}
-        onChange={(e) => setConfirm(e.target.value)}
-        errors={mismatch ? ["The passwords do not match"] : undefined}
       />
       <Button
         type="submit"
         size="touch"
-        pending={isLoading}
-        disabled={!token || password.length < PASSWORD_MIN_LENGTH || confirm !== password}
+        pending={isLoading || formState.isSubmitting}
+        disabled={!token}
         className="w-full"
       >
         Set password

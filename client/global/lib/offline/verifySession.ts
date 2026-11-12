@@ -1,5 +1,5 @@
 import { type Fetcher, authHeaders, refreshAccessToken } from "@/global/api/session";
-import { API_BASE_URL } from "@/global/constants/api";
+import { API, API_BASE_URL } from "@/global/constants/api";
 import { claimSession, clearOfflineData, reconcileSnapshots } from "./db";
 
 /**
@@ -27,7 +27,7 @@ export interface MeSummary {
 
 export async function checkSession(fetcher: Fetcher = fetch): Promise<SessionCheck> {
   const me = () =>
-    fetcher(`${API_BASE_URL}/me`, {
+    fetcher(`${API_BASE_URL}${API.auth.me()}`, {
       credentials: "include",
       cache: "no-store",
       headers: authHeaders(),

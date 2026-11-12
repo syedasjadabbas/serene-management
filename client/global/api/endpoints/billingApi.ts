@@ -1,23 +1,23 @@
+import { API } from "@/global/constants/api";
 import type {
   AdjustInput,
-  ChargeInput,
-  PaymentInput,
-  RefundInput,
-  ReverseInput,
-  RoomChargesInput,
-  VoidPaymentInput,
-} from "@serene/shared/modules/billing/billing.schema";
-import type {
+  ApiSuccess,
   BillingOptions,
+  ChargeInput,
   ChargePreview,
+  CursorPageMeta,
   FolioAccountView,
   FolioListRow,
   LedgerPage,
+  PaymentInput,
   PaymentResult,
   PostingResult,
+  RefundInput,
+  ReverseInput,
+  RoomChargesInput,
   RoomChargesResult,
-} from "@serene/shared/modules/billing/billing.types";
-import type { ApiSuccess, CursorPageMeta } from "@serene/shared/types/api";
+  VoidPaymentInput,
+} from "../types";
 import { baseApi } from "../baseApi";
 import { optionsTag } from "./optionsTags";
 
@@ -83,7 +83,7 @@ export function afterFinancial(
 export const billingApi = baseApi.injectEndpoints({
   endpoints: (build) => ({
     billingOptions: build.query<BillingOptions, string>({
-      query: (propertyId) => `/properties/${propertyId}/billing/options`,
+      query: (propertyId) => API.billing.billingOptions(propertyId),
       transformResponse: (response: ApiSuccess<BillingOptions>) => response.data,
       providesTags: (_r, _e, propertyId) => [optionsTag(propertyId)],
       keepUnusedDataFor: 300,
@@ -95,7 +95,7 @@ export const billingApi = baseApi.injectEndpoints({
       query: ({ propertyId, ...params }) => {
         const search = new URLSearchParams();
         for (const [key, value] of Object.entries(params)) if (value) search.set(key, value);
-        return `/properties/${propertyId}/folios?${search.toString()}`;
+        return `${API.billing.folios(propertyId)}?${search.toString()}`;
       },
       transformResponse: (response: ApiSuccess<FolioListRow[], CursorPageMeta>) => ({
         items: response.data,
@@ -105,7 +105,7 @@ export const billingApi = baseApi.injectEndpoints({
     }),
     folioAccount: build.query<FolioAccountView, { propertyId: string; reservationRoomId: string }>({
       query: ({ propertyId, reservationRoomId }) =>
-        `/properties/${propertyId}/reservation-rooms/${reservationRoomId}/folio`,
+        API.billing.reservationRoomFolio(propertyId, reservationRoomId),
       transformResponse: (response: ApiSuccess<FolioAccountView>) => response.data,
       providesTags: (_r, _e, { reservationRoomId }) => [{ type: "Folio", id: reservationRoomId }],
     }),
@@ -114,13 +114,13 @@ export const billingApi = baseApi.injectEndpoints({
       { propertyId: string; folioId: string; cursor?: string | null }
     >({
       query: ({ propertyId, folioId, cursor }) =>
-        `/properties/${propertyId}/folios/${folioId}/items?limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
+        `${API.billing.folioItems(propertyId, folioId)}?limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
       transformResponse: (response: ApiSuccess<LedgerPage>) => response.data,
       providesTags: (_r, _e, { folioId }) => [{ type: "Folio", id: `LEDGER-${folioId}` }],
     }),
     folioHistory: build.query<HistoryEntry[], { propertyId: string; reservationRoomId: string }>({
       query: ({ propertyId, reservationRoomId }) =>
-        `/properties/${propertyId}/reservation-rooms/${reservationRoomId}/folio/history`,
+        API.billing.reservationRoomFolioHistory(propertyId, reservationRoomId),
       transformResponse: (response: ApiSuccess<HistoryEntry[]>) => response.data,
       providesTags: (_r, _e, { reservationRoomId }) => [
         { type: "Folio", id: `HISTORY-${reservationRoomId}` },
@@ -130,7 +130,7 @@ export const billingApi = baseApi.injectEndpoints({
     openWindow: build.mutation<FolioAccountView, { propertyId: string; reservationRoomId: string }>(
       {
         query: ({ propertyId, reservationRoomId }) => ({
-          url: `/properties/${propertyId}/reservation-rooms/${reservationRoomId}/folio`,
+          url: API.billing.reservationRoomFolio(propertyId, reservationRoomId),
           method: "POST",
           body: {},
         }),
@@ -143,7 +143,7 @@ export const billingApi = baseApi.injectEndpoints({
       { propertyId: string; folioId: string; body: ChargeInput }
     >({
       query: ({ propertyId, folioId, body }) => ({
-        url: `/properties/${propertyId}/folios/${folioId}/charges/preview`,
+        url: API.billing.folioChargesPreview(propertyId, folioId),
         method: "POST",
         body,
       }),
@@ -151,7 +151,7 @@ export const billingApi = baseApi.injectEndpoints({
     }),
     postCharge: build.mutation<PostingResult, Idempotent<ChargeInput> & { folioId: string }>({
       query: ({ propertyId, folioId, idempotencyKey, body }) =>
-        idempotent(`/properties/${propertyId}/folios/${folioId}/charges`, idempotencyKey, body),
+        idempotent(API.billing.folioCharges(propertyId, folioId), idempotencyKey, body),
       transformResponse: (response: ApiSuccess<PostingResult>) => response.data,
       invalidatesTags: afterFinancial,
     }),
@@ -161,7 +161,7 @@ export const billingApi = baseApi.injectEndpoints({
     >({
       query: ({ propertyId, reservationRoomId, idempotencyKey, body }) =>
         idempotent(
-          `/properties/${propertyId}/reservation-rooms/${reservationRoomId}/room-charges`,
+          API.billing.reservationRoomRoomCharges(propertyId, reservationRoomId),
           idempotencyKey,
           body,
         ),
@@ -170,19 +170,19 @@ export const billingApi = baseApi.injectEndpoints({
     }),
     postPayment: build.mutation<PaymentResult, Idempotent<PaymentInput> & { folioId: string }>({
       query: ({ propertyId, folioId, idempotencyKey, body }) =>
-        idempotent(`/properties/${propertyId}/folios/${folioId}/payments`, idempotencyKey, body),
+        idempotent(API.billing.folioPayments(propertyId, folioId), idempotencyKey, body),
       transformResponse: (response: ApiSuccess<PaymentResult>) => response.data,
       invalidatesTags: afterFinancial,
     }),
     reverseItem: build.mutation<PostingResult, Idempotent<ReverseInput> & { itemId: string }>({
       query: ({ propertyId, itemId, idempotencyKey, body }) =>
-        idempotent(`/properties/${propertyId}/folio-items/${itemId}/reverse`, idempotencyKey, body),
+        idempotent(API.billing.folioItemReverse(propertyId, itemId), idempotencyKey, body),
       transformResponse: (response: ApiSuccess<PostingResult>) => response.data,
       invalidatesTags: afterFinancial,
     }),
     adjustItem: build.mutation<PostingResult, Idempotent<AdjustInput> & { itemId: string }>({
       query: ({ propertyId, itemId, idempotencyKey, body }) =>
-        idempotent(`/properties/${propertyId}/folio-items/${itemId}/adjust`, idempotencyKey, body),
+        idempotent(API.billing.folioItemAdjust(propertyId, itemId), idempotencyKey, body),
       transformResponse: (response: ApiSuccess<PostingResult>) => response.data,
       invalidatesTags: afterFinancial,
     }),
@@ -191,13 +191,13 @@ export const billingApi = baseApi.injectEndpoints({
       Idempotent<VoidPaymentInput> & { paymentId: string }
     >({
       query: ({ propertyId, paymentId, idempotencyKey, body }) =>
-        idempotent(`/properties/${propertyId}/payments/${paymentId}/void`, idempotencyKey, body),
+        idempotent(API.billing.paymentVoid(propertyId, paymentId), idempotencyKey, body),
       transformResponse: (response: ApiSuccess<PaymentResult>) => response.data,
       invalidatesTags: afterFinancial,
     }),
     refundPayment: build.mutation<PaymentResult, Idempotent<RefundInput> & { paymentId: string }>({
       query: ({ propertyId, paymentId, idempotencyKey, body }) =>
-        idempotent(`/properties/${propertyId}/payments/${paymentId}/refund`, idempotencyKey, body),
+        idempotent(API.billing.paymentRefund(propertyId, paymentId), idempotencyKey, body),
       transformResponse: (response: ApiSuccess<PaymentResult>) => response.data,
       invalidatesTags: afterFinancial,
     }),
@@ -206,7 +206,7 @@ export const billingApi = baseApi.injectEndpoints({
       { propertyId: string; reservationRoomId: string; folioId: string; version: number }
     >({
       query: ({ propertyId, folioId, version }) => ({
-        url: `/properties/${propertyId}/folios/${folioId}/settle`,
+        url: API.billing.folioSettle(propertyId, folioId),
         method: "POST",
         body: { version },
       }),

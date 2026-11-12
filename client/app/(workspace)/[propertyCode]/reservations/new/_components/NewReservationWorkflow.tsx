@@ -58,15 +58,6 @@ export function NewReservationWorkflow() {
   }, [property.id]);
 
   if (isLoading || businessDate.isLoading) return <PageSkeleton title="Loading" layout="detail" />;
-  if (!can("reservations:create")) {
-    return (
-      <StatusPanel
-        kind="forbidden"
-        title="Access denied"
-        description="You need the reservations:create permission."
-      />
-    );
-  }
   if (walkIn && !(can("frontdesk:checkin") && can("rooms:assign"))) {
     return (
       <StatusPanel

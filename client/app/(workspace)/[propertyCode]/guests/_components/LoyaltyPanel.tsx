@@ -5,21 +5,11 @@ import type { Route } from "next";
 import { useState } from "react";
 import { Badge } from "@/global/components/ui/Badge";
 import { Button } from "@/global/components/ui/Button";
-import { FormDialog } from "@/global/components/ui/FormDialog";
 import { Select } from "@/global/components/ui/Select";
 import { StatusPanel } from "@/global/components/ui/StatusPanel";
-import { TextArea } from "@/global/components/ui/TextArea";
-import { TextField } from "@/global/components/ui/TextField";
 import { usePermissions } from "@/global/hooks/usePermissions";
 import { useProperty } from "@/global/hooks/useProperty";
-import {
-  useCreateProgramMutation,
-  useCreateTierMutation,
-  useLoyaltyMembersQuery,
-  useLoyaltyOverviewQuery,
-  useUpdateProgramMutation,
-  useUpdateTierMutation,
-} from "@/global/api/endpoints/loyaltyApi";
+import { useLoyaltyMembersQuery, useLoyaltyOverviewQuery } from "@/global/api/endpoints/loyaltyApi";
 import { toClientApiError } from "@/global/api/errors";
 import { formatDate } from "@serene/shared/lib/utils/format";
 import type {
@@ -27,14 +17,13 @@ import type {
   LoyaltyTierView,
 } from "@serene/shared/modules/loyalty/loyalty.types";
 import { Table, TBody, Td, Th, THead, Tr } from "@/global/components/ui/Table";
+import { ProgramDialog, ProgramStatusDialog, TierDialog } from "./LoyaltyDialogs";
 
 type Dialog =
   | null
   | { kind: "program" }
   | { kind: "programStatus"; program: LoyaltyProgramView }
   | { kind: "tier"; program: LoyaltyProgramView; tier?: LoyaltyTierView };
-
-const digits = (value: string) => value.replace(/\D/g, "");
 
 /**
  * Loyalty foundation: programs, tiers and their members. Points are not
@@ -290,200 +279,5 @@ function MembersList({
         </div>
       ) : null}
     </section>
-  );
-}
-
-function ProgramDialog({ onClose }: { onClose: () => void }) {
-  const [create, state] = useCreateProgramMutation();
-  const [code, setCode] = useState("");
-  const [name, setName] = useState("");
-  const [isExternal, setIsExternal] = useState(false);
-  const [reason, setReason] = useState("");
-  const error = toClientApiError(state.error);
-  return (
-    <FormDialog
-      title="New loyalty program"
-      onClose={onClose}
-      onSubmit={async () => {
-        const result = await create({
-          code: code.trim(),
-          name: name.trim(),
-          isExternal,
-          reason: reason.trim(),
-        });
-        if ("data" in result) onClose();
-      }}
-      submitLabel="Create program"
-      disabled={!code.trim() || !name.trim() || reason.trim().length < 3}
-      pending={state.isLoading}
-      error={error}
-    >
-      <div className="grid gap-3 sm:grid-cols-2">
-        <TextField
-          label="Code"
-          value={code}
-          onChange={(e) => setCode(e.target.value.toUpperCase())}
-          maxLength={20}
-          errors={error?.fieldErrors.code}
-        />
-        <TextField
-          label="Name"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          maxLength={100}
-        />
-      </div>
-      <label className="flex min-h-11 items-center gap-2 text-sm">
-        <input
-          type="checkbox"
-          checked={isExternal}
-          onChange={(e) => setIsExternal(e.target.checked)}
-        />
-        External program (member numbers come from the program, not generated here)
-      </label>
-      <TextArea
-        label="Reason (audited)"
-        value={reason}
-        onChange={(e) => setReason(e.target.value)}
-        maxLength={500}
-      />
-    </FormDialog>
-  );
-}
-
-function ProgramStatusDialog({
-  program,
-  onClose,
-}: {
-  program: LoyaltyProgramView;
-  onClose: () => void;
-}) {
-  const [update, state] = useUpdateProgramMutation();
-  const [reason, setReason] = useState("");
-  const next = program.status === "ACTIVE" ? "INACTIVE" : "ACTIVE";
-  return (
-    <FormDialog
-      title={`${next === "ACTIVE" ? "Activate" : "Deactivate"} ${program.code}`}
-      description={
-        next === "INACTIVE" ? "Guests can no longer be enrolled; memberships stay." : undefined
-      }
-      onClose={onClose}
-      onSubmit={async () => {
-        const result = await update({
-          programId: program.id,
-          body: { status: next, reason: reason.trim() },
-        });
-        if ("data" in result) onClose();
-      }}
-      submitLabel={next === "ACTIVE" ? "Activate" : "Deactivate"}
-      danger={next === "INACTIVE"}
-      disabled={reason.trim().length < 3}
-      pending={state.isLoading}
-      error={toClientApiError(state.error)}
-    >
-      <TextArea
-        label="Reason (audited)"
-        value={reason}
-        onChange={(e) => setReason(e.target.value)}
-        maxLength={500}
-      />
-    </FormDialog>
-  );
-}
-
-function TierDialog({
-  program,
-  tier,
-  onClose,
-}: {
-  program: LoyaltyProgramView;
-  tier?: LoyaltyTierView;
-  onClose: () => void;
-}) {
-  const [create, createState] = useCreateTierMutation();
-  const [update, updateState] = useUpdateTierMutation();
-  const [code, setCode] = useState(tier?.code ?? "");
-  const [name, setName] = useState(tier?.name ?? "");
-  const [rank, setRank] = useState(String(tier?.rank ?? program.tiers.length + 1));
-  const [nights, setNights] = useState(tier?.qualifyingNights?.toString() ?? "");
-  const [stays, setStays] = useState(tier?.qualifyingStays?.toString() ?? "");
-  const [status, setStatus] = useState<"ACTIVE" | "INACTIVE">(tier?.status ?? "ACTIVE");
-  const [reason, setReason] = useState("");
-  const error = toClientApiError(createState.error ?? updateState.error);
-  const num = (v: string) => (v === "" ? null : Number.parseInt(v, 10));
-  return (
-    <FormDialog
-      title={tier ? `Edit tier ${tier.code}` : `New tier · ${program.code}`}
-      onClose={onClose}
-      onSubmit={async () => {
-        const common = {
-          name: name.trim(),
-          rank: Number.parseInt(rank || "0", 10),
-          qualifyingNights: num(nights),
-          qualifyingStays: num(stays),
-          reason: reason.trim(),
-        };
-        const result = tier
-          ? await update({ tierId: tier.id, body: { ...common, status } })
-          : await create({ programId: program.id, body: { ...common, code: code.trim() } });
-        if ("data" in result) onClose();
-      }}
-      submitLabel={tier ? "Save tier" : "Create tier"}
-      disabled={(!tier && !code.trim()) || !name.trim() || reason.trim().length < 3}
-      pending={createState.isLoading || updateState.isLoading}
-      error={error}
-    >
-      <div className="grid gap-3 sm:grid-cols-2">
-        <TextField
-          label="Code"
-          value={code}
-          onChange={(e) => setCode(e.target.value.toUpperCase())}
-          maxLength={20}
-          disabled={!!tier}
-          errors={error?.fieldErrors.code}
-        />
-        <TextField
-          label="Name"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          maxLength={100}
-        />
-        <TextField
-          label="Rank"
-          inputMode="numeric"
-          value={rank}
-          onChange={(e) => setRank(digits(e.target.value))}
-        />
-        {tier ? (
-          <Select
-            label="Status"
-            options={[
-              { value: "ACTIVE", label: "Active" },
-              { value: "INACTIVE", label: "Inactive" },
-            ]}
-            value={status}
-            onChange={(e) => setStatus(e.target.value as "ACTIVE" | "INACTIVE")}
-          />
-        ) : null}
-        <TextField
-          label="Qualifying nights (optional)"
-          inputMode="numeric"
-          value={nights}
-          onChange={(e) => setNights(digits(e.target.value))}
-        />
-        <TextField
-          label="Qualifying stays (optional)"
-          inputMode="numeric"
-          value={stays}
-          onChange={(e) => setStays(digits(e.target.value))}
-        />
-      </div>
-      <TextArea
-        label="Reason (audited)"
-        value={reason}
-        onChange={(e) => setReason(e.target.value)}
-        maxLength={500}
-      />
-    </FormDialog>
   );
 }

@@ -7,28 +7,19 @@ import { Alert } from "@/global/components/ui/Alert";
 import { Badge } from "@/global/components/ui/Badge";
 import { Building2 } from "lucide-react";
 import { Button } from "@/global/components/ui/Button";
-import { GuestPicker } from "@/global/components/guests/GuestPicker";
 import { PageHeader } from "@/global/components/ui/PageHeader";
-import { FormDialog } from "@/global/components/ui/FormDialog";
-import { Select } from "@/global/components/ui/Select";
 import { StatusPanel } from "@/global/components/ui/StatusPanel";
 import { PageSkeleton } from "@/global/components/ui/PageSkeleton";
-import { TextArea } from "@/global/components/ui/TextArea";
-import { TextField } from "@/global/components/ui/TextField";
 import { useProperty } from "@/global/hooks/useProperty";
 import {
   useAccountQuery,
   useRemoveAccountContactMutation,
-  useSetAccountContactMutation,
-  useUpdateAccountMutation,
 } from "@/global/api/endpoints/accountsApi";
 import { toClientApiError } from "@/global/api/errors";
 import { formatDate, formatDateTime, formatShortDate } from "@serene/shared/lib/utils/format";
-import type {
-  AccountContactView,
-  AccountDetail,
-} from "@serene/shared/modules/accounts/accounts.types";
+import type { AccountContactView } from "@serene/shared/modules/accounts/accounts.types";
 import { Table, TBody, Td, Th, THead, Tr } from "@/global/components/ui/Table";
+import { EditCompanyDialog, RelationshipDialog } from "./CompanyDialogs";
 
 const KIND_LABELS = { EMPLOYEE: "Employee", CONTACT: "Contact", ASSOCIATE: "Associate" } as const;
 
@@ -292,228 +283,5 @@ export function CompanyDetailView({ accountId }: { accountId: string }) {
         <RelationshipDialog company={c} contact={dialog.contact} onClose={() => setDialog(null)} />
       ) : null}
     </div>
-  );
-}
-
-function EditCompanyDialog({ company, onClose }: { company: AccountDetail; onClose: () => void }) {
-  const [update, state] = useUpdateAccountMutation();
-  const [form, setForm] = useState({
-    name: company.name,
-    legalName: company.legalName ?? "",
-    taxId: company.taxId ?? "",
-    iataNumber: company.iataNumber ?? "",
-    email: company.email ?? "",
-    phone: company.phone ?? "",
-    addressLine1: company.addressLine1 ?? "",
-    city: company.city ?? "",
-    postalCode: company.postalCode ?? "",
-    countryCode: company.countryCode ?? "",
-    notes: company.notes ?? "",
-    status: company.status === "INACTIVE" ? "INACTIVE" : "ACTIVE",
-    isRestricted: company.isRestricted,
-    restrictionReason: company.restrictionReason ?? "",
-    reason: "",
-  });
-  const error = toClientApiError(state.error);
-  const set = (key: keyof typeof form) => (e: { target: { value: string } }) =>
-    setForm((f) => ({ ...f, [key]: e.target.value }));
-  const statusChange = form.status !== (company.status === "INACTIVE" ? "INACTIVE" : "ACTIVE");
-  const restrictionChange = form.isRestricted !== company.isRestricted;
-  const needsReason = statusChange || restrictionChange;
-  return (
-    <FormDialog
-      title={`Edit ${company.name}`}
-      onClose={onClose}
-      onSubmit={async () => {
-        const result = await update({
-          accountId: company.id,
-          body: {
-            version: company.version,
-            name: form.name,
-            legalName: form.legalName,
-            taxId: form.taxId,
-            iataNumber: form.iataNumber,
-            email: form.email,
-            phone: form.phone,
-            addressLine1: form.addressLine1,
-            city: form.city,
-            postalCode: form.postalCode,
-            countryCode: form.countryCode || null,
-            notes: form.notes,
-            ...(statusChange ? { status: form.status as "ACTIVE" | "INACTIVE" } : {}),
-            ...(restrictionChange
-              ? {
-                  isRestricted: form.isRestricted,
-                  restrictionReason: form.isRestricted ? form.restrictionReason : null,
-                }
-              : {}),
-            ...(form.reason.trim() ? { reason: form.reason.trim() } : {}),
-          },
-        });
-        if ("data" in result) onClose();
-      }}
-      submitLabel="Save company"
-      disabled={
-        !form.name.trim() ||
-        (needsReason && form.reason.trim().length < 3) ||
-        (form.isRestricted && !form.restrictionReason.trim())
-      }
-      pending={state.isLoading}
-      error={error}
-      size="lg"
-    >
-      <div className="grid gap-3 sm:grid-cols-2">
-        <TextField label="Name" value={form.name} onChange={set("name")} maxLength={200} />
-        <TextField
-          label="Legal name"
-          value={form.legalName}
-          onChange={set("legalName")}
-          maxLength={200}
-        />
-        <TextField label="Tax id" value={form.taxId} onChange={set("taxId")} maxLength={60} />
-        <TextField
-          label="IATA"
-          value={form.iataNumber}
-          onChange={set("iataNumber")}
-          maxLength={20}
-        />
-        <TextField
-          label="E-mail"
-          type="email"
-          value={form.email}
-          onChange={set("email")}
-          errors={error?.fieldErrors.email}
-        />
-        <TextField
-          label="Phone"
-          inputMode="tel"
-          value={form.phone}
-          onChange={set("phone")}
-          errors={error?.fieldErrors.phone}
-        />
-        <TextField
-          label="Address"
-          value={form.addressLine1}
-          onChange={set("addressLine1")}
-          maxLength={200}
-        />
-        <TextField label="City" value={form.city} onChange={set("city")} maxLength={100} />
-        <TextField
-          label="Postal code"
-          value={form.postalCode}
-          onChange={set("postalCode")}
-          maxLength={20}
-        />
-        <TextField
-          label="Country (2 letters)"
-          value={form.countryCode}
-          maxLength={2}
-          onChange={(e) => setForm((f) => ({ ...f, countryCode: e.target.value.toUpperCase() }))}
-          errors={error?.fieldErrors.countryCode}
-        />
-        <Select
-          label="Status"
-          options={[
-            { value: "ACTIVE", label: "Active" },
-            { value: "INACTIVE", label: "Inactive" },
-          ]}
-          value={form.status}
-          onChange={set("status")}
-        />
-      </div>
-      <TextArea label="Notes" value={form.notes} onChange={set("notes")} maxLength={4000} />
-      <label className="flex min-h-11 items-center gap-2 text-sm">
-        <input
-          type="checkbox"
-          checked={form.isRestricted}
-          onChange={(e) => setForm((f) => ({ ...f, isRestricted: e.target.checked }))}
-        />
-        Restrict from booking (high-risk, audited)
-      </label>
-      {form.isRestricted ? (
-        <TextField
-          label="Why is it restricted?"
-          value={form.restrictionReason}
-          onChange={set("restrictionReason")}
-          maxLength={500}
-        />
-      ) : null}
-      <TextArea
-        label={needsReason ? "Reason for the change (required)" : "Reason (optional)"}
-        value={form.reason}
-        onChange={set("reason")}
-        maxLength={1000}
-      />
-    </FormDialog>
-  );
-}
-
-function RelationshipDialog({
-  company,
-  contact,
-  onClose,
-}: {
-  company: AccountDetail;
-  contact: AccountContactView | null;
-  onClose: () => void;
-}) {
-  const [save, state] = useSetAccountContactMutation();
-  const [guest, setGuest] = useState<{ id: string; label: string } | null>(
-    contact ? { id: contact.guest.id, label: contact.guest.fullName } : null,
-  );
-  const [kind, setKind] = useState<AccountContactView["kind"]>(contact?.kind ?? "EMPLOYEE");
-  const [role, setRole] = useState(contact?.role ?? "");
-  const [isPrimary, setIsPrimary] = useState(contact?.isPrimary ?? false);
-  return (
-    <FormDialog
-      title={contact ? `Relationship · ${contact.guest.fullName}` : "Add relationship"}
-      description="One relationship per guest; making someone primary replaces the current primary contact."
-      onClose={onClose}
-      onSubmit={async () => {
-        if (!guest) return;
-        const result = await save({
-          accountId: company.id,
-          guestId: guest.id,
-          body: { kind, role: role.trim() || null, isPrimary },
-        });
-        if ("data" in result) onClose();
-      }}
-      submitLabel="Save relationship"
-      disabled={!guest}
-      pending={state.isLoading}
-      error={toClientApiError(state.error)}
-    >
-      <GuestPicker
-        value={guest}
-        onChange={setGuest}
-        disabled={Boolean(contact)}
-        emptyText="No guest found. Create the profile in Guests first."
-      />
-      <div className="grid gap-3 sm:grid-cols-2">
-        <Select
-          label="Relationship"
-          options={Object.entries(KIND_LABELS).map(([value, labelText]) => ({
-            value,
-            label: labelText,
-          }))}
-          value={kind}
-          onChange={(e) => setKind(e.target.value as AccountContactView["kind"])}
-        />
-        <TextField
-          label="Role / job title"
-          value={role}
-          onChange={(e) => setRole(e.target.value)}
-          maxLength={100}
-        />
-      </div>
-      <label className="flex min-h-11 items-center gap-2 text-sm">
-        <input
-          type="checkbox"
-          checked={isPrimary}
-          onChange={(e) => setIsPrimary(e.target.checked)}
-        />
-        Primary contact of the company
-      </label>
-    </FormDialog>
   );
 }

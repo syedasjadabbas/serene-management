@@ -13,7 +13,7 @@ import { PageHeader } from "@/global/components/ui/PageHeader";
 import { StatusPanel } from "@/global/components/ui/StatusPanel";
 import { PageSkeleton } from "@/global/components/ui/PageSkeleton";
 import { Skeleton } from "@/global/components/ui/Skeleton";
-import { TextArea } from "@/global/components/ui/TextArea";
+import { FormTextArea, applyServerError, useZodForm } from "@/global/components/ui/form";
 import { usePermissions } from "@/global/hooks/usePermissions";
 import { useProperty } from "@/global/hooks/useProperty";
 import {
@@ -31,6 +31,7 @@ import type {
 } from "@serene/shared/modules/night-audit/night-audit.types";
 import { Table, Th, THead, Td, Tr } from "@/global/components/ui/Table";
 import { randomId } from "@serene/shared/lib/utils/random-id";
+import { nightAuditReasonSchema, runDefaults } from "../_lib/reasonForm";
 
 export const OUTCOME_TONE: Record<CheckOutcome, BadgeTone> = {
   PASSED: "success",
@@ -82,15 +83,6 @@ export function NightAuditWorkspace() {
   const crumbs = [{ label: property.code, href: `/${property.code}` }, { label: "Night audit" }];
 
   if (permissionsLoading) return <PageSkeleton title="Loading night audit" />;
-  if (!allowed) {
-    return (
-      <StatusPanel
-        kind="forbidden"
-        title="Access denied"
-        description="You need the nightaudit:read permission."
-      />
-    );
-  }
   if (readiness.isLoading) {
     // The page keeps its heading while the checks are computed.
     return (
@@ -254,19 +246,24 @@ function CheckRow({ check, propertyCode }: { check: CheckResult; propertyCode: s
 function RunDialog({ businessDate, onClose }: { businessDate: string; onClose: () => void }) {
   const property = useProperty();
   const router = useRouter();
-  const [reason, setReason] = useState("End of day");
+  const { control, handleSubmit, setError, formState } = useZodForm(
+    nightAuditReasonSchema,
+    runDefaults,
+  );
   const [idempotencyKey] = useState(randomId);
   const [start, { isLoading, error, data }] = useStartNightAuditMutation();
   const apiError = toClientApiError(error);
 
-  async function submit() {
+  async function submit(values: { reason: string }) {
     const result = await start({
       propertyId: property.id,
-      reason: reason.trim(),
+      reason: values.reason.trim(),
       idempotencyKey,
     });
     if ("data" in result && result.data) {
       router.push(`/${property.code}/night-audit/${result.data.id}` as Route);
+    } else if ("error" in result) {
+      applyServerError(setError, toClientApiError(result.error));
     }
   }
 
@@ -275,17 +272,17 @@ function RunDialog({ businessDate, onClose }: { businessDate: string; onClose: (
       title={`Close business date ${businessDate}`}
       description="Posts tonight's room, package and tax charges, turns missed arrivals into no-shows, releases blocks, rolls room status, freezes the day's statistics and opens the next business date. Postings are locked until it finishes; if anything fails, nothing is posted."
       onClose={onClose}
-      onSubmit={() => void submit()}
+      onSubmit={handleSubmit(submit)}
       submitLabel={isLoading ? "Starting…" : "Run night audit"}
-      disabled={reason.trim().length < 3 || Boolean(data)}
-      pending={isLoading}
+      disabled={Boolean(data)}
+      pending={isLoading || formState.isSubmitting}
       error={apiError}
       danger
     >
-      <TextArea
+      <FormTextArea
+        control={control}
+        name="reason"
         label="Reason (recorded in the audit trail)"
-        value={reason}
-        onChange={(event) => setReason(event.target.value)}
         rows={2}
         maxLength={1000}
       />

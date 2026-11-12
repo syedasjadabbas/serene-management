@@ -4,8 +4,14 @@ import { useState } from "react";
 import { Button } from "@/global/components/ui/Button";
 import { THead, Table, TableFrame, Td, Th } from "@/global/components/ui/Table";
 import { FormDialog } from "@/global/components/ui/FormDialog";
-import { Select } from "@/global/components/ui/Select";
+import {
+  FormSelect,
+  FormTextField,
+  applyServerError,
+  useZodForm,
+} from "@/global/components/ui/form";
 import { TextField } from "@/global/components/ui/TextField";
+import { useController, type Control } from "react-hook-form";
 import { usePermissions } from "@/global/hooks/usePermissions";
 import { useProperty } from "@/global/hooks/useProperty";
 import { usePackagesQuery } from "@/global/api/endpoints/ratesApi";
@@ -18,6 +24,13 @@ import { toClientApiError } from "@/global/api/errors";
 import { formatCurrency, formatDate, formatShortDate } from "@serene/shared/lib/utils/format";
 import { addDays } from "@serene/shared/modules/business-date/business-date.policy";
 import type { ReservationRoomDetail } from "@serene/shared/modules/reservations/reservations.types";
+import {
+  type AddPackageValues,
+  addPackageBody,
+  addPackageDefaults,
+  addPackageFormSchema,
+  sanitizeQuantity,
+} from "../_lib/addPackageForm";
 
 /**
  * Packages booked on the room and the server's estimate of what will post to
@@ -180,32 +193,36 @@ function AddPackageDialog({
   const [add, state] = useAddReservationPackageMutation();
   const firstNight = businessDate && businessDate > room.arrival ? businessDate : room.arrival;
   const lastNight = addDays(room.departure, -1);
-  const [packageId, setPackageId] = useState("");
-  const [quantity, setQuantity] = useState("1");
-  const [startDate, setStartDate] = useState(firstNight);
-  const [endDate, setEndDate] = useState(lastNight);
+  const { control, handleSubmit, setError, formState } = useZodForm(
+    addPackageFormSchema,
+    addPackageDefaults(firstNight, lastNight),
+  );
   const error = toClientApiError(state.error);
   const sellable = (packages.data ?? []).filter((p) => p.status === "ACTIVE" && p.sellSeparately);
+
+  async function submit(values: AddPackageValues) {
+    const result = await add({
+      propertyId: property.id,
+      reservationRoomId: room.id,
+      body: addPackageBody(values),
+    });
+    if ("data" in result) onClose();
+    else applyServerError(setError, toClientApiError(result.error));
+  }
 
   return (
     <FormDialog
       title="Add package"
       description="Priced by the package's components and posted with the nightly room charge."
       onClose={onClose}
-      onSubmit={async () => {
-        const result = await add({
-          propertyId: property.id,
-          reservationRoomId: room.id,
-          body: { packageId, quantity: Number.parseInt(quantity || "0", 10), startDate, endDate },
-        });
-        if ("data" in result) onClose();
-      }}
+      onSubmit={handleSubmit(submit)}
       submitLabel="Add package"
-      disabled={!packageId || !startDate || !endDate || Number.parseInt(quantity || "0", 10) < 1}
-      pending={state.isLoading}
+      pending={state.isLoading || formState.isSubmitting}
       error={error}
     >
-      <Select
+      <FormSelect
+        control={control}
+        name="packageId"
         label="Package"
         placeholder={
           packages.isLoading
@@ -215,36 +232,44 @@ function AddPackageDialog({
               : "No package is sold separately"
         }
         options={sellable.map((p) => ({ value: p.id, label: `${p.code} · ${p.name}` }))}
-        value={packageId}
-        onChange={(e) => setPackageId(e.target.value)}
-        errors={error?.fieldErrors.packageId}
       />
       <div className="grid gap-3 sm:grid-cols-3">
-        <TextField
-          label="Quantity"
-          inputMode="numeric"
-          value={quantity}
-          onChange={(e) => setQuantity(e.target.value.replace(/\D/g, "").slice(0, 2))}
-        />
-        <TextField
+        <QuantityField control={control} />
+        <FormTextField
+          control={control}
+          name="startDate"
           label="First night"
           type="date"
           min={firstNight}
           max={lastNight}
-          value={startDate}
-          onChange={(e) => setStartDate(e.target.value)}
-          errors={error?.fieldErrors.startDate}
         />
-        <TextField
+        <FormTextField
+          control={control}
+          name="endDate"
           label="Last night"
           type="date"
           min={firstNight}
           max={lastNight}
-          value={endDate}
-          onChange={(e) => setEndDate(e.target.value)}
-          errors={error?.fieldErrors.endDate}
         />
       </div>
     </FormDialog>
+  );
+}
+
+function QuantityField({ control }: { control: Control<AddPackageValues> }) {
+  const {
+    field: { ref, value, onChange, onBlur },
+    fieldState,
+  } = useController({ control, name: "quantity" });
+  return (
+    <TextField
+      ref={ref}
+      label="Quantity"
+      inputMode="numeric"
+      value={value}
+      onChange={(e) => onChange(sanitizeQuantity(e.target.value))}
+      onBlur={onBlur}
+      errors={fieldState.error?.message ? [fieldState.error.message] : undefined}
+    />
   );
 }

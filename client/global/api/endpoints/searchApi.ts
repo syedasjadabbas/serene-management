@@ -1,6 +1,6 @@
-import { baseApi } from "@/global/api/baseApi";
-import type { ApiSuccess } from "@serene/shared/types/api";
-import type { GlobalSearchResult } from "@serene/shared/modules/search/search.types";
+import { API } from "@/global/constants/api";
+import type { ApiSuccess, GlobalSearchResult } from "../types";
+import { baseApi } from "../baseApi";
 
 /**
  * Global search (docs/SCALABILITY.md §28): one request per debounced query.
@@ -21,7 +21,9 @@ export const searchApi = baseApi.injectEndpoints({
     globalSearch: build.query<GlobalSearchResult, GlobalSearchArgs>({
       query: ({ q, propertyId }) => {
         const params = new URLSearchParams({ q }).toString();
-        return propertyId ? `/properties/${propertyId}/search?${params}` : `/search?${params}`;
+        return propertyId
+          ? `${API.search.propertySearch(propertyId)}?${params}`
+          : `${API.search.organizationSearch()}?${params}`;
       },
       transformResponse: (response: ApiSuccess<GlobalSearchResult>) => response.data,
       keepUnusedDataFor: 30,

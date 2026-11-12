@@ -6,7 +6,7 @@ import { Button } from "@/global/components/ui/Button";
 import { Card } from "@/global/components/ui/Card";
 import { FactList } from "@/global/components/ui/FactList";
 import { StatusPanel } from "@/global/components/ui/StatusPanel";
-import { TextField } from "@/global/components/ui/TextField";
+import { FormTextField, applyServerError, useZodForm } from "@/global/components/ui/form";
 import { useProperty } from "@/global/hooks/useProperty";
 import {
   usePropertyConfigurationQuery,
@@ -15,7 +15,13 @@ import {
 import { toClientApiError } from "@/global/api/errors";
 import type { UpdatePropertyConfigurationInput } from "@serene/shared/modules/properties/properties.schema";
 import type { PropertyConfigurationView } from "@serene/shared/modules/properties/properties.types";
-import { CheckboxField, ReasonField } from "./SetupFields";
+import {
+  type SettingsFormValues,
+  settingsChanges,
+  settingsDefaults,
+  settingsFormSchema,
+} from "../_lib/setupForm";
+import { FormCheckboxField, FormReasonField } from "./SetupFields";
 
 /**
  * Operating settings that the application applies. Only settings with an
@@ -75,7 +81,6 @@ const FLAGS = [
     hint: "Every folio window must be settled before the guest leaves.",
   },
 ] as const;
-type FlagKey = (typeof FLAGS)[number]["key"];
 
 function SettingsForm({
   config,
@@ -88,90 +93,73 @@ function SettingsForm({
 }) {
   const property = useProperty();
   const [save, state] = useUpdatePropertyConfigurationMutation();
-  const [checkInTime, setCheckInTime] = useState(config.checkInTime);
-  const [checkOutTime, setCheckOutTime] = useState(config.checkOutTime);
-  const [maxFolioWindows, setMaxFolioWindows] = useState(String(config.maxFolioWindows));
-  const [timezone, setTimezone] = useState(config.timezone);
-  const [confirmationPrefix, setConfirmationPrefix] = useState(config.confirmationPrefix);
-  const [flags, setFlags] = useState<Record<FlagKey, boolean>>(
-    () => Object.fromEntries(FLAGS.map((f) => [f.key, config[f.key]])) as Record<FlagKey, boolean>,
-  );
-  const [reason, setReason] = useState("");
+  const form = useZodForm(settingsFormSchema, settingsDefaults(config));
+  const { control, handleSubmit, setError, setValue, watch, formState } = form;
   const [saved, setSaved] = useState(false);
   const error = toClientApiError(state.error);
+  const changed = Object.keys(settingsChanges(watch(), config, live)).length;
 
-  const changes: Partial<UpdatePropertyConfigurationInput> = {};
-  if (checkInTime !== config.checkInTime) changes.checkInTime = checkInTime;
-  if (checkOutTime !== config.checkOutTime) changes.checkOutTime = checkOutTime;
-  if (Number(maxFolioWindows) !== config.maxFolioWindows)
-    changes.maxFolioWindows = Number(maxFolioWindows);
-  if (!live && timezone.trim() !== config.timezone) changes.timezone = timezone.trim();
-  if (!live && confirmationPrefix.trim().toUpperCase() !== config.confirmationPrefix)
-    changes.confirmationPrefix = confirmationPrefix.trim().toUpperCase();
-  for (const f of FLAGS) if (flags[f.key] !== config[f.key]) changes[f.key] = flags[f.key];
-  const changed = Object.keys(changes).length;
+  async function submit(values: SettingsFormValues) {
+    setSaved(false);
+    const result = await save({
+      propertyId: property.id,
+      body: {
+        ...settingsChanges(values, config, live),
+        reason: values.reason.trim(),
+      } as UpdatePropertyConfigurationInput,
+    });
+    if ("data" in result) {
+      setValue("reason", "");
+      setSaved(true);
+    } else {
+      applyServerError(setError, toClientApiError(result.error));
+    }
+  }
 
   return (
-    <form
-      className="flex flex-col gap-6"
-      onSubmit={async (event) => {
-        event.preventDefault();
-        setSaved(false);
-        const result = await save({
-          propertyId: property.id,
-          body: { ...changes, reason: reason.trim() } as UpdatePropertyConfigurationInput,
-        });
-        if ("data" in result) {
-          setReason("");
-          setSaved(true);
-        }
-      }}
-    >
+    <form className="flex flex-col gap-6" onSubmit={handleSubmit(submit)} noValidate>
       {saved ? <Alert tone="success">Settings saved.</Alert> : null}
       <Card title="Times and folios">
         <div className="grid gap-3 sm:grid-cols-3">
-          <TextField
+          <FormTextField
+            control={control}
+            name="checkInTime"
             label="Check-in from"
             type="time"
-            value={checkInTime}
-            onChange={(e) => setCheckInTime(e.target.value)}
             disabled={!manage}
-            errors={error?.fieldErrors.checkInTime}
           />
-          <TextField
+          <FormTextField
+            control={control}
+            name="checkOutTime"
             label="Check-out by"
             type="time"
-            value={checkOutTime}
-            onChange={(e) => setCheckOutTime(e.target.value)}
             disabled={!manage}
-            errors={error?.fieldErrors.checkOutTime}
           />
-          <TextField
+          <FormTextField
+            control={control}
+            name="maxFolioWindows"
             label="Folio windows per stay"
             type="number"
             inputMode="numeric"
             min={1}
             max={99}
-            value={maxFolioWindows}
-            onChange={(e) => setMaxFolioWindows(e.target.value)}
             disabled={!manage}
             hint="Separate bills, for example company and guest extras"
-            errors={error?.fieldErrors.maxFolioWindows}
           />
         </div>
       </Card>
       <Card title="Front office rules">
         <div className="flex flex-col">
           {FLAGS.map((f) => (
-            <CheckboxField
+            <FormCheckboxField
               key={f.key}
-              checked={flags[f.key]}
-              onChange={(on) => setFlags((all) => ({ ...all, [f.key]: on }))}
+              control={control}
+              name={f.key}
               hint={f.hint}
               disabled={!manage}
             >
               {f.label}
-            </CheckboxField>
+            </FormCheckboxField>
           ))}
         </div>
       </Card>
@@ -192,36 +180,35 @@ function SettingsForm({
           />
         ) : (
           <div className="grid gap-3 sm:grid-cols-2">
-            <TextField
+            <FormTextField
+              control={control}
+              name="timezone"
               label="Time zone"
-              value={timezone}
-              onChange={(e) => setTimezone(e.target.value)}
               disabled={!manage}
               hint="An IANA name such as Asia/Karachi"
-              errors={error?.fieldErrors.timezone}
             />
-            <TextField
+            <FormTextField
+              control={control}
+              name="confirmationPrefix"
               label="Confirmation prefix"
-              value={confirmationPrefix}
-              onChange={(e) => setConfirmationPrefix(e.target.value.toUpperCase())}
               disabled={!manage}
               maxLength={10}
-              errors={error?.fieldErrors.confirmationPrefix}
+              onChange={(e) => setValue("confirmationPrefix", e.target.value.toUpperCase())}
             />
           </div>
         )}
       </Card>
       {manage ? (
         <div className="flex flex-col gap-3">
-          <ReasonField value={reason} onChange={setReason} errors={error?.fieldErrors.reason} />
+          <FormReasonField control={control} />
           {error && Object.keys(error.fieldErrors).length === 0 ? (
             <Alert tone="danger">{error.message}</Alert>
           ) : null}
           <div className="flex flex-wrap items-center gap-3">
             <Button
               type="submit"
-              disabled={changed === 0 || reason.trim().length < 3}
-              pending={state.isLoading}
+              disabled={changed === 0}
+              pending={state.isLoading || formState.isSubmitting}
             >
               Save settings
             </Button>

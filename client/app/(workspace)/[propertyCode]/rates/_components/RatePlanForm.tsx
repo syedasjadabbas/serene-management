@@ -1,10 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { type Control, useController } from "react-hook-form";
 import { FormDialog } from "@/global/components/ui/FormDialog";
-import { Select } from "@/global/components/ui/Select";
-import { TextArea } from "@/global/components/ui/TextArea";
-import { TextField } from "@/global/components/ui/TextField";
+import {
+  FormSelect,
+  FormTextArea,
+  FormTextField,
+  applyServerError,
+  useZodForm,
+} from "@/global/components/ui/form";
 import { useProperty } from "@/global/hooks/useProperty";
 import {
   useCreateRatePlanMutation,
@@ -14,6 +18,49 @@ import {
 import { toClientApiError } from "@/global/api/errors";
 import { RATE_PLAN_KINDS } from "@serene/shared/modules/rates/rates.schema";
 import type { RatePlanDetail } from "@serene/shared/modules/rates/rates.types";
+import {
+  type RatePlanFormValues,
+  ratePlanDefaults,
+  ratePlanFormSchema,
+  ratePlanPayloadFields,
+} from "../_lib/ratePlanForm";
+
+function RoomTypeChecks({
+  control,
+  roomTypes,
+}: {
+  control: Control<RatePlanFormValues>;
+  roomTypes: { id: string; code: string; name: string }[];
+}) {
+  const { field, fieldState } = useController({ control, name: "roomTypeIds" });
+  const ids = field.value;
+  return (
+    <fieldset className="flex flex-col gap-1">
+      <legend className="text-xs font-medium text-fg-secondary">Sold for room types</legend>
+      <div className="flex flex-wrap gap-x-4">
+        {roomTypes.map((rt, index) => (
+          <label key={rt.id} className="flex min-h-11 items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              ref={index === 0 ? field.ref : undefined}
+              checked={ids.includes(rt.id)}
+              aria-invalid={fieldState.error ? true : undefined}
+              onChange={(e) =>
+                field.onChange(
+                  e.target.checked ? [...ids, rt.id] : ids.filter((id) => id !== rt.id),
+                )
+              }
+            />
+            {rt.code} · {rt.name}
+          </label>
+        ))}
+      </div>
+      {fieldState.error?.message ? (
+        <p className="text-xs text-danger">{fieldState.error.message}</p>
+      ) : null}
+    </fieldset>
+  );
+}
 
 /**
  * Create or edit a rate plan. The plan's currency is always the property's
@@ -33,80 +80,35 @@ export function RatePlanFormDialog({
   const options = useRateOptionsQuery(property.id);
   const [create, createState] = useCreateRatePlanMutation();
   const [update, updateState] = useUpdateRatePlanMutation();
-  const [code, setCode] = useState("");
-  const [name, setName] = useState(plan?.name ?? "");
-  const [kind, setKind] = useState(plan?.kind ?? "CORPORATE");
-  const [description, setDescription] = useState(plan?.description ?? "");
-  const [taxInclusive, setTaxInclusive] = useState(plan?.taxInclusive ?? false);
-  const [negotiatedOnly, setNegotiatedOnly] = useState(plan?.requiresNegotiation ?? false);
-  const [roomCodeId, setRoomCodeId] = useState(plan?.roomTransactionCode.id ?? "");
-  const [derived, setDerived] = useState(plan ? plan.derivation !== null : true);
-  const [parentId, setParentId] = useState(plan?.derivation?.parentRatePlanId ?? "");
-  const [derivationType, setDerivationType] = useState<"PERCENT" | "AMOUNT">(
-    plan?.derivation?.type ?? "PERCENT",
-  );
-  const [derivationValue, setDerivationValue] = useState(plan?.derivation?.value ?? "-10");
-  const [rounding, setRounding] = useState(plan?.derivation?.roundingIncrement ?? "1");
-  const [roomTypeIds, setRoomTypeIds] = useState<string[]>(plan?.roomTypeIds ?? []);
-  const [cancellationPolicyId, setCancellationPolicyId] = useState(
-    plan?.cancellationPolicyId ?? "",
-  );
-  const [marketId, setMarketId] = useState(plan?.defaultMarketCodeId ?? "");
-  const [sourceId, setSourceId] = useState(plan?.defaultSourceCodeId ?? "");
-  const [stayFrom, setStayFrom] = useState(plan?.stayFrom ?? "");
-  const [stayTo, setStayTo] = useState(plan?.stayTo ?? "");
-  const [status, setStatus] = useState<"ACTIVE" | "INACTIVE">(plan?.status ?? "ACTIVE");
-  const [reason, setReason] = useState("");
+  const form = useZodForm(ratePlanFormSchema(Boolean(plan)), ratePlanDefaults(plan));
+  const { control, handleSubmit, setValue, setError, watch, formState } = form;
+  const [kind, derived, negotiatedOnly, derivationType, taxInclusive] = watch([
+    "kind",
+    "derived",
+    "negotiatedOnly",
+    "derivationType",
+    "taxInclusive",
+  ]);
   const error = toClientApiError(createState.error ?? updateState.error);
   const o = options.data;
   const ref = (items: { id: string; code: string; name: string }[] | undefined) =>
     (items ?? []).map((i) => ({ value: i.id, label: `${i.code} · ${i.name}` }));
   const parents = (o?.ratePlans ?? []).filter((p) => p.status === "ACTIVE" && p.id !== plan?.id);
 
-  const fields = {
-    name: name.trim(),
-    description: description.trim() || null,
-    kind: kind as (typeof RATE_PLAN_KINDS)[number],
-    taxInclusive,
-    // A NEGOTIATED plan is always sold only to its companies (server-enforced too).
-    requiresNegotiation: negotiatedOnly || kind === "NEGOTIATED",
-    roomTransactionCodeId: roomCodeId,
-    derivation: derived
-      ? {
-          parentRatePlanId: parentId,
-          type: derivationType,
-          value: derivationValue.trim(),
-          roundingIncrement: rounding.trim() || null,
-        }
-      : null,
-    stayFrom: stayFrom || null,
-    stayTo: stayTo || null,
-    cancellationPolicyId: cancellationPolicyId || null,
-    defaultMarketCodeId: marketId || null,
-    defaultSourceCodeId: sourceId || null,
-    displayOrder: plan?.displayOrder ?? 10,
-    roomTypeIds,
-    reason: reason.trim(),
-  };
-  const valid =
-    fields.name.length > 0 &&
-    !!roomCodeId &&
-    roomTypeIds.length > 0 &&
-    (!derived || !!parentId) &&
-    (plan || code.trim().length > 0) &&
-    fields.reason.length >= 3;
-
-  const submit = async () => {
+  const submit = async (values: RatePlanFormValues) => {
+    const fields = ratePlanPayloadFields(values, plan?.displayOrder);
     const result = plan
       ? await update({
           propertyId: property.id,
           ratePlanId: plan.id,
-          body: { ...fields, version: plan.version, status },
+          body: { ...fields, version: plan.version, status: values.status },
         })
-      : await create({ propertyId: property.id, body: { ...fields, code: code.trim() } });
+      : await create({ propertyId: property.id, body: { ...fields, code: values.code.trim() } });
     if ("data" in result && result.data) {
       onSaved?.(result.data);
       onClose();
+    } else if ("error" in result) {
+      applyServerError(setError, toClientApiError(result.error));
     }
   };
 
@@ -115,55 +117,48 @@ export function RatePlanFormDialog({
       title={plan ? `Edit ${plan.code}` : "New rate plan"}
       description={`Prices are in ${property.currencyCode}. Changes are audited with your reason.`}
       onClose={onClose}
-      onSubmit={() => void submit()}
+      onSubmit={handleSubmit(submit)}
       submitLabel={plan ? "Save changes" : "Create rate plan"}
-      disabled={!valid}
-      pending={createState.isLoading || updateState.isLoading}
+      pending={createState.isLoading || updateState.isLoading || formState.isSubmitting}
       error={error}
       size="lg"
     >
       <div className="grid gap-3 sm:grid-cols-2">
         {plan ? null : (
-          <TextField
+          <FormTextField
+            control={control}
+            name="code"
             label="Code"
-            value={code}
-            onChange={(e) => setCode(e.target.value.toUpperCase())}
             maxLength={20}
-            errors={error?.fieldErrors.code}
+            onChange={(e) => setValue("code", e.target.value.toUpperCase())}
           />
         )}
-        <TextField
-          label="Name"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          maxLength={100}
-        />
-        <Select
+        <FormTextField control={control} name="name" label="Name" maxLength={100} />
+        <FormSelect
+          control={control}
+          name="kind"
           label="Kind"
           options={RATE_PLAN_KINDS.map((k) => ({
             value: k,
             label: k.replace("_", " ").toLowerCase(),
           }))}
-          value={kind}
-          onChange={(e) => setKind(e.target.value)}
         />
-        <Select
+        <FormSelect
+          control={control}
+          name="roomTransactionCodeId"
           label="Room revenue code"
           placeholder="Select"
           options={ref(o?.roomChargeCodes)}
-          value={roomCodeId}
-          onChange={(e) => setRoomCodeId(e.target.value)}
-          errors={error?.fieldErrors.roomTransactionCodeId}
         />
         {plan ? (
-          <Select
+          <FormSelect
+            control={control}
+            name="status"
             label="Status"
             options={[
               { value: "ACTIVE", label: "Active" },
               { value: "INACTIVE", label: "Inactive" },
             ]}
-            value={status}
-            onChange={(e) => setStatus(e.target.value as "ACTIVE" | "INACTIVE")}
           />
         ) : null}
       </div>
@@ -171,7 +166,7 @@ export function RatePlanFormDialog({
         <input
           type="checkbox"
           checked={taxInclusive}
-          onChange={(e) => setTaxInclusive(e.target.checked)}
+          onChange={(e) => setValue("taxInclusive", e.target.checked)}
         />
         Prices include taxes
       </label>
@@ -180,7 +175,7 @@ export function RatePlanFormDialog({
           type="checkbox"
           checked={negotiatedOnly || kind === "NEGOTIATED"}
           disabled={kind === "NEGOTIATED"}
-          onChange={(e) => setNegotiatedOnly(e.target.checked)}
+          onChange={(e) => setValue("negotiatedOnly", e.target.checked)}
         />
         Sold only to linked companies (negotiated rate, never public)
       </label>
@@ -193,7 +188,7 @@ export function RatePlanFormDialog({
               type="radio"
               name="pricing-mode"
               checked={!derived}
-              onChange={() => setDerived(false)}
+              onChange={() => setValue("derived", false)}
             />
             Own seasons (base plan)
           </label>
@@ -202,42 +197,44 @@ export function RatePlanFormDialog({
               type="radio"
               name="pricing-mode"
               checked={derived}
-              onChange={() => setDerived(true)}
+              onChange={() => setValue("derived", true)}
             />
             Derived from another plan
           </label>
         </div>
         {derived ? (
           <div className="grid gap-3 sm:grid-cols-4">
-            <Select
+            <FormSelect
+              control={control}
+              name="parentId"
               label="Parent plan"
               placeholder="Select"
               options={parents.map((p) => ({ value: p.id, label: `${p.code} · ${p.name}` }))}
-              value={parentId}
-              onChange={(e) => setParentId(e.target.value)}
               className="sm:col-span-2"
             />
-            <Select
+            <FormSelect
+              control={control}
+              name="derivationType"
               label="Adjustment"
               options={[
                 { value: "PERCENT", label: "Percent" },
                 { value: "AMOUNT", label: `Amount (${property.currencyCode})` },
               ]}
-              value={derivationType}
-              onChange={(e) => setDerivationType(e.target.value as "PERCENT" | "AMOUNT")}
             />
-            <TextField
+            <FormTextField
+              control={control}
+              name="derivationValue"
               label={derivationType === "PERCENT" ? "Percent (±)" : "Amount (±)"}
-              value={derivationValue}
-              onChange={(e) => setDerivationValue(e.target.value.trim())}
               inputMode="decimal"
+              onChange={(e) => setValue("derivationValue", e.target.value.trim())}
             />
-            <TextField
+            <FormTextField
+              control={control}
+              name="rounding"
               label="Round to"
               hint="e.g. 1 = whole units"
-              value={rounding}
-              onChange={(e) => setRounding(e.target.value.trim())}
               inputMode="decimal"
+              onChange={(e) => setValue("rounding", e.target.value.trim())}
             />
           </div>
         ) : (
@@ -247,75 +244,46 @@ export function RatePlanFormDialog({
         )}
       </fieldset>
 
-      <fieldset className="flex flex-col gap-1">
-        <legend className="text-xs font-medium text-fg-secondary">Sold for room types</legend>
-        <div className="flex flex-wrap gap-x-4">
-          {(o?.roomTypes ?? []).map((rt) => (
-            <label key={rt.id} className="flex min-h-11 items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={roomTypeIds.includes(rt.id)}
-                onChange={(e) =>
-                  setRoomTypeIds((ids) =>
-                    e.target.checked ? [...ids, rt.id] : ids.filter((id) => id !== rt.id),
-                  )
-                }
-              />
-              {rt.code} · {rt.name}
-            </label>
-          ))}
-        </div>
-      </fieldset>
+      <RoomTypeChecks control={control} roomTypes={o?.roomTypes ?? []} />
 
       <div className="grid gap-3 sm:grid-cols-2">
-        <Select
+        <FormSelect
+          control={control}
+          name="cancellationPolicyId"
           label="Cancellation policy"
           placeholder="None"
           options={ref(o?.cancellationPolicies)}
-          value={cancellationPolicyId}
-          onChange={(e) => setCancellationPolicyId(e.target.value)}
         />
-        <Select
+        <FormSelect
+          control={control}
+          name="marketId"
           label="Default market"
           placeholder="None"
           options={ref(o?.marketCodes)}
-          value={marketId}
-          onChange={(e) => setMarketId(e.target.value)}
         />
-        <Select
+        <FormSelect
+          control={control}
+          name="sourceId"
           label="Default source"
           placeholder="None"
           options={ref(o?.sourceCodes)}
-          value={sourceId}
-          onChange={(e) => setSourceId(e.target.value)}
         />
         <div className="grid grid-cols-2 gap-2">
-          <TextField
-            label="Stay from"
-            type="date"
-            value={stayFrom}
-            onChange={(e) => setStayFrom(e.target.value)}
-          />
-          <TextField
-            label="Stay to"
-            type="date"
-            value={stayTo}
-            onChange={(e) => setStayTo(e.target.value)}
-          />
+          <FormTextField control={control} name="stayFrom" label="Stay from" type="date" />
+          <FormTextField control={control} name="stayTo" label="Stay to" type="date" />
         </div>
       </div>
-      <TextArea
+      <FormTextArea
+        control={control}
+        name="description"
         label="Description (optional)"
-        value={description}
-        onChange={(e) => setDescription(e.target.value)}
         maxLength={2000}
       />
-      <TextArea
+      <FormTextArea
+        control={control}
+        name="reason"
         label="Reason for the change (audited)"
-        value={reason}
-        onChange={(e) => setReason(e.target.value)}
         maxLength={1000}
-        errors={error?.fieldErrors.reason}
       />
     </FormDialog>
   );

@@ -1,4 +1,4 @@
-import { API_BASE_URL, CLIENT_PLATFORM, CLIENT_PLATFORM_HEADER } from "@/global/constants/api";
+import { API, API_BASE_URL, CLIENT_PLATFORM, CLIENT_PLATFORM_HEADER } from "@/global/constants/api";
 import { type SessionEnd, getAccessToken, useAuthStore } from "@/global/stores/auth.store";
 
 /**
@@ -29,7 +29,7 @@ let refreshInFlight: Promise<RefreshOutcome> | null = null;
 
 async function requestRefresh(fetcher: Fetcher): Promise<RefreshOutcome> {
   try {
-    const response = await fetcher(`${API_BASE_URL}/auth/refresh`, {
+    const response = await fetcher(`${API_BASE_URL}${API.auth.refresh()}`, {
       method: "POST",
       credentials: "include",
       cache: "no-store",

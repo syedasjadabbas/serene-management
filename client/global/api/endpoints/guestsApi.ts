@@ -1,32 +1,31 @@
-import { baseApi } from "../baseApi";
-import { orgOptionsTag } from "./optionsTags";
+import { API } from "@/global/constants/api";
 import type {
+  ApiSuccess,
   CreateGuestInput,
   CreateGuestNoteInput,
-  GuestPreferencesInput,
-  UpdateGuestInput,
-} from "@serene/shared/modules/guests/guests.schema";
-import type {
+  CursorPageMeta,
+  EnrollInput,
   GuestHistoryRow,
   GuestOptions,
+  GuestPreferencesInput,
   GuestProfileView,
   GuestSummaryView,
-} from "@serene/shared/modules/guests/guests.types";
-import type { EnrollInput } from "@serene/shared/modules/loyalty/loyalty.schema";
-import type { ApiSuccess, CursorPageMeta } from "@serene/shared/types/api";
+  UpdateGuestInput,
+  GuestHistoryMeta,
+} from "../types";
+import { baseApi } from "../baseApi";
+import { orgOptionsTag } from "./optionsTags";
 
 /**
  * Guest profiles (organization data, Phase 7). Search is server-side and
  * debounced by callers; profile commands carry the profile `version`.
  */
 
-type HistoryMeta = CursorPageMeta & { properties: { id: string; code: string; name: string }[] };
-
 export const bookingGuestsApi = baseApi.injectEndpoints({
   endpoints: (build) => ({
     /** Picker search (booking, pickups, relationships): first page only. */
     searchGuests: build.query<GuestSummaryView[], string>({
-      query: (q) => `/guests?${new URLSearchParams({ q, limit: "10" }).toString()}`,
+      query: (q) => `${API.guests.guests()}?${new URLSearchParams({ q, limit: "10" }).toString()}`,
       transformResponse: (response: ApiSuccess<GuestSummaryView[]>) => response.data,
       providesTags: [{ type: "Guest", id: "SEARCH" }],
     }),
@@ -39,7 +38,7 @@ export const bookingGuestsApi = baseApi.injectEndpoints({
         const search = new URLSearchParams();
         for (const [k, v] of Object.entries(params))
           if (v !== undefined && v !== "") search.set(k, String(v));
-        return `/guests?${search.toString()}`;
+        return `${API.guests.guests()}?${search.toString()}`;
       },
       transformResponse: (response: ApiSuccess<GuestSummaryView[], CursorPageMeta>) => ({
         items: response.data,
@@ -48,31 +47,31 @@ export const bookingGuestsApi = baseApi.injectEndpoints({
       providesTags: [{ type: "Guest", id: "SEARCH" }],
     }),
     createGuest: build.mutation<GuestSummaryView, Partial<CreateGuestInput>>({
-      query: (body) => ({ url: "/guests", method: "POST", body }),
+      query: (body) => ({ url: API.guests.guests(), method: "POST", body }),
       transformResponse: (response: ApiSuccess<GuestSummaryView>) => response.data,
       invalidatesTags: [{ type: "Guest", id: "SEARCH" }],
     }),
     guestOptions: build.query<GuestOptions, void>({
-      query: () => "/guests/options",
+      query: () => API.guests.guestsOptions(),
       transformResponse: (response: ApiSuccess<GuestOptions>) => response.data,
       providesTags: () => [orgOptionsTag()],
       keepUnusedDataFor: 300,
     }),
     guest: build.query<GuestProfileView, string>({
-      query: (guestId) => `/guests/${guestId}`,
+      query: (guestId) => API.guests.guest(guestId),
       transformResponse: (response: ApiSuccess<GuestProfileView>) => response.data,
       providesTags: (_r, _e, guestId) => [{ type: "Guest", id: guestId }],
     }),
     guestHistory: build.query<
-      { items: GuestHistoryRow[]; meta: HistoryMeta },
+      { items: GuestHistoryRow[]; meta: GuestHistoryMeta },
       { guestId: string; propertyId?: string; status?: string; cursor?: string }
     >({
       query: ({ guestId, ...params }) => {
         const search = new URLSearchParams({ limit: "20" });
         for (const [k, v] of Object.entries(params)) if (v) search.set(k, v);
-        return `/guests/${guestId}/history?${search.toString()}`;
+        return `${API.guests.guestHistory(guestId)}?${search.toString()}`;
       },
-      transformResponse: (response: ApiSuccess<GuestHistoryRow[], HistoryMeta>) => ({
+      transformResponse: (response: ApiSuccess<GuestHistoryRow[], GuestHistoryMeta>) => ({
         items: response.data,
         meta: response.meta ?? { nextCursor: null, limit: 0, properties: [] },
       }),
@@ -82,7 +81,7 @@ export const bookingGuestsApi = baseApi.injectEndpoints({
       GuestProfileView,
       { guestId: string; body: Partial<UpdateGuestInput> }
     >({
-      query: ({ guestId, body }) => ({ url: `/guests/${guestId}`, method: "PATCH", body }),
+      query: ({ guestId, body }) => ({ url: API.guests.guest(guestId), method: "PATCH", body }),
       transformResponse: (response: ApiSuccess<GuestProfileView>) => response.data,
       invalidatesTags: (_r, _e, { guestId }) => [
         { type: "Guest", id: guestId },
@@ -95,7 +94,7 @@ export const bookingGuestsApi = baseApi.injectEndpoints({
       { guestId: string; body: GuestPreferencesInput }
     >({
       query: ({ guestId, body }) => ({
-        url: `/guests/${guestId}/preferences`,
+        url: API.guests.guestPreferences(guestId),
         method: "PUT",
         body,
       }),
@@ -106,20 +105,24 @@ export const bookingGuestsApi = baseApi.injectEndpoints({
       GuestProfileView,
       { guestId: string; body: Partial<CreateGuestNoteInput> }
     >({
-      query: ({ guestId, body }) => ({ url: `/guests/${guestId}/notes`, method: "POST", body }),
+      query: ({ guestId, body }) => ({ url: API.guests.guestNotes(guestId), method: "POST", body }),
       transformResponse: (response: ApiSuccess<GuestProfileView>) => response.data,
       invalidatesTags: (_r, _e, { guestId }) => [{ type: "Guest", id: guestId }],
     }),
     deleteGuestNote: build.mutation<GuestProfileView, { guestId: string; noteId: string }>({
       query: ({ guestId, noteId }) => ({
-        url: `/guests/${guestId}/notes/${noteId}`,
+        url: API.guests.guestNote(guestId, noteId),
         method: "DELETE",
       }),
       transformResponse: (response: ApiSuccess<GuestProfileView>) => response.data,
       invalidatesTags: (_r, _e, { guestId }) => [{ type: "Guest", id: guestId }],
     }),
     enrollGuest: build.mutation<GuestProfileView, { guestId: string; body: EnrollInput }>({
-      query: ({ guestId, body }) => ({ url: `/guests/${guestId}/loyalty`, method: "POST", body }),
+      query: ({ guestId, body }) => ({
+        url: API.guests.guestLoyalty(guestId),
+        method: "POST",
+        body,
+      }),
       transformResponse: (response: ApiSuccess<GuestProfileView>) => response.data,
       invalidatesTags: (_r, _e, { guestId }) => [{ type: "Guest", id: guestId }, "Loyalty"],
     }),

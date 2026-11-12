@@ -1,14 +1,14 @@
-import { baseApi } from "../baseApi";
+import { API } from "@/global/constants/api";
 import type {
   AccountContactInput,
-  CreateAccountInput,
-  UpdateAccountInput,
-} from "@serene/shared/modules/accounts/accounts.schema";
-import type {
   AccountDetail,
   AccountListItem,
-} from "@serene/shared/modules/accounts/accounts.types";
-import type { ApiSuccess, CursorPageMeta } from "@serene/shared/types/api";
+  ApiSuccess,
+  CreateAccountInput,
+  CursorPageMeta,
+  UpdateAccountInput,
+} from "../types";
+import { baseApi } from "../baseApi";
 
 /** Company / travel-agent profiles and their guest relationships (Phase 7). */
 export const accountsApi = baseApi.injectEndpoints({
@@ -21,7 +21,7 @@ export const accountsApi = baseApi.injectEndpoints({
         const search = new URLSearchParams();
         for (const [k, v] of Object.entries(params))
           if (v !== undefined && v !== "") search.set(k, String(v));
-        return `/accounts?${search.toString()}`;
+        return `${API.accounts.accounts()}?${search.toString()}`;
       },
       transformResponse: (response: ApiSuccess<AccountListItem[], CursorPageMeta>) => ({
         items: response.data,
@@ -30,12 +30,12 @@ export const accountsApi = baseApi.injectEndpoints({
       providesTags: [{ type: "Account", id: "LIST" }],
     }),
     account: build.query<AccountDetail, string>({
-      query: (accountId) => `/accounts/${accountId}`,
+      query: (accountId) => API.accounts.account(accountId),
       transformResponse: (response: ApiSuccess<AccountDetail>) => response.data,
       providesTags: (_r, _e, accountId) => [{ type: "Account", id: accountId }],
     }),
     createAccount: build.mutation<AccountDetail, Partial<CreateAccountInput>>({
-      query: (body) => ({ url: "/accounts", method: "POST", body }),
+      query: (body) => ({ url: API.accounts.accounts(), method: "POST", body }),
       transformResponse: (response: ApiSuccess<AccountDetail>) => response.data,
       invalidatesTags: [{ type: "Account", id: "LIST" }],
     }),
@@ -43,7 +43,11 @@ export const accountsApi = baseApi.injectEndpoints({
       AccountDetail,
       { accountId: string; body: Partial<UpdateAccountInput> }
     >({
-      query: ({ accountId, body }) => ({ url: `/accounts/${accountId}`, method: "PATCH", body }),
+      query: ({ accountId, body }) => ({
+        url: API.accounts.account(accountId),
+        method: "PATCH",
+        body,
+      }),
       transformResponse: (response: ApiSuccess<AccountDetail>) => response.data,
       invalidatesTags: (_r, _e, { accountId }) => [
         { type: "Account", id: accountId },
@@ -55,7 +59,7 @@ export const accountsApi = baseApi.injectEndpoints({
       { accountId: string; guestId: string; body: Partial<AccountContactInput> }
     >({
       query: ({ accountId, guestId, body }) => ({
-        url: `/accounts/${accountId}/contacts/${guestId}`,
+        url: API.accounts.accountContact(accountId, guestId),
         method: "PUT",
         body,
       }),
@@ -68,7 +72,7 @@ export const accountsApi = baseApi.injectEndpoints({
     }),
     removeAccountContact: build.mutation<AccountDetail, { accountId: string; guestId: string }>({
       query: ({ accountId, guestId }) => ({
-        url: `/accounts/${accountId}/contacts/${guestId}`,
+        url: API.accounts.accountContact(accountId, guestId),
         method: "DELETE",
       }),
       transformResponse: (response: ApiSuccess<AccountDetail>) => response.data,

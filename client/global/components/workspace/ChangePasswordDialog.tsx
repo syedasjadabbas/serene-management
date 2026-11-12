@@ -2,10 +2,15 @@
 
 import { useState } from "react";
 import { FormDialog } from "@/global/components/ui/FormDialog";
-import { TextField } from "@/global/components/ui/TextField";
+import { FormTextField, applyServerError, useZodForm } from "@/global/components/ui/form";
 import { PASSWORD_MIN_LENGTH } from "@serene/shared/lib/auth/password-policy";
 import { useChangePasswordMutation } from "@/global/api/endpoints/sessionApi";
 import { toClientApiError } from "@/global/api/errors";
+import {
+  changePasswordDefaults,
+  changePasswordFormSchema,
+  toChangePasswordBody,
+} from "./changePasswordForm";
 
 /**
  * The signed-in user changes their password. Every other session is signed
@@ -13,12 +18,12 @@ import { toClientApiError } from "@/global/api/errors";
  */
 export function ChangePasswordDialog({ onClose }: { onClose: () => void }) {
   const [change, state] = useChangePasswordMutation();
-  const [current, setCurrent] = useState("");
-  const [next, setNext] = useState("");
-  const [confirm, setConfirm] = useState("");
+  const { control, handleSubmit, setError, formState } = useZodForm(
+    changePasswordFormSchema,
+    changePasswordDefaults,
+  );
   const [done, setDone] = useState(false);
   const error = toClientApiError(state.error);
-  const mismatch = confirm.length > 0 && confirm !== next;
 
   if (done) {
     return (
@@ -40,38 +45,35 @@ export function ChangePasswordDialog({ onClose }: { onClose: () => void }) {
       title="Change password"
       description={`At least ${PASSWORD_MIN_LENGTH} characters. Other devices will be signed out.`}
       onClose={onClose}
-      onSubmit={async () => {
-        const result = await change({ currentPassword: current, newPassword: next });
+      onSubmit={handleSubmit(async (values) => {
+        const result = await change(toChangePasswordBody(values));
         if ("data" in result) setDone(true);
-      }}
+        else applyServerError(setError, toClientApiError(result.error));
+      })}
       submitLabel="Change password"
-      disabled={!current || next.length < PASSWORD_MIN_LENGTH || confirm !== next}
-      pending={state.isLoading}
+      pending={state.isLoading || formState.isSubmitting}
       error={error}
     >
-      <TextField
+      <FormTextField
+        control={control}
+        name="currentPassword"
         label="Current password"
         type="password"
         autoComplete="current-password"
-        value={current}
-        onChange={(e) => setCurrent(e.target.value)}
-        errors={error?.fieldErrors.currentPassword}
       />
-      <TextField
+      <FormTextField
+        control={control}
+        name="newPassword"
         label="New password"
         type="password"
         autoComplete="new-password"
-        value={next}
-        onChange={(e) => setNext(e.target.value)}
-        errors={error?.fieldErrors.newPassword}
       />
-      <TextField
+      <FormTextField
+        control={control}
+        name="confirm"
         label="Repeat the new password"
         type="password"
         autoComplete="new-password"
-        value={confirm}
-        onChange={(e) => setConfirm(e.target.value)}
-        errors={mismatch ? ["The passwords do not match"] : undefined}
       />
     </FormDialog>
   );

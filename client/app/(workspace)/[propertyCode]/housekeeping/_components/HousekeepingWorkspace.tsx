@@ -75,15 +75,6 @@ export function HousekeepingWorkspace() {
     : "all";
 
   if (isLoading) return <PageSkeleton title="Loading housekeeping" />;
-  if (!allowed) {
-    return (
-      <StatusPanel
-        kind="forbidden"
-        title="Access denied"
-        description="You need the housekeeping:read permission."
-      />
-    );
-  }
   if (summaryError?.code === "BUSINESS_RULE_VIOLATION") {
     return (
       <StatusPanel

@@ -7,6 +7,7 @@ import {
   fetchBaseQuery,
 } from "@reduxjs/toolkit/query/react";
 import {
+  API,
   API_BASE_URL,
   CLIENT_PLATFORM,
   CLIENT_PLATFORM_HEADER,
@@ -59,7 +60,12 @@ export async function refreshSession(): Promise<boolean> {
   return (await refreshAccessToken()).kind === "ok";
 }
 
-const NO_REAUTH = ["/auth/login", "/auth/refresh", "/auth/logout", "/auth/password/reset"];
+const NO_REAUTH = [
+  API.auth.authLogin(),
+  API.auth.refresh(),
+  API.auth.authLogout(),
+  API.auth.authPasswordReset(),
+];
 
 function isAuthEndpoint(args: string | FetchArgs): boolean {
   const url = typeof args === "string" ? args : args.url;

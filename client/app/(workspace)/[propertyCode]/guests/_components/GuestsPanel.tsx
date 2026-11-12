@@ -6,7 +6,6 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Badge } from "@/global/components/ui/Badge";
 import { Button } from "@/global/components/ui/Button";
-import { FormDialog } from "@/global/components/ui/FormDialog";
 import { Select } from "@/global/components/ui/Select";
 import { StatusPanel } from "@/global/components/ui/StatusPanel";
 import { TextField } from "@/global/components/ui/TextField";
@@ -14,9 +13,9 @@ import { highlight } from "@/global/components/ui/listbox";
 import { useDebouncedValue } from "@/global/hooks/useDebouncedValue";
 import { usePermissions } from "@/global/hooks/usePermissions";
 import { useProperty } from "@/global/hooks/useProperty";
-import { useCreateGuestMutation, useGuestListQuery } from "@/global/api/endpoints/guestsApi";
+import { useGuestListQuery } from "@/global/api/endpoints/guestsApi";
 import { toClientApiError } from "@/global/api/errors";
-import type { PossibleDuplicate } from "@serene/shared/modules/guests/guests.types";
+import { NewGuestDialog } from "./NewGuestDialog";
 
 /** Server-side guest search with keyset pages ("Next" / "Previous"). */
 export function GuestsPanel() {
@@ -177,129 +176,5 @@ export function GuestsPanel() {
         />
       ) : null}
     </section>
-  );
-}
-
-function NewGuestDialog({
-  onClose,
-  onCreated,
-}: {
-  onClose: () => void;
-  onCreated: (id: string) => void;
-}) {
-  const property = useProperty();
-  const [create, state] = useCreateGuestMutation();
-  const [form, setForm] = useState({
-    title: "",
-    firstName: "",
-    lastName: "",
-    preferredName: "",
-    email: "",
-    phone: "",
-    nationalityCode: "",
-  });
-  const error = toClientApiError(state.error);
-  const duplicates =
-    error?.details.reason === "POSSIBLE_DUPLICATE"
-      ? ((error.details.matches as PossibleDuplicate[] | undefined) ?? [])
-      : [];
-  const set = (key: keyof typeof form) => (e: { target: { value: string } }) =>
-    setForm((f) => ({ ...f, [key]: e.target.value }));
-
-  async function submit(allowDuplicate: boolean) {
-    const result = await create({ ...form, allowDuplicate });
-    if ("data" in result && result.data) {
-      onClose();
-      onCreated(result.data.id);
-    }
-  }
-
-  return (
-    <FormDialog
-      title="New guest profile"
-      description="Shared by every property of the organization."
-      onClose={onClose}
-      onSubmit={() => void submit(duplicates.length > 0)}
-      submitLabel={duplicates.length > 0 ? "Create anyway" : "Create guest"}
-      disabled={!form.firstName.trim() || !form.lastName.trim()}
-      pending={state.isLoading}
-      error={duplicates.length > 0 ? null : error}
-      size="lg"
-    >
-      {duplicates.length > 0 ? (
-        <div
-          className="rounded-md border border-warning/40 bg-warning-subtle p-3 text-sm"
-          role="alert"
-        >
-          <p className="font-medium">A profile with this e-mail or phone already exists:</p>
-          <ul className="mt-1 flex flex-col gap-1">
-            {duplicates.map((d) => (
-              <li key={d.id}>
-                <Link
-                  href={`/${property.code}/guests/${d.id}` as Route}
-                  className="text-brand hover:underline"
-                >
-                  {d.fullName} · {d.profileNumber}
-                </Link>{" "}
-                <span className="text-fg-muted">
-                  {[d.email, d.phone].filter(Boolean).join(" · ")}
-                </span>
-              </li>
-            ))}
-          </ul>
-          <p className="mt-1 text-fg-secondary">
-            Open the existing profile, or create a new one anyway.
-          </p>
-        </div>
-      ) : null}
-      <div className="grid gap-3 sm:grid-cols-[6rem_minmax(0,1fr)_minmax(0,1fr)]">
-        <TextField label="Title" value={form.title} onChange={set("title")} maxLength={20} />
-        <TextField
-          label="First name"
-          value={form.firstName}
-          onChange={set("firstName")}
-          maxLength={100}
-          errors={error?.fieldErrors.firstName}
-        />
-        <TextField
-          label="Last name"
-          value={form.lastName}
-          onChange={set("lastName")}
-          maxLength={100}
-          errors={error?.fieldErrors.lastName}
-        />
-      </div>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <TextField
-          label="Preferred name (optional)"
-          value={form.preferredName}
-          onChange={set("preferredName")}
-          maxLength={100}
-        />
-        <TextField
-          label="Nationality (2 letters)"
-          value={form.nationalityCode}
-          onChange={(e) =>
-            setForm((f) => ({ ...f, nationalityCode: e.target.value.toUpperCase() }))
-          }
-          maxLength={2}
-          errors={error?.fieldErrors.nationalityCode}
-        />
-        <TextField
-          label="E-mail"
-          type="email"
-          value={form.email}
-          onChange={set("email")}
-          errors={error?.fieldErrors.email}
-        />
-        <TextField
-          label="Phone"
-          inputMode="tel"
-          value={form.phone}
-          onChange={set("phone")}
-          errors={error?.fieldErrors.phone}
-        />
-      </div>
-    </FormDialog>
   );
 }

@@ -59,15 +59,6 @@ export function AvailabilityWorkspace() {
 
   if (permissionsLoading || businessDate.isLoading)
     return <PageSkeleton title="Loading availability" />;
-  if (!can("availability:read")) {
-    return (
-      <StatusPanel
-        kind="forbidden"
-        title="Access denied"
-        description="You need the availability:read permission to search availability."
-      />
-    );
-  }
   if (!today || !criteria) {
     return (
       <StatusPanel

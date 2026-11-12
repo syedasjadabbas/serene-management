@@ -1,18 +1,19 @@
-import type { BusinessDateView } from "@serene/shared/modules/business-date/business-date.types";
-import type { UpdatePropertyConfigurationInput } from "@serene/shared/modules/properties/properties.schema";
-import type { PropertyConfigurationView } from "@serene/shared/modules/properties/properties.types";
+import { API } from "@/global/constants/api";
 import type {
+  ApiSuccess,
+  BusinessDateView,
   CreateFloorInput,
-  CreateRoomsInput,
   CreateRoomTypeInput,
+  CreateRoomsInput,
   CreateTaxInput,
+  PropertyConfigurationView,
+  PropertySetupView,
   UpdateFloorInput,
+  UpdatePropertyConfigurationInput,
   UpdateRoomInput,
   UpdateRoomTypeInput,
   UpdateTaxInput,
-} from "@serene/shared/modules/setup/setup.schema";
-import type { PropertySetupView } from "@serene/shared/modules/setup/setup.types";
-import type { ApiSuccess } from "@serene/shared/types/api";
+} from "../types";
 import { baseApi } from "../baseApi";
 import { optionsTag } from "./optionsTags";
 
@@ -39,13 +40,13 @@ const setupTags = (propertyId: string) => [
 export const setupApi = baseApi.injectEndpoints({
   endpoints: (build) => ({
     propertySetup: build.query<PropertySetupView, string>({
-      query: (propertyId) => `/properties/${propertyId}/setup`,
+      query: (propertyId) => API.setup.setup(propertyId),
       transformResponse: (response: ApiSuccess<PropertySetupView>) => response.data,
       providesTags: (_r, _e, propertyId) => [{ type: "PropertySetup", id: propertyId }],
     }),
     createRoomType: build.mutation<PropertySetupView, WithProperty<{ body: CreateRoomTypeInput }>>({
       query: ({ propertyId, body }) => ({
-        url: `/properties/${propertyId}/setup/room-types`,
+        url: API.setup.setupRoomTypes(propertyId),
         method: "POST",
         body,
       }),
@@ -57,7 +58,7 @@ export const setupApi = baseApi.injectEndpoints({
       WithProperty<{ roomTypeId: string; body: UpdateRoomTypeInput }>
     >({
       query: ({ propertyId, roomTypeId, body }) => ({
-        url: `/properties/${propertyId}/setup/room-types/${roomTypeId}`,
+        url: API.setup.setupRoomType(propertyId, roomTypeId),
         method: "PATCH",
         body,
       }),
@@ -66,7 +67,7 @@ export const setupApi = baseApi.injectEndpoints({
     }),
     createFloor: build.mutation<PropertySetupView, WithProperty<{ body: CreateFloorInput }>>({
       query: ({ propertyId, body }) => ({
-        url: `/properties/${propertyId}/setup/floors`,
+        url: API.setup.setupFloors(propertyId),
         method: "POST",
         body,
       }),
@@ -78,7 +79,7 @@ export const setupApi = baseApi.injectEndpoints({
       WithProperty<{ floorId: string; body: UpdateFloorInput }>
     >({
       query: ({ propertyId, floorId, body }) => ({
-        url: `/properties/${propertyId}/setup/floors/${floorId}`,
+        url: API.setup.setupFloor(propertyId, floorId),
         method: "PATCH",
         body,
       }),
@@ -87,7 +88,7 @@ export const setupApi = baseApi.injectEndpoints({
     }),
     createRooms: build.mutation<PropertySetupView, WithProperty<{ body: CreateRoomsInput }>>({
       query: ({ propertyId, body }) => ({
-        url: `/properties/${propertyId}/setup/rooms`,
+        url: API.setup.setupRooms(propertyId),
         method: "POST",
         body,
       }),
@@ -99,7 +100,7 @@ export const setupApi = baseApi.injectEndpoints({
       WithProperty<{ roomId: string; body: UpdateRoomInput }>
     >({
       query: ({ propertyId, roomId, body }) => ({
-        url: `/properties/${propertyId}/setup/rooms/${roomId}`,
+        url: API.setup.setupRoom(propertyId, roomId),
         method: "PATCH",
         body,
       }),
@@ -108,7 +109,7 @@ export const setupApi = baseApi.injectEndpoints({
     }),
     createTax: build.mutation<PropertySetupView, WithProperty<{ body: CreateTaxInput }>>({
       query: ({ propertyId, body }) => ({
-        url: `/properties/${propertyId}/setup/taxes`,
+        url: API.setup.setupTaxes(propertyId),
         method: "POST",
         body,
       }),
@@ -120,7 +121,7 @@ export const setupApi = baseApi.injectEndpoints({
       WithProperty<{ taxRuleId: string; body: UpdateTaxInput }>
     >({
       query: ({ propertyId, taxRuleId, body }) => ({
-        url: `/properties/${propertyId}/setup/taxes/${taxRuleId}`,
+        url: API.setup.setupTax(propertyId, taxRuleId),
         method: "PATCH",
         body,
       }),
@@ -128,7 +129,7 @@ export const setupApi = baseApi.injectEndpoints({
       invalidatesTags: (_r, _e, { propertyId }) => setupTags(propertyId),
     }),
     propertyConfiguration: build.query<PropertyConfigurationView, string>({
-      query: (propertyId) => `/properties/${propertyId}/configuration`,
+      query: (propertyId) => API.setup.configuration(propertyId),
       transformResponse: (response: ApiSuccess<PropertyConfigurationView>) => response.data,
       providesTags: (_r, _e, propertyId) => [{ type: "PropertyConfiguration", id: propertyId }],
     }),
@@ -137,7 +138,7 @@ export const setupApi = baseApi.injectEndpoints({
       WithProperty<{ body: UpdatePropertyConfigurationInput }>
     >({
       query: ({ propertyId, body }) => ({
-        url: `/properties/${propertyId}/configuration`,
+        url: API.setup.configuration(propertyId),
         method: "PATCH",
         body,
       }),
@@ -154,7 +155,7 @@ export const setupApi = baseApi.injectEndpoints({
       WithProperty<{ body: { date: string; reason: string } }>
     >({
       query: ({ propertyId, body }) => ({
-        url: `/properties/${propertyId}/business-date/initialize`,
+        url: API.setup.businessDateInitialize(propertyId),
         method: "POST",
         body,
       }),

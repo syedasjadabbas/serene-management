@@ -1,18 +1,18 @@
+import { API } from "@/global/constants/api";
 import type {
+  ApiSuccess,
   AssignRequestInput,
   BlockRequestRoomInput,
   CancelRequestInput,
   CreateRequestInput,
-  NoteInput,
-  RequestCommandInput,
-  ResolveRequestInput,
-} from "@serene/shared/modules/maintenance/maintenance.schema";
-import type {
+  CursorPageMeta,
   MaintenanceDetail,
   MaintenanceListItem,
   MaintenanceOptions,
-} from "@serene/shared/modules/maintenance/maintenance.types";
-import type { ApiSuccess, CursorPageMeta } from "@serene/shared/types/api";
+  NoteInput,
+  RequestCommandInput,
+  ResolveRequestInput,
+} from "../types";
 import { baseApi } from "../baseApi";
 import { operationsTags } from "./operationsTags";
 import { assigneeOptionsTag, optionsTag } from "./optionsTags";
@@ -55,12 +55,12 @@ type MaintenanceSummary = {
 export const maintenanceApi = baseApi.injectEndpoints({
   endpoints: (build) => ({
     maintenanceSummary: build.query<MaintenanceSummary, string>({
-      query: (propertyId) => `/properties/${propertyId}/maintenance/summary`,
+      query: (propertyId) => API.maintenance.maintenanceSummary(propertyId),
       transformResponse: (response: ApiSuccess<MaintenanceSummary>) => response.data,
       providesTags: (_r, _e, propertyId) => [listTag(propertyId)],
     }),
     maintenanceOptions: build.query<MaintenanceOptions, string>({
-      query: (propertyId) => `/properties/${propertyId}/maintenance/options`,
+      query: (propertyId) => API.maintenance.maintenanceOptions(propertyId),
       transformResponse: (response: ApiSuccess<MaintenanceOptions>) => response.data,
       providesTags: (_r, _e, propertyId) => [optionsTag(propertyId), assigneeOptionsTag()],
       keepUnusedDataFor: 300,
@@ -70,7 +70,7 @@ export const maintenanceApi = baseApi.injectEndpoints({
       { propertyId: string } & Record<string, string | undefined>
     >({
       query: ({ propertyId, ...params }) =>
-        `/properties/${propertyId}/maintenance?${toQuery(params)}`,
+        `${API.maintenance.maintenance(propertyId)}?${toQuery(params)}`,
       transformResponse: (response: ApiSuccess<MaintenanceListItem[], CursorPageMeta>) => ({
         items: response.data,
         meta: response.meta ?? { nextCursor: null, limit: 0 },
@@ -78,7 +78,8 @@ export const maintenanceApi = baseApi.injectEndpoints({
       providesTags: (_r, _e, { propertyId }) => [listTag(propertyId)],
     }),
     maintenanceRequest: build.query<MaintenanceDetail, { propertyId: string; requestId: string }>({
-      query: ({ propertyId, requestId }) => `/properties/${propertyId}/maintenance/${requestId}`,
+      query: ({ propertyId, requestId }) =>
+        API.maintenance.maintenanceRequest(propertyId, requestId),
       transformResponse: (response: ApiSuccess<MaintenanceDetail>) => response.data,
       providesTags: (_r, _e, { requestId }) => [{ type: "MaintenanceRequest", id: requestId }],
     }),
@@ -87,7 +88,7 @@ export const maintenanceApi = baseApi.injectEndpoints({
       { propertyId: string; body: Partial<CreateRequestInput> }
     >({
       query: ({ propertyId, body }) => ({
-        url: `/properties/${propertyId}/maintenance`,
+        url: API.maintenance.maintenance(propertyId),
         method: "POST",
         body,
       }),
@@ -118,7 +119,7 @@ export const maintenanceApi = baseApi.injectEndpoints({
       }
     >({
       query: ({ propertyId, requestId, action, body }) => ({
-        url: `/properties/${propertyId}/maintenance/${requestId}/${action}`,
+        url: API.maintenance.maintenanceAction(propertyId, requestId, action),
         method: "POST",
         body,
       }),

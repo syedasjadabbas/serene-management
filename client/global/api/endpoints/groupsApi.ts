@@ -1,21 +1,21 @@
+import { API } from "@/global/constants/api";
 import type {
   AllocationInput,
+  ApiSuccess,
   BlockStatusInput,
   CreateBlockInput,
   CreateGroupInput,
-  GroupStatusInput,
-  PickupInput,
-  ReleaseInput,
-  UpdateGroupInput,
-} from "@serene/shared/modules/groups/groups.schema";
-import type {
+  CursorPageMeta,
   GroupDetail,
   GroupListItem,
   GroupOptions,
+  GroupStatusInput,
+  PickupInput,
   PickupResult,
+  ReleaseInput,
   ReleaseResult,
-} from "@serene/shared/modules/groups/groups.types";
-import type { ApiSuccess, CursorPageMeta } from "@serene/shared/types/api";
+  UpdateGroupInput,
+} from "../types";
 import { baseApi } from "../baseApi";
 import { optionsTag } from "./optionsTags";
 
@@ -34,7 +34,7 @@ const GROUPS = ["Group", "Block", "Availability", "Reservation"] as const;
 export const groupsApi = baseApi.injectEndpoints({
   endpoints: (build) => ({
     groupOptions: build.query<GroupOptions, string>({
-      query: (propertyId) => `/properties/${propertyId}/groups/options`,
+      query: (propertyId) => API.groups.groupsOptions(propertyId),
       transformResponse: (response: ApiSuccess<GroupOptions>) => response.data,
       providesTags: (_r, _e, propertyId) => [optionsTag(propertyId)],
       keepUnusedDataFor: 300,
@@ -46,7 +46,7 @@ export const groupsApi = baseApi.injectEndpoints({
       query: ({ propertyId, ...params }) => {
         const search = new URLSearchParams();
         for (const [k, v] of Object.entries(params)) if (v) search.set(k, v);
-        return `/properties/${propertyId}/groups?${search.toString()}`;
+        return `${API.groups.groups(propertyId)}?${search.toString()}`;
       },
       transformResponse: (response: ApiSuccess<GroupListItem[], CursorPageMeta>) => ({
         items: response.data,
@@ -55,13 +55,13 @@ export const groupsApi = baseApi.injectEndpoints({
       providesTags: ["Group"],
     }),
     group: build.query<GroupDetail, GroupArg>({
-      query: ({ propertyId, groupId }) => `/properties/${propertyId}/groups/${groupId}`,
+      query: ({ propertyId, groupId }) => API.groups.group(propertyId, groupId),
       transformResponse: (response: ApiSuccess<GroupDetail>) => response.data,
       providesTags: (_r, _e, { groupId }) => [{ type: "Group", id: groupId }, "Block"],
     }),
     createGroup: build.mutation<GroupDetail, { propertyId: string; body: CreateGroupInput }>({
       query: ({ propertyId, body }) => ({
-        url: `/properties/${propertyId}/groups`,
+        url: API.groups.groups(propertyId),
         method: "POST",
         body,
       }),
@@ -70,7 +70,7 @@ export const groupsApi = baseApi.injectEndpoints({
     }),
     updateGroup: build.mutation<GroupDetail, GroupArg & { body: UpdateGroupInput }>({
       query: ({ propertyId, groupId, body }) => ({
-        url: `/properties/${propertyId}/groups/${groupId}`,
+        url: API.groups.group(propertyId, groupId),
         method: "PATCH",
         body,
       }),
@@ -79,7 +79,7 @@ export const groupsApi = baseApi.injectEndpoints({
     }),
     changeGroupStatus: build.mutation<GroupDetail, GroupArg & { body: GroupStatusInput }>({
       query: ({ propertyId, groupId, body }) => ({
-        url: `/properties/${propertyId}/groups/${groupId}/status`,
+        url: API.groups.groupStatus(propertyId, groupId),
         method: "POST",
         body,
       }),
@@ -88,7 +88,7 @@ export const groupsApi = baseApi.injectEndpoints({
     }),
     createBlock: build.mutation<GroupDetail, GroupArg & { body: CreateBlockInput }>({
       query: ({ propertyId, groupId, body }) => ({
-        url: `/properties/${propertyId}/groups/${groupId}/blocks`,
+        url: API.groups.groupBlocks(propertyId, groupId),
         method: "POST",
         body,
       }),
@@ -97,7 +97,7 @@ export const groupsApi = baseApi.injectEndpoints({
     }),
     setAllocation: build.mutation<GroupDetail, BlockArg<AllocationInput>>({
       query: ({ propertyId, blockId, body }) => ({
-        url: `/properties/${propertyId}/blocks/${blockId}/allocation`,
+        url: API.groups.blockAllocation(propertyId, blockId),
         method: "POST",
         body,
       }),
@@ -106,7 +106,7 @@ export const groupsApi = baseApi.injectEndpoints({
     }),
     changeBlockStatus: build.mutation<GroupDetail, BlockArg<BlockStatusInput>>({
       query: ({ propertyId, blockId, body }) => ({
-        url: `/properties/${propertyId}/blocks/${blockId}/status`,
+        url: API.groups.blockStatus(propertyId, blockId),
         method: "POST",
         body,
       }),
@@ -118,7 +118,7 @@ export const groupsApi = baseApi.injectEndpoints({
       BlockArg<ReleaseInput> & { idempotencyKey: string }
     >({
       query: ({ propertyId, blockId, body, idempotencyKey }) => ({
-        url: `/properties/${propertyId}/blocks/${blockId}/release`,
+        url: API.groups.blockRelease(propertyId, blockId),
         method: "POST",
         body,
         headers: { "Idempotency-Key": idempotencyKey },
@@ -128,7 +128,7 @@ export const groupsApi = baseApi.injectEndpoints({
     }),
     pickup: build.mutation<PickupResult, BlockArg<PickupInput> & { idempotencyKey: string }>({
       query: ({ propertyId, blockId, body, idempotencyKey }) => ({
-        url: `/properties/${propertyId}/blocks/${blockId}/pickups`,
+        url: API.groups.blockPickups(propertyId, blockId),
         method: "POST",
         body,
         headers: { "Idempotency-Key": idempotencyKey },

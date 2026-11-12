@@ -3,32 +3,26 @@
 import Link from "next/link";
 import type { Route } from "next";
 import { useState } from "react";
-import { type PickedCompany, CompanyPicker } from "@/global/components/accounts/CompanyPicker";
 import { Badge } from "@/global/components/ui/Badge";
 import { Tags } from "lucide-react";
 import { Button } from "@/global/components/ui/Button";
 import { PageHeader } from "@/global/components/ui/PageHeader";
-import { FormDialog, WeekdayPicker } from "@/global/components/ui/FormDialog";
 import { StatusPanel } from "@/global/components/ui/StatusPanel";
 import { PageSkeleton } from "@/global/components/ui/PageSkeleton";
-import { TextArea } from "@/global/components/ui/TextArea";
-import { TextField } from "@/global/components/ui/TextField";
 import { usePermissions } from "@/global/hooks/usePermissions";
 import { useProperty } from "@/global/hooks/useProperty";
-import {
-  useDeleteSeasonMutation,
-  usePackagesQuery,
-  useRateOptionsQuery,
-  useRatePlanQuery,
-  useSaveSeasonMutation,
-  useSetPlanAccountsMutation,
-  useSetPlanPackagesMutation,
-} from "@/global/api/endpoints/ratesApi";
+import { useRateOptionsQuery, useRatePlanQuery } from "@/global/api/endpoints/ratesApi";
 import { toClientApiError } from "@/global/api/errors";
 import { formatCurrency, formatDate } from "@serene/shared/lib/utils/format";
-import type { RatePlanDetail, SeasonView } from "@serene/shared/modules/rates/rates.types";
+import type { SeasonView } from "@serene/shared/modules/rates/rates.types";
 import { RateCalendarPanel } from "../../_components/RateCalendarPanel";
 import { RatePlanFormDialog } from "../../_components/RatePlanForm";
+import {
+  PlanAccountsDialog,
+  PlanPackagesDialog,
+  RemoveSeasonDialog,
+  SeasonDialog,
+} from "./PlanDialogs";
 import { derivationLabel } from "../../_components/RatePlansView";
 
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -51,15 +45,6 @@ export function RatePlanDetailView({ ratePlanId }: { ratePlanId: string }) {
   const [dialog, setDialog] = useState<Dialog>(null);
 
   if (isLoading) return <PageSkeleton title="Loading rate plan" layout="detail" />;
-  if (!can("rates:read")) {
-    return (
-      <StatusPanel
-        kind="forbidden"
-        title="Access denied"
-        description="You need the rates:read permission."
-      />
-    );
-  }
   if (query.isLoading) return <PageSkeleton title="Loading rate plan" layout="detail" />;
   if (error || !query.data) {
     return (
@@ -318,324 +303,5 @@ export function RatePlanDetailView({ ratePlanId }: { ratePlanId: string }) {
         <RemoveSeasonDialog plan={plan} season={dialog.remove} onClose={() => setDialog(null)} />
       ) : null}
     </div>
-  );
-}
-
-function SeasonDialog({
-  plan,
-  season,
-  onClose,
-}: {
-  plan: RatePlanDetail;
-  season?: SeasonView;
-  onClose: () => void;
-}) {
-  const property = useProperty();
-  const options = useRateOptionsQuery(property.id);
-  const [save, state] = useSaveSeasonMutation();
-  const types = (options.data?.roomTypes ?? []).filter((rt) => plan.roomTypeIds.includes(rt.id));
-  const [name, setName] = useState(season?.name ?? "");
-  const [startDate, setStartDate] = useState(season?.startDate ?? options.data?.businessDate ?? "");
-  const [endDate, setEndDate] = useState(season?.endDate ?? "");
-  const [days, setDays] = useState(season?.daysOfWeek ?? 127);
-  const [priority, setPriority] = useState(String(season?.priority ?? 0));
-  const [prices, setPrices] = useState<Record<string, { one: string; two: string }>>(
-    Object.fromEntries(
-      (season?.amounts ?? []).map((a) => [
-        a.roomTypeId,
-        { one: a.oneAdult, two: a.twoAdults ?? "" },
-      ]),
-    ),
-  );
-  const [reason, setReason] = useState("");
-  const error = toClientApiError(state.error);
-  const amounts = types
-    .filter((rt) => prices[rt.id]?.one)
-    .map((rt) => ({
-      roomTypeId: rt.id,
-      oneAdult: prices[rt.id]!.one,
-      twoAdults: prices[rt.id]!.two || null,
-    }));
-  return (
-    <FormDialog
-      title={season ? `Edit season · ${season.name}` : "New season"}
-      description="The highest-priority season covering a night and weekday sets its price; equal priorities may not overlap."
-      onClose={onClose}
-      onSubmit={async () => {
-        const result = await save({
-          propertyId: property.id,
-          ratePlanId: plan.id,
-          seasonId: season?.id,
-          body: {
-            version: plan.version,
-            name: name.trim(),
-            startDate,
-            endDate,
-            daysOfWeek: days,
-            priority: Number.parseInt(priority, 10) || 0,
-            amounts,
-            reason: reason.trim(),
-          },
-        });
-        if ("data" in result) onClose();
-      }}
-      submitLabel="Save season"
-      disabled={
-        !name.trim() || !startDate || !endDate || amounts.length === 0 || reason.trim().length < 3
-      }
-      pending={state.isLoading}
-      error={error}
-      size="lg"
-    >
-      <div className="grid gap-3 sm:grid-cols-4">
-        <TextField
-          label="Name"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          className="sm:col-span-2"
-        />
-        <TextField
-          label="First night"
-          type="date"
-          value={startDate}
-          onChange={(e) => setStartDate(e.target.value)}
-        />
-        <TextField
-          label="Last night"
-          type="date"
-          value={endDate}
-          onChange={(e) => setEndDate(e.target.value)}
-        />
-        <TextField
-          label="Priority"
-          inputMode="numeric"
-          value={priority}
-          onChange={(e) => setPriority(e.target.value.replace(/\D/g, ""))}
-        />
-      </div>
-      <WeekdayPicker value={days} onChange={setDays} />
-      <fieldset className="flex flex-col gap-2">
-        <legend className="text-xs font-medium text-fg-secondary">
-          Prices ({plan.currencyCode})
-        </legend>
-        {types.map((rt) => (
-          <div
-            key={rt.id}
-            className="grid grid-cols-[3rem_minmax(0,1fr)_minmax(0,1fr)] items-end gap-2"
-          >
-            <span className="pb-2 text-sm font-medium">{rt.code}</span>
-            <TextField
-              label="1 adult"
-              inputMode="decimal"
-              value={prices[rt.id]?.one ?? ""}
-              onChange={(e) =>
-                setPrices((p) => ({
-                  ...p,
-                  [rt.id]: { one: e.target.value.trim(), two: p[rt.id]?.two ?? "" },
-                }))
-              }
-            />
-            <TextField
-              label="2 adults"
-              inputMode="decimal"
-              value={prices[rt.id]?.two ?? ""}
-              onChange={(e) =>
-                setPrices((p) => ({
-                  ...p,
-                  [rt.id]: { one: p[rt.id]?.one ?? "", two: e.target.value.trim() },
-                }))
-              }
-            />
-          </div>
-        ))}
-      </fieldset>
-      <TextArea
-        label="Reason (audited)"
-        value={reason}
-        onChange={(e) => setReason(e.target.value)}
-        maxLength={1000}
-      />
-    </FormDialog>
-  );
-}
-
-function RemoveSeasonDialog({
-  plan,
-  season,
-  onClose,
-}: {
-  plan: RatePlanDetail;
-  season: SeasonView;
-  onClose: () => void;
-}) {
-  const property = useProperty();
-  const [remove, state] = useDeleteSeasonMutation();
-  const [reason, setReason] = useState("");
-  return (
-    <FormDialog
-      title={`Delete season · ${season.name}`}
-      description="Nights it priced fall back to the next season (or become unpriced). Booked reservations keep their prices."
-      onClose={onClose}
-      onSubmit={async () => {
-        const result = await remove({
-          propertyId: property.id,
-          ratePlanId: plan.id,
-          seasonId: season.id,
-          body: { version: plan.version, reason: reason.trim() },
-        });
-        if ("data" in result) onClose();
-      }}
-      submitLabel="Delete season"
-      danger
-      disabled={reason.trim().length < 3}
-      pending={state.isLoading}
-      error={toClientApiError(state.error)}
-    >
-      <TextArea
-        label="Reason (audited)"
-        value={reason}
-        onChange={(e) => setReason(e.target.value)}
-        maxLength={1000}
-      />
-    </FormDialog>
-  );
-}
-
-function PlanPackagesDialog({ plan, onClose }: { plan: RatePlanDetail; onClose: () => void }) {
-  const property = useProperty();
-  const packages = usePackagesQuery(property.id);
-  const [save, state] = useSetPlanPackagesMutation();
-  const [ids, setIds] = useState(plan.packages.map((p) => p.id));
-  const [reason, setReason] = useState("");
-  return (
-    <FormDialog
-      title={`Packages in ${plan.code}`}
-      description="Included packages are carved out of the room rate when nights are posted."
-      onClose={onClose}
-      onSubmit={async () => {
-        const result = await save({
-          propertyId: property.id,
-          ratePlanId: plan.id,
-          body: { version: plan.version, packageIds: ids, reason: reason.trim() },
-        });
-        if ("data" in result) onClose();
-      }}
-      submitLabel="Save packages"
-      disabled={reason.trim().length < 3}
-      pending={state.isLoading}
-      error={toClientApiError(state.error)}
-    >
-      {(packages.data ?? [])
-        .filter((p) => p.status === "ACTIVE")
-        .map((p) => (
-          <label key={p.id} className="flex min-h-11 items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={ids.includes(p.id)}
-              onChange={(e) =>
-                setIds((list) =>
-                  e.target.checked ? [...list, p.id] : list.filter((id) => id !== p.id),
-                )
-              }
-            />
-            {p.code} · {p.name}
-          </label>
-        ))}
-      <TextArea
-        label="Reason (audited)"
-        value={reason}
-        onChange={(e) => setReason(e.target.value)}
-        maxLength={1000}
-      />
-    </FormDialog>
-  );
-}
-
-function PlanAccountsDialog({ plan, onClose }: { plan: RatePlanDetail; onClose: () => void }) {
-  const property = useProperty();
-  const [save, state] = useSetPlanAccountsMutation();
-  const [rows, setRows] = useState(
-    plan.negotiated.map((n) => ({
-      company: { id: n.account.id, label: n.account.name },
-      validFrom: n.validFrom ?? "",
-      validTo: n.validTo ?? "",
-    })),
-  );
-  const [adding, setAdding] = useState<PickedCompany | null>(null);
-  const [reason, setReason] = useState("");
-  const patch = (id: string, value: Partial<(typeof rows)[number]>) =>
-    setRows((list) => list.map((r) => (r.company.id === id ? { ...r, ...value } : r)));
-  return (
-    <FormDialog
-      title={`Companies for ${plan.code}`}
-      description="Only these companies see and book this plan, for stays inside their window."
-      onClose={onClose}
-      onSubmit={async () => {
-        const result = await save({
-          propertyId: property.id,
-          ratePlanId: plan.id,
-          body: {
-            version: plan.version,
-            accounts: rows.map((r) => ({
-              accountProfileId: r.company.id,
-              validFrom: r.validFrom || null,
-              validTo: r.validTo || null,
-            })),
-            reason: reason.trim(),
-          },
-        });
-        if ("data" in result) onClose();
-      }}
-      submitLabel="Save companies"
-      disabled={reason.trim().length < 3}
-      pending={state.isLoading}
-      error={toClientApiError(state.error)}
-      size="lg"
-    >
-      {rows.map((r) => (
-        <div
-          key={r.company.id}
-          className="grid items-end gap-2 border-b border-border-subtle pb-2 sm:grid-cols-[minmax(0,1fr)_10rem_10rem_auto]"
-        >
-          <p className="min-h-11 content-center text-sm font-medium">{r.company.label}</p>
-          <TextField
-            label="From"
-            type="date"
-            value={r.validFrom}
-            onChange={(e) => patch(r.company.id, { validFrom: e.target.value })}
-          />
-          <TextField
-            label="To"
-            type="date"
-            value={r.validTo}
-            onChange={(e) => patch(r.company.id, { validTo: e.target.value })}
-          />
-          <Button
-            size="sm"
-            variant="ghost"
-            className="min-h-11 md:min-h-0"
-            onClick={() => setRows((list) => list.filter((x) => x.company.id !== r.company.id))}
-          >
-            Remove
-          </Button>
-        </div>
-      ))}
-      <CompanyPicker
-        value={adding}
-        onChange={(company) => {
-          if (company && !rows.some((r) => r.company.id === company.id)) {
-            setRows((list) => [...list, { company, validFrom: "", validTo: "" }]);
-          }
-          setAdding(null);
-        }}
-        label="Add a company"
-      />
-      <TextArea
-        label="Reason (audited)"
-        value={reason}
-        onChange={(e) => setReason(e.target.value)}
-        maxLength={1000}
-      />
-    </FormDialog>
   );
 }

@@ -5,7 +5,7 @@ import { useDispatch, useStore } from "react-redux";
 import { useProperty } from "@/global/hooks/useProperty";
 import { baseApi, refreshSession } from "@/global/api/baseApi";
 import type { AppStore } from "@/global/api/store";
-import { API_BASE_URL } from "@/global/constants/api";
+import { API, API_BASE_URL } from "@/global/constants/api";
 import { type StreamEnd, openEventStream } from "@/global/lib/realtime/client";
 import { useRealtimeStore } from "@/global/stores/realtimeStatus.store";
 import {
@@ -49,7 +49,7 @@ export function PropertyRealtime() {
 
   useEffect(() => {
     const propertyId = property.id;
-    const url = `${API_BASE_URL}/properties/${propertyId}/events`;
+    const url = `${API_BASE_URL}${API.realtime.propertyEvents(propertyId)}`;
     let close: (() => void) | null = null;
     let stopped = false;
     let retryMs = RETRY_MIN_MS;

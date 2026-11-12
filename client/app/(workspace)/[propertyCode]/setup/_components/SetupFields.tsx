@@ -1,6 +1,8 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { type Control, type FieldPath, type FieldValues, useController } from "react-hook-form";
+import { FormTextArea } from "@/global/components/ui/form";
 import { TextArea } from "@/global/components/ui/TextArea";
 
 /** The justification every setup change carries into the audit trail (settings:manage is high-risk). */
@@ -52,6 +54,54 @@ export function CheckboxField({
         {hint ? <span className="mt-0.5 block text-xs text-fg-secondary">{hint}</span> : null}
       </span>
     </label>
+  );
+}
+
+/** ReasonField bound to a form field named `reason`. */
+export function FormReasonField<T extends FieldValues>({
+  control,
+  name = "reason" as FieldPath<T>,
+}: {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  control: Control<T, any, any>;
+  name?: FieldPath<T>;
+}) {
+  return (
+    <FormTextArea
+      control={control}
+      name={name}
+      label="Reason for the change (required)"
+      maxLength={1000}
+      rows={2}
+    />
+  );
+}
+
+/** CheckboxField bound to a boolean form field. */
+export function FormCheckboxField<T extends FieldValues>({
+  control,
+  name,
+  children,
+  hint,
+  disabled,
+}: {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  control: Control<T, any, any>;
+  name: FieldPath<T>;
+  children: ReactNode;
+  hint?: string;
+  disabled?: boolean;
+}) {
+  const { field } = useController({ control, name });
+  return (
+    <CheckboxField
+      checked={Boolean(field.value)}
+      onChange={(on) => field.onChange(on)}
+      hint={hint}
+      disabled={disabled}
+    >
+      {children}
+    </CheckboxField>
   );
 }
 

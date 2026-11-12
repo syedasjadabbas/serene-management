@@ -1,10 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { API_ORIGIN } from "@/global/constants/api";
+import { API_ORIGIN, API_ORIGIN_PATHS } from "@/global/constants/api";
 
 /** Liveness probe of the API server: no database, no session, never cached. */
-const PROBE_URL = `${API_ORIGIN}/api/health/live`;
+const PROBE_URL = `${API_ORIGIN}${API_ORIGIN_PATHS.healthLive}`;
 const PROBE_TIMEOUT_MS = 5_000;
 /** Re-probe cadence: often while offline (to notice the return), rarely while online. */
 const OFFLINE_PROBE_MS = 15_000;

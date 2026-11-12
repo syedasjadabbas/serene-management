@@ -1,15 +1,19 @@
 "use client";
 
-import { useState } from "react";
-import { type PickedCompany, CompanyPicker } from "@/global/components/accounts/CompanyPicker";
+import { CompanyPicker } from "@/global/components/accounts/CompanyPicker";
 import { FormDialog } from "@/global/components/ui/FormDialog";
-import { Select } from "@/global/components/ui/Select";
-import { TextArea } from "@/global/components/ui/TextArea";
+import {
+  FormSelect,
+  FormTextArea,
+  applyServerError,
+  useZodForm,
+} from "@/global/components/ui/form";
 import { useProperty } from "@/global/hooks/useProperty";
 import { useAccountQuery } from "@/global/api/endpoints/accountsApi";
 import { useSetReservationCompanyMutation } from "@/global/api/endpoints/reservationsApi";
 import { toClientApiError } from "@/global/api/errors";
 import type { ReservationDetail } from "@serene/shared/modules/reservations/reservations.types";
+import { type CompanyFormValues, companyFormSchema, companyPayload } from "../_lib/companyForm";
 
 /**
  * Sets, changes or clears the company of a reservation and its booking
@@ -25,68 +29,68 @@ export function CompanyDialog({
 }) {
   const property = useProperty();
   const [save, state] = useSetReservationCompanyMutation();
-  const [company, setCompany] = useState<PickedCompany | null>(
-    reservation.company
+  const form = useZodForm(companyFormSchema, {
+    company: reservation.company
       ? {
           id: reservation.company.id,
           label: `${reservation.company.name}${reservation.company.code ? ` (${reservation.company.code})` : ""}`,
         }
       : null,
-  );
+    booker: reservation.company ? (reservation.booker?.id ?? "") : "",
+    reason: "",
+  });
+  const { control, handleSubmit, setError, setValue, watch, formState } = form;
+  const company = watch("company");
   const account = useAccountQuery(company?.id ?? "", { skip: !company });
   const contacts = account.data?.contacts ?? [];
-  // The current booker counts only if they are one of the company's contacts.
-  const [booker, setBooker] = useState(reservation.company ? (reservation.booker?.id ?? "") : "");
-  const bookerContact = contacts.some((c) => c.guest.id === booker) ? booker : "";
-  const [reason, setReason] = useState("");
+
+  async function submit(values: CompanyFormValues) {
+    const result = await save({
+      propertyId: property.id,
+      reservationId: reservation.id,
+      body: {
+        version: reservation.version,
+        ...companyPayload(
+          values,
+          contacts.map((c) => c.guest.id),
+        ),
+      },
+    });
+    if ("data" in result) onClose();
+    else applyServerError(setError, toClientApiError(result.error));
+  }
+
   return (
     <FormDialog
       title="Company"
       description="Negotiated rates follow the company: change a room's rate first if it uses one."
       onClose={onClose}
-      onSubmit={async () => {
-        const result = await save({
-          propertyId: property.id,
-          reservationId: reservation.id,
-          body: {
-            version: reservation.version,
-            companyId: company?.id ?? null,
-            bookerGuestId: company && bookerContact ? bookerContact : null,
-            ...(reason.trim() ? { reason: reason.trim() } : {}),
-          },
-        });
-        if ("data" in result) onClose();
-      }}
+      onSubmit={handleSubmit(submit)}
       submitLabel={company ? "Save company" : "Remove company"}
-      pending={state.isLoading}
+      pending={state.isLoading || formState.isSubmitting}
       error={toClientApiError(state.error)}
     >
       <CompanyPicker
         value={company}
         onChange={(c) => {
-          setCompany(c);
-          setBooker("");
+          setValue("company", c);
+          setValue("booker", "");
         }}
         label="Company"
       />
       {company ? (
-        <Select
+        <FormSelect
+          control={control}
+          name="booker"
           label="Booked by (company contact)"
           placeholder="Not a company contact"
           options={contacts.map((c) => ({
             value: c.guest.id,
             label: `${c.guest.fullName}${c.role ? ` · ${c.role}` : ""}`,
           }))}
-          value={bookerContact}
-          onChange={(e) => setBooker(e.target.value)}
         />
       ) : null}
-      <TextArea
-        label="Reason (optional)"
-        value={reason}
-        onChange={(e) => setReason(e.target.value)}
-        maxLength={1000}
-      />
+      <FormTextArea control={control} name="reason" label="Reason (optional)" maxLength={1000} />
     </FormDialog>
   );
 }

@@ -1,9 +1,13 @@
 "use client";
 
-import { useState } from "react";
 import { FormDialog } from "@/global/components/ui/FormDialog";
-import { TextArea } from "@/global/components/ui/TextArea";
-import { TextField } from "@/global/components/ui/TextField";
+import {
+  FormCheckbox,
+  FormTextArea,
+  FormTextField,
+  applyServerError,
+  useZodForm,
+} from "@/global/components/ui/form";
 import { usePermissions } from "@/global/hooks/usePermissions";
 import { useProperty } from "@/global/hooks/useProperty";
 import { useExtendStayMutation } from "@/global/api/endpoints/frontDeskApi";
@@ -11,6 +15,7 @@ import { toClientApiError } from "@/global/api/errors";
 import { formatDate } from "@serene/shared/lib/utils/format";
 import { addDays } from "@serene/shared/modules/business-date/business-date.policy";
 import type { StayDetail } from "@serene/shared/modules/front-desk/front-desk.types";
+import { extendStayDefaults, extendStayFormSchema } from "../_lib/extendStayForm";
 
 /**
  * In-house extension to a later departure. The added nights are priced by
@@ -21,25 +26,25 @@ import type { StayDetail } from "@serene/shared/modules/front-desk/front-desk.ty
 export function ExtendStayDialog({ stay, onClose }: { stay: StayDetail; onClose: () => void }) {
   const property = useProperty();
   const { can } = usePermissions(property.id);
-  const [departure, setDeparture] = useState(addDays(stay.departure, 1));
-  const [override, setOverride] = useState(false);
-  const [reason, setReason] = useState("");
+  const form = useZodForm(extendStayFormSchema(stay.departure), extendStayDefaults(stay.departure));
+  const { control, handleSubmit, setError, watch, formState } = form;
+  const override = watch("override");
   const [extend, { isLoading, error }] = useExtendStayMutation();
   const apiError = toClientApiError(error);
   const canOverride = can("reservations:override_availability");
-  const invalid = departure <= stay.departure || (override && reason.trim().length < 3);
 
-  async function submit() {
+  async function submit(values: { departure: string; override: boolean; reason: string }) {
     const result = await extend({
       propertyId: property.id,
       stayId: stay.id,
       body: {
         version: stay.version,
-        departure,
-        ...(override ? { override: true, reason: reason.trim() } : {}),
+        departure: values.departure,
+        ...(values.override ? { override: true, reason: values.reason.trim() } : {}),
       },
     });
     if ("data" in result) onClose();
+    else applyServerError(setError, toClientApiError(result.error));
   }
 
   return (
@@ -47,38 +52,28 @@ export function ExtendStayDialog({ stay, onClose }: { stay: StayDetail; onClose:
       title="Extend stay"
       description={`${stay.guest.name} · room ${stay.room.number} · booked until ${formatDate(stay.departure)}`}
       onClose={onClose}
-      onSubmit={() => void submit()}
+      onSubmit={handleSubmit(submit)}
       submitLabel="Extend stay"
-      disabled={invalid}
-      pending={isLoading}
+      pending={isLoading || formState.isSubmitting}
       error={apiError}
     >
-      <TextField
+      <FormTextField
+        control={control}
+        name="departure"
         label="New departure"
         type="date"
-        value={departure}
         min={addDays(stay.departure, 1)}
-        onChange={(event) => setDeparture(event.target.value)}
         hint="The added nights are priced at the stay's rate plan and charged by night audit."
       />
       {canOverride ? (
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={override}
-            onChange={(event) => setOverride(event.target.checked)}
-          />
-          Extend even if the room type is sold out
-        </label>
+        <FormCheckbox
+          control={control}
+          name="override"
+          label="Extend even if the room type is sold out"
+        />
       ) : null}
       {override ? (
-        <TextArea
-          label="Reason"
-          value={reason}
-          onChange={(event) => setReason(event.target.value)}
-          rows={2}
-          required
-        />
+        <FormTextArea control={control} name="reason" label="Reason" rows={2} required />
       ) : null}
     </FormDialog>
   );

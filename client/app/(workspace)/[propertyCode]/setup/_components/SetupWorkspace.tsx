@@ -51,15 +51,6 @@ export function SetupWorkspace() {
   const error = toClientApiError(setup.error);
 
   if (isLoading) return <PageSkeleton title="Loading property setup" />;
-  if (!can("settings:read")) {
-    return (
-      <StatusPanel
-        kind="forbidden"
-        title="Access denied"
-        description="Viewing the property setup needs the settings:read permission."
-      />
-    );
-  }
   const manage = can("settings:manage");
   return (
     <div className="flex flex-col gap-6">

@@ -4,7 +4,6 @@ import { Contact } from "lucide-react";
 import type { Route } from "next";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { PageHeader } from "@/global/components/ui/PageHeader";
-import { StatusPanel } from "@/global/components/ui/StatusPanel";
 import { PageSkeleton } from "@/global/components/ui/PageSkeleton";
 import { Tab, TabList } from "@/global/components/ui/TabList";
 import { useTabs } from "@/global/components/ui/tabs";
@@ -39,15 +38,6 @@ export function GuestsWorkspace() {
   );
 
   if (isLoading) return <PageSkeleton title="Loading guests" />;
-  if (!tab) {
-    return (
-      <StatusPanel
-        kind="forbidden"
-        title="Access denied"
-        description="You need the guests:read permission."
-      />
-    );
-  }
   return (
     <div className="flex flex-col gap-6">
       <PageHeader

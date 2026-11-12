@@ -1,14 +1,14 @@
+import { API } from "@/global/constants/api";
 import type {
+  ApiSuccess,
   InspectRoomInput,
-  RoomHousekeepingInput,
-} from "@serene/shared/modules/housekeeping/housekeeping.schema";
-import type { PlaceBlockInput, ReleaseBlockInput } from "@serene/shared/modules/rooms/rooms.schema";
-import type {
+  PlaceBlockInput,
+  ReleaseBlockInput,
   RoomBoardView,
   RoomDetail,
+  RoomHousekeepingInput,
   RoomPickerItem,
-} from "@serene/shared/modules/rooms/rooms.types";
-import type { ApiSuccess } from "@serene/shared/types/api";
+} from "../types";
 import { baseApi } from "../baseApi";
 import { operationsTags } from "./operationsTags";
 import { optionsTag } from "./optionsTags";
@@ -50,7 +50,7 @@ function afterHousekeepingCommand(
 export const roomsApi = baseApi.injectEndpoints({
   endpoints: (build) => ({
     roomPicker: build.query<RoomPickerItem[], string>({
-      query: (propertyId) => `/properties/${propertyId}/rooms/picker`,
+      query: (propertyId) => API.rooms.roomsPicker(propertyId),
       transformResponse: (response: ApiSuccess<RoomPickerItem[]>) => response.data,
       providesTags: (_r, _e, propertyId) => [optionsTag(propertyId)],
       keepUnusedDataFor: 300,
@@ -66,7 +66,7 @@ export const roomsApi = baseApi.injectEndpoints({
       }
     >({
       query: ({ propertyId, ...params }) =>
-        `/properties/${propertyId}/rooms/board?${toQuery(params)}`,
+        `${API.rooms.roomsBoard(propertyId)}?${toQuery(params)}`,
       transformResponse: (response: ApiSuccess<RoomBoardView>) => response.data,
       providesTags: (_r, _e, { propertyId }) => [{ type: "RoomStatus", id: `BOARD-${propertyId}` }],
     }),
@@ -78,7 +78,7 @@ export const roomsApi = baseApi.injectEndpoints({
       },
       string
     >({
-      query: (propertyId) => `/properties/${propertyId}/rooms/board-options`,
+      query: (propertyId) => API.rooms.roomsBoardOptions(propertyId),
       transformResponse: (
         response: ApiSuccess<{
           floors: { id: string; name: string }[];
@@ -90,7 +90,7 @@ export const roomsApi = baseApi.injectEndpoints({
       keepUnusedDataFor: 300,
     }),
     room: build.query<RoomDetail, { propertyId: string; roomId: string }>({
-      query: ({ propertyId, roomId }) => `/properties/${propertyId}/rooms/${roomId}`,
+      query: ({ propertyId, roomId }) => API.rooms.room(propertyId, roomId),
       transformResponse: (response: ApiSuccess<RoomDetail>) => response.data,
       providesTags: (_r, _e, { roomId, propertyId }) => [
         { type: "Room", id: roomId },
@@ -99,7 +99,7 @@ export const roomsApi = baseApi.injectEndpoints({
     }),
     placeRoomBlock: build.mutation<RoomDetail, RoomCommand<PlaceBlockInput>>({
       query: ({ propertyId, roomId, body }) => ({
-        url: `/properties/${propertyId}/rooms/${roomId}/blocks`,
+        url: API.rooms.roomBlocks(propertyId, roomId),
         method: "POST",
         body,
       }),
@@ -111,7 +111,7 @@ export const roomsApi = baseApi.injectEndpoints({
       { propertyId: string; blockId: string; roomId: string; body: ReleaseBlockInput }
     >({
       query: ({ propertyId, blockId, body }) => ({
-        url: `/properties/${propertyId}/room-blocks/${blockId}/release`,
+        url: API.rooms.roomBlockRelease(propertyId, blockId),
         method: "POST",
         body,
       }),
@@ -120,7 +120,7 @@ export const roomsApi = baseApi.injectEndpoints({
     }),
     inspectRoom: build.mutation<unknown, RoomCommand<Partial<InspectRoomInput>>>({
       query: ({ propertyId, roomId, body }) => ({
-        url: `/properties/${propertyId}/rooms/${roomId}/inspect`,
+        url: API.rooms.roomInspect(propertyId, roomId),
         method: "POST",
         body,
       }),
@@ -131,7 +131,7 @@ export const roomsApi = baseApi.injectEndpoints({
       RoomCommand<RoomHousekeepingInput> & { action: "mark-dirty" | "mark-clean" }
     >({
       query: ({ propertyId, roomId, action, body }) => ({
-        url: `/properties/${propertyId}/rooms/${roomId}/${action}`,
+        url: API.rooms.roomAction(propertyId, roomId, action),
         method: "POST",
         body,
       }),

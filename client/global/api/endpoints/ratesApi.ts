@@ -1,21 +1,20 @@
+import { API } from "@/global/constants/api";
 import type {
+  ApiSuccess,
   CreatePackageInput,
   CreateRatePlanInput,
-  RatePlanAccountsInput,
-  RatePlanPackagesInput,
-  SeasonInput,
-  UpdatePackageInput,
-  UpdateRatePlanInput,
-} from "@serene/shared/modules/rates/rates.schema";
-import type { SetRestrictionsInput } from "@serene/shared/modules/availability/availability.schema";
-import type {
   PackageView,
   RateAdminOptions,
   RateCalendarView,
+  RatePlanAccountsInput,
   RatePlanDetail,
   RatePlanListItem,
-} from "@serene/shared/modules/rates/rates.types";
-import type { ApiSuccess } from "@serene/shared/types/api";
+  RatePlanPackagesInput,
+  SeasonInput,
+  SetRestrictionsInput,
+  UpdatePackageInput,
+  UpdateRatePlanInput,
+} from "../types";
 import { baseApi } from "../baseApi";
 import { optionsTag } from "./optionsTags";
 
@@ -42,17 +41,17 @@ const RATES = ["RatePlan", "Availability"] as const;
 export const ratesApi = baseApi.injectEndpoints({
   endpoints: (build) => ({
     rateOptions: build.query<RateAdminOptions, string>({
-      query: (propertyId) => `/properties/${propertyId}/rates/options`,
+      query: (propertyId) => API.rates.ratesOptions(propertyId),
       transformResponse: (response: ApiSuccess<RateAdminOptions>) => response.data,
       providesTags: ["RatePlan"],
     }),
     ratePlans: build.query<RatePlanListItem[], string>({
-      query: (propertyId) => `/properties/${propertyId}/rate-plans`,
+      query: (propertyId) => API.rates.ratePlans(propertyId),
       transformResponse: (response: ApiSuccess<RatePlanListItem[]>) => response.data,
       providesTags: ["RatePlan"],
     }),
     ratePlan: build.query<RatePlanDetail, PlanArg>({
-      query: ({ propertyId, ratePlanId }) => `/properties/${propertyId}/rate-plans/${ratePlanId}`,
+      query: ({ propertyId, ratePlanId }) => API.rates.ratePlan(propertyId, ratePlanId),
       transformResponse: (response: ApiSuccess<RatePlanDetail>) => response.data,
       providesTags: ["RatePlan"],
     }),
@@ -61,7 +60,7 @@ export const ratesApi = baseApi.injectEndpoints({
       { propertyId: string; ratePlanId: string; roomTypeId: string; from: string; to: string }
     >({
       query: ({ propertyId, ...params }) =>
-        `/properties/${propertyId}/rates/calendar?${new URLSearchParams(params).toString()}`,
+        `${API.rates.ratesCalendar(propertyId)}?${new URLSearchParams(params).toString()}`,
       transformResponse: (response: ApiSuccess<RateCalendarView>) => response.data,
       providesTags: ["RatePlan", "Availability"],
     }),
@@ -72,13 +71,13 @@ export const ratesApi = baseApi.injectEndpoints({
       query: ({ propertyId, ...params }) => {
         const search = new URLSearchParams();
         for (const [k, v] of Object.entries(params)) if (v) search.set(k, v);
-        return `/properties/${propertyId}/restrictions?${search.toString()}`;
+        return `${API.rates.restrictions(propertyId)}?${search.toString()}`;
       },
       transformResponse: (response: ApiSuccess<RestrictionRow[]>) => response.data,
       providesTags: ["Availability"],
     }),
     packages: build.query<PackageView[], string>({
-      query: (propertyId) => `/properties/${propertyId}/packages`,
+      query: (propertyId) => API.rates.packages(propertyId),
       transformResponse: (response: ApiSuccess<PackageView[]>) => response.data,
       providesTags: ["RatePlan"],
     }),
@@ -88,7 +87,7 @@ export const ratesApi = baseApi.injectEndpoints({
       { propertyId: string; body: CreateRatePlanInput }
     >({
       query: ({ propertyId, body }) => ({
-        url: `/properties/${propertyId}/rate-plans`,
+        url: API.rates.ratePlans(propertyId),
         method: "POST",
         body,
       }),
@@ -97,7 +96,7 @@ export const ratesApi = baseApi.injectEndpoints({
     }),
     updateRatePlan: build.mutation<RatePlanDetail, PlanArg & { body: UpdateRatePlanInput }>({
       query: ({ propertyId, ratePlanId, body }) => ({
-        url: `/properties/${propertyId}/rate-plans/${ratePlanId}`,
+        url: API.rates.ratePlan(propertyId, ratePlanId),
         method: "PATCH",
         body,
       }),
@@ -106,7 +105,9 @@ export const ratesApi = baseApi.injectEndpoints({
     }),
     saveSeason: build.mutation<RatePlanDetail, PlanArg & { seasonId?: string; body: SeasonInput }>({
       query: ({ propertyId, ratePlanId, seasonId, body }) => ({
-        url: `/properties/${propertyId}/rate-plans/${ratePlanId}/seasons${seasonId ? `/${seasonId}` : ""}`,
+        url: seasonId
+          ? API.rates.ratePlanSeason(propertyId, ratePlanId, seasonId)
+          : API.rates.ratePlanSeasons(propertyId, ratePlanId),
         method: seasonId ? "PATCH" : "POST",
         body,
       }),
@@ -118,7 +119,7 @@ export const ratesApi = baseApi.injectEndpoints({
       PlanArg & { seasonId: string; body: { version: number; reason: string } }
     >({
       query: ({ propertyId, ratePlanId, seasonId, body }) => ({
-        url: `/properties/${propertyId}/rate-plans/${ratePlanId}/seasons/${seasonId}`,
+        url: API.rates.ratePlanSeason(propertyId, ratePlanId, seasonId),
         method: "DELETE",
         body,
       }),
@@ -127,7 +128,7 @@ export const ratesApi = baseApi.injectEndpoints({
     }),
     setPlanPackages: build.mutation<RatePlanDetail, PlanArg & { body: RatePlanPackagesInput }>({
       query: ({ propertyId, ratePlanId, body }) => ({
-        url: `/properties/${propertyId}/rate-plans/${ratePlanId}/packages`,
+        url: API.rates.ratePlanPackages(propertyId, ratePlanId),
         method: "PUT",
         body,
       }),
@@ -137,7 +138,7 @@ export const ratesApi = baseApi.injectEndpoints({
     /** Companies a negotiated plan is sold to (Phase 7). */
     setPlanAccounts: build.mutation<RatePlanDetail, PlanArg & { body: RatePlanAccountsInput }>({
       query: ({ propertyId, ratePlanId, body }) => ({
-        url: `/properties/${propertyId}/rate-plans/${ratePlanId}/accounts`,
+        url: API.rates.ratePlanAccounts(propertyId, ratePlanId),
         method: "PUT",
         body,
       }),
@@ -149,7 +150,7 @@ export const ratesApi = baseApi.injectEndpoints({
       { propertyId: string; body: SetRestrictionsInput }
     >({
       query: ({ propertyId, body }) => ({
-        url: `/properties/${propertyId}/restrictions`,
+        url: API.rates.restrictions(propertyId),
         method: "POST",
         body,
       }),
@@ -163,7 +164,7 @@ export const ratesApi = baseApi.injectEndpoints({
       { propertyId: string; packageId?: string; body: CreatePackageInput | UpdatePackageInput }
     >({
       query: ({ propertyId, packageId, body }) => ({
-        url: `/properties/${propertyId}/packages${packageId ? `/${packageId}` : ""}`,
+        url: packageId ? API.rates.package(propertyId, packageId) : API.rates.packages(propertyId),
         method: packageId ? "PATCH" : "POST",
         body,
       }),

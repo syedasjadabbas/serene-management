@@ -83,15 +83,6 @@ export function FrontDeskWorkspace() {
   const q = params.get("q") ?? "";
 
   if (isLoading) return <PageSkeleton title="Loading front desk" />;
-  if (!allowed) {
-    return (
-      <StatusPanel
-        kind="forbidden"
-        title="Access denied"
-        description="You need the frontdesk:read permission."
-      />
-    );
-  }
   if (summaryError?.code === "BUSINESS_RULE_VIOLATION") {
     return (
       <StatusPanel

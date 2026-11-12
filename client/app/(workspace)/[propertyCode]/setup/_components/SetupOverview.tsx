@@ -7,16 +7,10 @@ import { useState } from "react";
 import { Badge } from "@/global/components/ui/Badge";
 import { Button, textLinkClass } from "@/global/components/ui/Button";
 import { Card } from "@/global/components/ui/Card";
-import { FormDialog } from "@/global/components/ui/FormDialog";
-import { Select } from "@/global/components/ui/Select";
-import { useBusinessDate } from "@/global/hooks/useBusinessDate";
 import { useProperty } from "@/global/hooks/useProperty";
-import { useInitializeBusinessDateMutation } from "@/global/api/endpoints/setupApi";
-import { toClientApiError } from "@/global/api/errors";
 import { formatDate, pluralize } from "@serene/shared/lib/utils/format";
-import { addDays } from "@serene/shared/modules/business-date/business-date.policy";
 import type { PropertySetupView } from "@serene/shared/modules/setup/setup.types";
-import { ReasonField } from "./SetupFields";
+import { GoLiveDialog } from "./GoLiveDialog";
 
 /**
  * What the property needs before it can sell rooms, and the go-live command
@@ -128,48 +122,5 @@ export function SetupOverview({
       </Card>
       {goLive ? <GoLiveDialog onClose={() => setGoLive(false)} /> : null}
     </div>
-  );
-}
-
-function GoLiveDialog({ onClose }: { onClose: () => void }) {
-  const property = useProperty();
-  const businessDate = useBusinessDate();
-  const [initialize, state] = useInitializeBusinessDateMutation();
-  const today = businessDate.data?.propertyLocalDate ?? null;
-  const [date, setDate] = useState(today ?? "");
-  const [reason, setReason] = useState("");
-  const error = toClientApiError(state.error);
-  const options = today
-    ? [
-        { value: today, label: `${formatDate(today)} (today at the property)` },
-        { value: addDays(today, -1), label: `${formatDate(addDays(today, -1))} (yesterday)` },
-      ]
-    : [];
-  return (
-    <FormDialog
-      title={`Open the first business date of ${property.name}`}
-      description="This can be done once. From then on the night audit closes each business date and opens the next."
-      onClose={onClose}
-      onSubmit={async () => {
-        const result = await initialize({
-          propertyId: property.id,
-          body: { date: date || today || "", reason: reason.trim() },
-        });
-        if ("data" in result) onClose();
-      }}
-      submitLabel="Go live"
-      disabled={!(date || today) || reason.trim().length < 3}
-      pending={state.isLoading}
-      error={error}
-    >
-      <Select
-        label="First business date"
-        value={date || today || ""}
-        onChange={(e) => setDate(e.target.value)}
-        options={options}
-        hint="The property's own date, in its time zone."
-      />
-      <ReasonField value={reason} onChange={setReason} errors={error?.fieldErrors.reason} />
-    </FormDialog>
   );
 }

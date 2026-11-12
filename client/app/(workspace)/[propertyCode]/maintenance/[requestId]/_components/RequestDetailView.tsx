@@ -53,15 +53,6 @@ export function RequestDetailView({ requestId }: { requestId: string }) {
   const actionError = toClientApiError(commandError);
 
   if (permissionsLoading) return <PageSkeleton title="Loading request" layout="detail" />;
-  if (!allowed) {
-    return (
-      <StatusPanel
-        kind="forbidden"
-        title="Access denied"
-        description="You need the maintenance:read permission."
-      />
-    );
-  }
   if (query.isLoading) return <PageSkeleton title="Loading request" layout="detail" />;
   if (error || !query.data) {
     return (

@@ -26,7 +26,7 @@ export function FormDialog({
   title: string;
   description?: ReactNode;
   onClose: () => void;
-  onSubmit: () => void;
+  onSubmit: () => void | Promise<void>;
   submitLabel: string;
   disabled?: boolean;
   pending: boolean;
@@ -62,7 +62,7 @@ export function FormDialog({
         className="flex flex-col gap-3"
         onSubmit={(event) => {
           event.preventDefault();
-          if (!disabled && !pending) onSubmit();
+          if (!disabled && !pending) void onSubmit();
         }}
       >
         {error ? (

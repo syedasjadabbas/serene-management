@@ -1,16 +1,16 @@
+import { API } from "@/global/constants/api";
 import type {
+  ApiSuccess,
   AssignTaskInput,
+  AssigneeView,
   CloseTaskInput,
   CreateTaskInput,
-  TaskCommandInput,
-} from "@serene/shared/modules/housekeeping/housekeeping.schema";
-import type {
-  AssigneeView,
+  CursorPageMeta,
   HousekeepingSummary,
+  TaskCommandInput,
   TaskTypeView,
   TaskView,
-} from "@serene/shared/modules/housekeeping/housekeeping.types";
-import type { ApiSuccess, CursorPageMeta } from "@serene/shared/types/api";
+} from "../types";
 import { baseApi } from "../baseApi";
 import { operationsTags } from "./operationsTags";
 import { assigneeOptionsTag, optionsTag } from "./optionsTags";
@@ -37,7 +37,7 @@ function afterTaskCommand(_r: unknown, _e: unknown, arg: { propertyId: string })
 export const housekeepingApi = baseApi.injectEndpoints({
   endpoints: (build) => ({
     housekeepingSummary: build.query<HousekeepingSummary, string>({
-      query: (propertyId) => `/properties/${propertyId}/housekeeping/summary`,
+      query: (propertyId) => API.housekeeping.housekeepingSummary(propertyId),
       transformResponse: (response: ApiSuccess<HousekeepingSummary>) => response.data,
       providesTags: (_r, _e, propertyId) => [listTag(propertyId)],
     }),
@@ -45,7 +45,7 @@ export const housekeepingApi = baseApi.injectEndpoints({
       { taskTypes: TaskTypeView[]; assignees: AssigneeView[] },
       string
     >({
-      query: (propertyId) => `/properties/${propertyId}/housekeeping/options`,
+      query: (propertyId) => API.housekeeping.housekeepingOptions(propertyId),
       transformResponse: (
         response: ApiSuccess<{ taskTypes: TaskTypeView[]; assignees: AssigneeView[] }>,
       ) => response.data,
@@ -57,7 +57,7 @@ export const housekeepingApi = baseApi.injectEndpoints({
       { propertyId: string } & Record<string, string | undefined>
     >({
       query: ({ propertyId, ...params }) =>
-        `/properties/${propertyId}/housekeeping/tasks?${toQuery(params)}`,
+        `${API.housekeeping.housekeepingTasks(propertyId)}?${toQuery(params)}`,
       transformResponse: (response: ApiSuccess<TaskView[], CursorPageMeta>) => ({
         items: response.data,
         meta: response.meta ?? { nextCursor: null, limit: 0 },
@@ -69,7 +69,7 @@ export const housekeepingApi = baseApi.injectEndpoints({
       { propertyId: string; body: Partial<CreateTaskInput> }
     >({
       query: ({ propertyId, body }) => ({
-        url: `/properties/${propertyId}/housekeeping/tasks`,
+        url: API.housekeeping.housekeepingTasks(propertyId),
         method: "POST",
         body,
       }),
@@ -78,7 +78,7 @@ export const housekeepingApi = baseApi.injectEndpoints({
     }),
     assignHousekeepingTask: build.mutation<TaskView, TaskCommand<AssignTaskInput>>({
       query: ({ propertyId, taskId, body }) => ({
-        url: `/properties/${propertyId}/housekeeping/tasks/${taskId}/assign`,
+        url: API.housekeeping.housekeepingTaskAssign(propertyId, taskId),
         method: "POST",
         body,
       }),
@@ -90,7 +90,7 @@ export const housekeepingApi = baseApi.injectEndpoints({
       TaskCommand<TaskCommandInput> & { action: "start" | "pause" | "complete" }
     >({
       query: ({ propertyId, taskId, action, body }) => ({
-        url: `/properties/${propertyId}/housekeeping/tasks/${taskId}/${action}`,
+        url: API.housekeeping.housekeepingTaskAction(propertyId, taskId, action),
         method: "POST",
         body,
       }),
@@ -102,7 +102,7 @@ export const housekeepingApi = baseApi.injectEndpoints({
       TaskCommand<CloseTaskInput> & { action: "skip" | "cancel" }
     >({
       query: ({ propertyId, taskId, action, body }) => ({
-        url: `/properties/${propertyId}/housekeeping/tasks/${taskId}/${action}`,
+        url: API.housekeeping.housekeepingTaskAction(propertyId, taskId, action),
         method: "POST",
         body,
       }),

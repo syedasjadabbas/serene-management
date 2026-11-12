@@ -11,7 +11,7 @@ import { PageHeader } from "@/global/components/ui/PageHeader";
 import { FormDialog } from "@/global/components/ui/FormDialog";
 import { StatusPanel } from "@/global/components/ui/StatusPanel";
 import { PageSkeleton } from "@/global/components/ui/PageSkeleton";
-import { TextArea } from "@/global/components/ui/TextArea";
+import { FormTextArea, applyServerError, useZodForm } from "@/global/components/ui/form";
 import { usePermissions } from "@/global/hooks/usePermissions";
 import { useProperty } from "@/global/hooks/useProperty";
 import { useDispatch } from "react-redux";
@@ -32,6 +32,7 @@ import type {
   RunView,
 } from "@serene/shared/modules/night-audit/night-audit.types";
 import { RUN_TONE, itemHref } from "../../_components/NightAuditWorkspace";
+import { nightAuditReasonSchema, recoverDefaults } from "../../_lib/reasonForm";
 
 const STEP_TONE: Record<StepStatus, BadgeTone> = {
   PENDING: "neutral",
@@ -84,15 +85,6 @@ export function NightAuditRunView({ runId }: { runId: string }) {
   }, [status, dispatch, property.id]);
 
   if (permissionsLoading) return <PageSkeleton title="Loading the run" layout="detail" />;
-  if (!allowed) {
-    return (
-      <StatusPanel
-        kind="forbidden"
-        title="Access denied"
-        description="You need the nightaudit:read permission."
-      />
-    );
-  }
   if (query.isLoading) return <PageSkeleton title="Loading the run" layout="detail" />;
   if (query.isError || !query.data) {
     const error = toClientApiError(query.error);
@@ -312,11 +304,19 @@ function RecoverDialog({
   onClose: () => void;
 }) {
   const property = useProperty();
-  const [reason, setReason] = useState("");
+  const { control, handleSubmit, setError, formState } = useZodForm(
+    nightAuditReasonSchema,
+    recoverDefaults,
+  );
   const [recover, { isLoading, error }] = useRecoverNightAuditMutation();
-  async function submit() {
-    const result = await recover({ propertyId: property.id, runId: run.id, reason: reason.trim() });
+  async function submit(values: { reason: string }) {
+    const result = await recover({
+      propertyId: property.id,
+      runId: run.id,
+      reason: values.reason.trim(),
+    });
     if ("data" in result) onClose();
+    else applyServerError(setError, toClientApiError(result.error));
   }
   return (
     <FormDialog
@@ -327,17 +327,16 @@ function RecoverDialog({
           : "Marks this interrupted run as failed and reopens the business date. Nothing it started was posted. A run that is still committing cannot be recovered."
       }
       onClose={onClose}
-      onSubmit={() => void submit()}
+      onSubmit={handleSubmit(submit)}
       submitLabel={cancel ? "Cancel audit" : "Recover"}
-      disabled={reason.trim().length < 3}
-      pending={isLoading}
+      pending={isLoading || formState.isSubmitting}
       error={toClientApiError(error)}
       danger
     >
-      <TextArea
+      <FormTextArea
+        control={control}
+        name="reason"
         label="Reason (recorded in the audit trail)"
-        value={reason}
-        onChange={(event) => setReason(event.target.value)}
         rows={2}
       />
     </FormDialog>

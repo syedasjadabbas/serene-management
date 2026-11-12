@@ -1,20 +1,21 @@
+import { API } from "@/global/constants/api";
 import type {
+  ApiSuccess,
+  ArrivalRow,
   CheckInInput,
   CheckOutInput,
-  RoomMoveInput,
-  WalkInInput,
+  CursorPageMeta,
   ExtendStayInput,
-  ReverseCheckInInput,
-} from "@serene/shared/modules/front-desk/front-desk.schema";
-import type {
-  ArrivalRow,
   FrontDeskSummary,
+  ReverseCheckInInput,
+  RoomBoardRow,
+  RoomMoveInput,
   RoomOption,
   StayDetail,
   StayRow,
-} from "@serene/shared/modules/front-desk/front-desk.types";
-import type { RoomBoardRow } from "@serene/shared/modules/rooms/rooms.types";
-import type { ApiSuccess, CursorPageMeta } from "@serene/shared/types/api";
+  WalkInInput,
+  Page,
+} from "../types";
 import { baseApi } from "../baseApi";
 import { operationsTags } from "./operationsTags";
 
@@ -26,7 +27,6 @@ import { operationsTags } from "./operationsTags";
  */
 
 type ListArgs = { propertyId: string } & Record<string, string | undefined>;
-type Page<T> = { items: T[]; meta: CursorPageMeta };
 
 const toQuery = (params: Record<string, string | undefined>) => {
   const search = new URLSearchParams();
@@ -65,43 +65,43 @@ const toPage = <T>(response: ApiSuccess<T[], CursorPageMeta>): Page<T> => ({
 export const frontDeskApi = baseApi.injectEndpoints({
   endpoints: (build) => ({
     frontDeskSummary: build.query<FrontDeskSummary, string>({
-      query: (propertyId) => `/properties/${propertyId}/front-desk/summary`,
+      query: (propertyId) => API.frontDesk.frontDeskSummary(propertyId),
       transformResponse: (response: ApiSuccess<FrontDeskSummary>) => response.data,
       providesTags: (_r, _e, propertyId) => [listTag(propertyId)],
     }),
     arrivals: build.query<Page<ArrivalRow>, ListArgs>({
       query: ({ propertyId, ...params }) =>
-        `/properties/${propertyId}/front-desk/arrivals?${toQuery(params)}`,
+        `${API.frontDesk.frontDeskArrivals(propertyId)}?${toQuery(params)}`,
       transformResponse: toPage<ArrivalRow>,
       providesTags: (_r, _e, { propertyId }) => [listTag(propertyId)],
     }),
     inHouse: build.query<Page<StayRow>, ListArgs>({
       query: ({ propertyId, ...params }) =>
-        `/properties/${propertyId}/front-desk/in-house?${toQuery(params)}`,
+        `${API.frontDesk.frontDeskInHouse(propertyId)}?${toQuery(params)}`,
       transformResponse: toPage<StayRow>,
       providesTags: (_r, _e, { propertyId }) => [listTag(propertyId)],
     }),
     departures: build.query<Page<StayRow>, ListArgs>({
       query: ({ propertyId, ...params }) =>
-        `/properties/${propertyId}/front-desk/departures?${toQuery(params)}`,
+        `${API.frontDesk.frontDeskDepartures(propertyId)}?${toQuery(params)}`,
       transformResponse: toPage<StayRow>,
       providesTags: (_r, _e, { propertyId }) => [listTag(propertyId)],
     }),
     roomBoard: build.query<RoomBoardRow[], ListArgs>({
       query: ({ propertyId, ...params }) =>
-        `/properties/${propertyId}/front-desk/rooms?${toQuery(params)}`,
+        `${API.frontDesk.frontDeskRooms(propertyId)}?${toQuery(params)}`,
       transformResponse: (response: ApiSuccess<RoomBoardRow[]>) => response.data,
       providesTags: (_r, _e, { propertyId }) => [listTag(propertyId)],
     }),
     roomOptions: build.query<RoomOption[], { propertyId: string; reservationRoomId: string }>({
       query: ({ propertyId, reservationRoomId }) =>
-        `/properties/${propertyId}/reservation-rooms/${reservationRoomId}/room-options`,
+        API.frontDesk.reservationRoomRoomOptions(propertyId, reservationRoomId),
       transformResponse: (response: ApiSuccess<RoomOption[]>) => response.data,
       providesTags: (_r, _e, { propertyId }) => [listTag(propertyId)],
       keepUnusedDataFor: 0,
     }),
     stay: build.query<StayDetail, { propertyId: string; stayId: string }>({
-      query: ({ propertyId, stayId }) => `/properties/${propertyId}/stays/${stayId}`,
+      query: ({ propertyId, stayId }) => API.frontDesk.stay(propertyId, stayId),
       transformResponse: (response: ApiSuccess<StayDetail>) => response.data,
       providesTags: (result, _e, { stayId }) => [
         { type: "Stay", id: stayId },
@@ -114,7 +114,7 @@ export const frontDeskApi = baseApi.injectEndpoints({
       { propertyId: string; reservationRoomId: string; body: Partial<CheckInInput> }
     >({
       query: ({ propertyId, reservationRoomId, body }) => ({
-        url: `/properties/${propertyId}/reservation-rooms/${reservationRoomId}/check-in`,
+        url: API.frontDesk.reservationRoomCheckIn(propertyId, reservationRoomId),
         method: "POST",
         body,
       }),
@@ -126,7 +126,7 @@ export const frontDeskApi = baseApi.injectEndpoints({
       { propertyId: string; body: Partial<WalkInInput>; idempotencyKey?: string }
     >({
       query: ({ propertyId, body, idempotencyKey }) => ({
-        url: `/properties/${propertyId}/front-desk/walk-ins`,
+        url: API.frontDesk.frontDeskWalkIns(propertyId),
         method: "POST",
         body,
         ...(idempotencyKey ? { headers: { "Idempotency-Key": idempotencyKey } } : {}),
@@ -139,7 +139,7 @@ export const frontDeskApi = baseApi.injectEndpoints({
       { propertyId: string; stayId: string; body: Partial<RoomMoveInput> }
     >({
       query: ({ propertyId, stayId, body }) => ({
-        url: `/properties/${propertyId}/stays/${stayId}/room-move`,
+        url: API.frontDesk.stayRoomMove(propertyId, stayId),
         method: "POST",
         body,
       }),
@@ -151,7 +151,7 @@ export const frontDeskApi = baseApi.injectEndpoints({
       { propertyId: string; stayId: string; body: Partial<CheckOutInput> }
     >({
       query: ({ propertyId, stayId, body }) => ({
-        url: `/properties/${propertyId}/stays/${stayId}/check-out`,
+        url: API.frontDesk.stayCheckOut(propertyId, stayId),
         method: "POST",
         body,
       }),
@@ -164,7 +164,7 @@ export const frontDeskApi = baseApi.injectEndpoints({
       { propertyId: string; stayId: string; body: Partial<ExtendStayInput> }
     >({
       query: ({ propertyId, stayId, body }) => ({
-        url: `/properties/${propertyId}/stays/${stayId}/extend`,
+        url: API.frontDesk.stayExtend(propertyId, stayId),
         method: "POST",
         body,
       }),
@@ -177,7 +177,7 @@ export const frontDeskApi = baseApi.injectEndpoints({
       { propertyId: string; stayId: string; body: ReverseCheckInInput }
     >({
       query: ({ propertyId, stayId, body }) => ({
-        url: `/properties/${propertyId}/stays/${stayId}/reverse-check-in`,
+        url: API.frontDesk.stayReverseCheckIn(propertyId, stayId),
         method: "POST",
         body,
       }),

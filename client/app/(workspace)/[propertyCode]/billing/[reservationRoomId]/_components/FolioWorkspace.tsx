@@ -51,15 +51,6 @@ export function FolioWorkspace({ reservationRoomId }: { reservationRoomId: strin
   const openError = toClientApiError(openState.error);
 
   if (permissionsLoading) return <PageSkeleton title="Loading folio" layout="detail" />;
-  if (!allowed) {
-    return (
-      <StatusPanel
-        kind="forbidden"
-        title="Access denied"
-        description="You need the billing:read permission."
-      />
-    );
-  }
   if (query.isLoading) return <PageSkeleton title="Loading folio" layout="detail" />;
   if (error || !query.data) {
     return (

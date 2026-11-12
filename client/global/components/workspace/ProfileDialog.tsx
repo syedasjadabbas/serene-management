@@ -7,6 +7,7 @@ import { Avatar } from "@/global/components/ui/Avatar";
 import { Button, buttonClass } from "@/global/components/ui/Button";
 import { FormDialog } from "@/global/components/ui/FormDialog";
 import { TextField } from "@/global/components/ui/TextField";
+import { FormTextField, applyServerError, useZodForm } from "@/global/components/ui/form";
 import { cn } from "@/global/components/ui/cn";
 import {
   useRemoveAvatarMutation,
@@ -14,6 +15,7 @@ import {
   useUploadAvatarMutation,
 } from "@/global/api/endpoints/sessionApi";
 import { toClientApiError } from "@/global/api/errors";
+import { profileFormSchema } from "./profileForm";
 import type { MeView } from "@serene/shared/modules/access/access.types";
 
 const SIZE = 256;
@@ -77,7 +79,10 @@ export function ProfileDialog({ me, onClose }: { me: MeView; onClose: () => void
   const [updateProfile, profileState] = useUpdateProfileMutation();
   const [uploadAvatar, uploadState] = useUploadAvatarMutation();
   const [removeAvatar, removeState] = useRemoveAvatarMutation();
-  const [name, setName] = useState(me.user.displayName);
+  const { control, handleSubmit, setError, watch, formState } = useZodForm(profileFormSchema, {
+    displayName: me.user.displayName,
+  });
+  const name = watch("displayName");
   const [photo, setPhoto] = useState<Photo>({ kind: "keep" });
   const [fileError, setFileError] = useState<string | null>(null);
   const inputId = useId();
@@ -106,10 +111,13 @@ export function ProfileDialog({ me, onClose }: { me: MeView; onClose: () => void
     }
   }
 
-  async function save() {
-    if (nameChanged) {
-      const result = await updateProfile({ displayName: trimmed });
-      if ("error" in result) return;
+  async function save(values: { displayName: string }) {
+    if (values.displayName !== me.user.displayName) {
+      const result = await updateProfile({ displayName: values.displayName });
+      if ("error" in result) {
+        applyServerError(setError, toClientApiError(result.error));
+        return;
+      }
     }
     if (photo.kind === "new") {
       const result = await uploadAvatar({ contentType: photo.contentType, data: photo.data });
@@ -126,10 +134,10 @@ export function ProfileDialog({ me, onClose }: { me: MeView; onClose: () => void
       title="Edit profile"
       description="Your picture and name as other staff see them. Email and roles are managed by an administrator."
       onClose={onClose}
-      onSubmit={() => void save()}
+      onSubmit={handleSubmit(save)}
       submitLabel="Save profile"
-      disabled={!changed || trimmed.length === 0}
-      pending={pending}
+      disabled={!changed}
+      pending={pending || formState.isSubmitting}
       error={apiError}
     >
       <div className="flex items-center gap-4">
@@ -164,13 +172,12 @@ export function ProfileDialog({ me, onClose }: { me: MeView; onClose: () => void
         </div>
       </div>
       {fileError ? <Alert tone="danger">{fileError}</Alert> : null}
-      <TextField
+      <FormTextField
+        control={control}
+        name="displayName"
         label="Display name"
-        value={name}
         maxLength={120}
         autoComplete="name"
-        onChange={(event) => setName(event.target.value)}
-        errors={apiError?.fieldErrors.displayName}
       />
       <TextField
         label="Email"

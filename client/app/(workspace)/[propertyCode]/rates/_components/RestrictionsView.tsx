@@ -3,26 +3,16 @@
 import { useState } from "react";
 import { Badge } from "@/global/components/ui/Badge";
 import { Button } from "@/global/components/ui/Button";
-import { FormDialog, WeekdayPicker } from "@/global/components/ui/FormDialog";
-import { Select } from "@/global/components/ui/Select";
 import { StatusPanel } from "@/global/components/ui/StatusPanel";
-import { TextArea } from "@/global/components/ui/TextArea";
 import { TextField } from "@/global/components/ui/TextField";
 import { usePermissions } from "@/global/hooks/usePermissions";
 import { useProperty } from "@/global/hooks/useProperty";
-import {
-  useRateOptionsQuery,
-  useRestrictionsQuery,
-  useSetRestrictionsMutation,
-} from "@/global/api/endpoints/ratesApi";
+import { useRateOptionsQuery, useRestrictionsQuery } from "@/global/api/endpoints/ratesApi";
 import { toClientApiError } from "@/global/api/errors";
 import { formatShortDate } from "@serene/shared/lib/utils/format";
-import {
-  RESTRICTION_TYPES,
-  VALUED_RESTRICTIONS,
-} from "@serene/shared/modules/availability/availability.schema";
 import { addDays } from "@serene/shared/modules/business-date/business-date.policy";
 import { RESTRICTION_LABELS } from "./RateCalendarPanel";
+import { RestrictionDialog } from "./RestrictionDialog";
 
 /**
  * Restrictions over a date range. Every applicable restriction (house, room
@@ -131,113 +121,5 @@ export function RestrictionsView() {
       ) : null}
       {editing ? <RestrictionDialog start={start} onClose={() => setEditing(false)} /> : null}
     </section>
-  );
-}
-
-function RestrictionDialog({ start, onClose }: { start: string; onClose: () => void }) {
-  const property = useProperty();
-  const options = useRateOptionsQuery(property.id);
-  const [save, state] = useSetRestrictionsMutation();
-  const [action, setAction] = useState<"set" | "clear">("set");
-  const [type, setType] = useState<(typeof RESTRICTION_TYPES)[number]>("CLOSED_TO_ARRIVAL");
-  const [from, setFrom] = useState(start);
-  const [to, setTo] = useState(start);
-  const [days, setDays] = useState(127);
-  const [roomTypeId, setRoomTypeId] = useState("");
-  const [ratePlanId, setRatePlanId] = useState("");
-  const [value, setValue] = useState("2");
-  const [reason, setReason] = useState("");
-  const error = toClientApiError(state.error);
-  const valued = VALUED_RESTRICTIONS.has(type);
-
-  return (
-    <FormDialog
-      title="Restrictions"
-      description="Applies to every stay date in the range on the chosen weekdays."
-      onClose={onClose}
-      onSubmit={async () => {
-        const result = await save({
-          propertyId: property.id,
-          body: {
-            action,
-            type,
-            from,
-            to,
-            daysOfWeek: days,
-            roomTypeId: roomTypeId || null,
-            ratePlanId: ratePlanId || null,
-            value: action === "set" && valued ? Number.parseInt(value, 10) : null,
-            reason: reason.trim(),
-          },
-        });
-        if ("data" in result) onClose();
-      }}
-      submitLabel={action === "set" ? "Apply" : "Clear"}
-      danger={action === "clear"}
-      disabled={!from || !to || days === 0 || reason.trim().length < 3}
-      pending={state.isLoading}
-      error={error}
-    >
-      <div className="grid gap-3 sm:grid-cols-2">
-        <Select
-          label="Action"
-          options={[
-            { value: "set", label: "Set" },
-            { value: "clear", label: "Clear" },
-          ]}
-          value={action}
-          onChange={(e) => setAction(e.target.value as "set" | "clear")}
-        />
-        <Select
-          label="Restriction"
-          options={RESTRICTION_TYPES.map((t) => ({ value: t, label: RESTRICTION_LABELS[t] ?? t }))}
-          value={type}
-          onChange={(e) => setType(e.target.value as (typeof RESTRICTION_TYPES)[number])}
-        />
-        <TextField
-          label="From"
-          type="date"
-          value={from}
-          onChange={(e) => setFrom(e.target.value)}
-        />
-        <TextField
-          label="To"
-          type="date"
-          value={to}
-          onChange={(e) => setTo(e.target.value)}
-          errors={error?.fieldErrors.to}
-        />
-        <Select
-          label="Room type"
-          placeholder="All room types"
-          options={(options.data?.roomTypes ?? []).map((rt) => ({ value: rt.id, label: rt.code }))}
-          value={roomTypeId}
-          onChange={(e) => setRoomTypeId(e.target.value)}
-        />
-        <Select
-          label="Rate plan"
-          placeholder="All rate plans"
-          options={(options.data?.ratePlans ?? []).map((p) => ({ value: p.id, label: p.code }))}
-          value={ratePlanId}
-          onChange={(e) => setRatePlanId(e.target.value)}
-        />
-        {action === "set" && valued ? (
-          <TextField
-            label={type.includes("ADVANCE") ? "Days" : "Nights"}
-            inputMode="numeric"
-            value={value}
-            onChange={(e) => setValue(e.target.value.replace(/\D/g, ""))}
-            errors={error?.fieldErrors.value}
-          />
-        ) : null}
-      </div>
-      <WeekdayPicker value={days} onChange={setDays} />
-      <TextArea
-        label="Reason (audited)"
-        value={reason}
-        onChange={(e) => setReason(e.target.value)}
-        maxLength={1000}
-      />
-    </FormDialog>
   );
 }

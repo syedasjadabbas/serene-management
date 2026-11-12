@@ -1,22 +1,21 @@
-import type { OrganizationAuditLogQuery } from "@serene/shared/modules/audit/audit.schema";
-import type { OrganizationAuditLogView } from "@serene/shared/modules/audit/audit.types";
+import { API } from "@/global/constants/api";
 import type {
+  ApiSuccess,
   CentralAvailabilityResult,
+  CursorPageMeta,
+  InviteUserInput,
+  OffsetPageMeta,
+  OrganizationAuditLogQuery,
+  OrganizationAuditLogView,
   OrganizationOverview,
   OrganizationPerformanceReport,
-} from "@serene/shared/modules/organization/organization.types";
-import type {
+  PasswordResetIssued,
   PropertySetupCopyResult,
   PropertyView,
-} from "@serene/shared/modules/properties/properties.types";
-import type { InviteUserInput } from "@serene/shared/modules/users/users.schema";
-import type {
-  PasswordResetIssued,
   RoleView,
   UserInvited,
   UserView,
-} from "@serene/shared/modules/users/users.types";
-import type { ApiSuccess, CursorPageMeta, OffsetPageMeta } from "@serene/shared/types/api";
+} from "../types";
 import { baseApi } from "../baseApi";
 import { assigneeOptionsTag, optionsTag } from "./optionsTags";
 
@@ -46,7 +45,7 @@ export interface CentralAvailabilityArgs {
 export const organizationApi = baseApi.injectEndpoints({
   endpoints: (build) => ({
     organizationOverview: build.query<OrganizationOverview, void>({
-      query: () => "/organization/overview",
+      query: () => API.organization.organizationOverview(),
       transformResponse: (response: ApiSuccess<OrganizationOverview>) => response.data,
       providesTags: ["Report", "Property"],
     }),
@@ -54,12 +53,12 @@ export const organizationApi = baseApi.injectEndpoints({
       OrganizationPerformanceReport,
       { from: string; to: string }
     >({
-      query: (args) => `/organization/reports/performance${qs(args)}`,
+      query: (args) => `${API.organization.organizationReportsPerformance()}${qs(args)}`,
       transformResponse: (response: ApiSuccess<OrganizationPerformanceReport>) => response.data,
       providesTags: ["Report"],
     }),
     centralAvailability: build.query<CentralAvailabilityResult, CentralAvailabilityArgs>({
-      query: (args) => `/availability${qs({ ...args })}`,
+      query: (args) => `${API.organization.availability()}${qs({ ...args })}`,
       transformResponse: (response: ApiSuccess<CentralAvailabilityResult>) => response.data,
       providesTags: ["Availability"],
     }),
@@ -67,7 +66,7 @@ export const organizationApi = baseApi.injectEndpoints({
       { items: OrganizationAuditLogView[]; meta: CursorPageMeta },
       Partial<OrganizationAuditLogQuery>
     >({
-      query: (args) => `/audit-logs${qs({ ...args })}`,
+      query: (args) => `${API.organization.auditLogs()}${qs({ ...args })}`,
       transformResponse: (response: ApiSuccess<OrganizationAuditLogView[], CursorPageMeta>) => ({
         items: response.data,
         meta: response.meta!,
@@ -78,7 +77,7 @@ export const organizationApi = baseApi.injectEndpoints({
       { items: UserView[]; meta: OffsetPageMeta },
       { page: number; pageSize: number; q?: string }
     >({
-      query: (args) => `/users${qs(args)}`,
+      query: (args) => `${API.organization.users()}${qs(args)}`,
       transformResponse: (response: ApiSuccess<UserView[], OffsetPageMeta>) => ({
         items: response.data,
         meta: response.meta!,
@@ -86,7 +85,7 @@ export const organizationApi = baseApi.injectEndpoints({
       providesTags: ["User"],
     }),
     roles: build.query<RoleView[], void>({
-      query: () => "/roles",
+      query: () => API.organization.roles(),
       transformResponse: (response: ApiSuccess<RoleView[]>) => response.data,
       providesTags: ["Role"],
     }),
@@ -100,7 +99,7 @@ export const organizationApi = baseApi.injectEndpoints({
       }
     >({
       query: ({ userId, body }) => ({
-        url: `/users/${userId}/role-assignments`,
+        url: API.organization.userRoleAssignments(userId),
         method: "POST",
         body,
       }),
@@ -109,7 +108,7 @@ export const organizationApi = baseApi.injectEndpoints({
     }),
     revokeRole: build.mutation<UserView, { userId: string; assignmentId: string; reason: string }>({
       query: ({ userId, assignmentId, reason }) => ({
-        url: `/users/${userId}/role-assignments/${assignmentId}`,
+        url: API.organization.userRoleAssignment(userId, assignmentId),
         method: "DELETE",
         body: { reason },
       }),
@@ -121,7 +120,7 @@ export const organizationApi = baseApi.injectEndpoints({
       { userId: string; action: "disable" | "unlock" | "enable"; reason: string }
     >({
       query: ({ userId, action, reason }) => ({
-        url: `/users/${userId}/${action}`,
+        url: API.organization.userAction(userId, action),
         method: "POST",
         body: { reason },
       }),
@@ -130,13 +129,13 @@ export const organizationApi = baseApi.injectEndpoints({
     }),
     /** Adds an INVITED user with a first role; returns the one-time set-password link. */
     inviteUser: build.mutation<UserInvited, InviteUserInput>({
-      query: (body) => ({ url: "/users", method: "POST", body }),
+      query: (body) => ({ url: API.organization.users(), method: "POST", body }),
       transformResponse: (response: ApiSuccess<UserInvited>) => response.data,
       invalidatesTags: ["User", "AuditLog", assigneeOptionsTag()],
     }),
     issuePasswordReset: build.mutation<PasswordResetIssued, { userId: string; reason: string }>({
       query: ({ userId, reason }) => ({
-        url: `/users/${userId}/password-reset`,
+        url: API.organization.userPasswordReset(userId),
         method: "POST",
         body: { reason },
       }),
@@ -144,7 +143,7 @@ export const organizationApi = baseApi.injectEndpoints({
       invalidatesTags: ["User", "AuditLog"],
     }),
     accessibleProperties: build.query<PropertyView[], void>({
-      query: () => "/properties",
+      query: () => API.organization.properties(),
       transformResponse: (response: ApiSuccess<PropertyView[]>) => response.data,
       providesTags: ["Property"],
     }),
@@ -160,7 +159,7 @@ export const organizationApi = baseApi.injectEndpoints({
         reason: string;
       }
     >({
-      query: (body) => ({ url: "/properties", method: "POST", body }),
+      query: (body) => ({ url: API.organization.properties(), method: "POST", body }),
       transformResponse: (response: ApiSuccess<PropertyView>) => response.data,
       invalidatesTags: (result) => [
         "Property",
@@ -174,7 +173,7 @@ export const organizationApi = baseApi.injectEndpoints({
       { targetId: string; sourceId: string; reason: string }
     >({
       query: ({ targetId, sourceId, reason }) => ({
-        url: `/properties/${targetId}/setup/copy-from/${sourceId}`,
+        url: API.organization.setupCopyFrom(targetId, sourceId),
         method: "POST",
         body: { reason },
       }),

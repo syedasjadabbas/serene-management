@@ -59,15 +59,6 @@ export function StayDetailView({
   const [dialog, setDialog] = useState<"move" | "checkOut" | "extend" | null>(null);
 
   if (permissionsLoading) return <PageSkeleton title="Loading stay" layout="detail" />;
-  if (!allowed) {
-    return (
-      <StatusPanel
-        kind="forbidden"
-        title="Access denied"
-        description="You need the frontdesk:read permission."
-      />
-    );
-  }
   if (query.isLoading) return <PageSkeleton title="Loading stay" layout="detail" />;
   if (error || !query.data) {
     return (

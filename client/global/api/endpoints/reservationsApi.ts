@@ -1,23 +1,23 @@
-import type { AvailabilityQuery } from "@serene/shared/modules/availability/availability.schema";
-import type { AvailabilityView } from "@serene/shared/modules/availability/availability.types";
+import { API } from "@/global/constants/api";
 import type {
+  ApiSuccess,
   AssignRoomInput,
+  AvailabilityQuery,
+  AvailabilityView,
+  AvailableRoomView,
+  BookingOptions,
   CancelReservationInput,
   ConfirmReservationInput,
   CreateReservationInput,
+  CursorPageMeta,
   ReinstateReservationInput,
   ReservationCompanyInput,
-  UpdateReservationRoomInput,
-} from "@serene/shared/modules/reservations/reservations.schema";
-import type {
-  AvailableRoomView,
-  BookingOptions,
   ReservationDetail,
   ReservationListItem,
-} from "@serene/shared/modules/reservations/reservations.types";
-import type { StayChargeEstimate } from "@serene/shared/modules/billing/billing.types";
-import type { ReservationPackageInput } from "@serene/shared/modules/rates/rates.schema";
-import type { ApiSuccess, CursorPageMeta } from "@serene/shared/types/api";
+  ReservationPackageInput,
+  StayChargeEstimate,
+  UpdateReservationRoomInput,
+} from "../types";
 import { baseApi } from "../baseApi";
 import { optionsTag } from "./optionsTags";
 
@@ -44,12 +44,12 @@ export const reservationsApi = baseApi.injectEndpoints({
   endpoints: (build) => ({
     availability: build.query<AvailabilityView, WithProperty<Partial<AvailabilityQuery>>>({
       query: ({ propertyId, ...params }) =>
-        `/properties/${propertyId}/availability?${toQuery(params)}`,
+        `${API.reservations.availability(propertyId)}?${toQuery(params)}`,
       transformResponse: (response: ApiSuccess<AvailabilityView>) => response.data,
       providesTags: (_r, _e, { propertyId }) => [{ type: "Availability", id: propertyId }],
     }),
     bookingOptions: build.query<BookingOptions, string>({
-      query: (propertyId) => `/properties/${propertyId}/booking-options`,
+      query: (propertyId) => API.reservations.bookingOptions(propertyId),
       transformResponse: (response: ApiSuccess<BookingOptions>) => response.data,
       providesTags: (_r, _e, propertyId) => [optionsTag(propertyId)],
       keepUnusedDataFor: 300,
@@ -65,7 +65,7 @@ export const reservationsApi = baseApi.injectEndpoints({
       }
     >({
       query: ({ propertyId, ...params }) =>
-        `/properties/${propertyId}/rooms/available?${toQuery(params)}`,
+        `${API.reservations.roomsAvailable(propertyId)}?${toQuery(params)}`,
       transformResponse: (response: ApiSuccess<AvailableRoomView[]>) => response.data,
       providesTags: (_r, _e, { propertyId }) => [{ type: "Availability", id: propertyId }],
     }),
@@ -74,7 +74,7 @@ export const reservationsApi = baseApi.injectEndpoints({
       ReservationListArgs
     >({
       query: ({ propertyId, ...params }) =>
-        `/properties/${propertyId}/reservations?${toQuery(params)}`,
+        `${API.reservations.reservations(propertyId)}?${toQuery(params)}`,
       transformResponse: (response: ApiSuccess<ReservationListItem[], CursorPageMeta>) => ({
         items: response.data,
         meta: response.meta ?? { nextCursor: null, limit: 0 },
@@ -89,7 +89,7 @@ export const reservationsApi = baseApi.injectEndpoints({
     }),
     reservation: build.query<ReservationDetail, { propertyId: string; reservationId: string }>({
       query: ({ propertyId, reservationId }) =>
-        `/properties/${propertyId}/reservations/${reservationId}`,
+        API.reservations.reservation(propertyId, reservationId),
       transformResponse: (response: ApiSuccess<ReservationDetail>) => response.data,
       providesTags: (_r, _e, { reservationId }) => [{ type: "Reservation", id: reservationId }],
     }),
@@ -100,7 +100,7 @@ export const reservationsApi = baseApi.injectEndpoints({
       WithProperty<{ body: Partial<CreateReservationInput>; idempotencyKey?: string }>
     >({
       query: ({ propertyId, body, idempotencyKey }) => ({
-        url: `/properties/${propertyId}/reservations`,
+        url: API.reservations.reservations(propertyId),
         method: "POST",
         body,
         ...(idempotencyKey ? { headers: { "Idempotency-Key": idempotencyKey } } : {}),
@@ -117,7 +117,7 @@ export const reservationsApi = baseApi.injectEndpoints({
       RoomCommand<Partial<UpdateReservationRoomInput>>
     >({
       query: ({ propertyId, reservationRoomId, body }) => ({
-        url: `/properties/${propertyId}/reservation-rooms/${reservationRoomId}`,
+        url: API.reservations.reservationRoom(propertyId, reservationRoomId),
         method: "PATCH",
         body,
       }),
@@ -129,7 +129,7 @@ export const reservationsApi = baseApi.injectEndpoints({
       RoomCommand<Partial<ConfirmReservationInput>>
     >({
       query: ({ propertyId, reservationRoomId, body }) => ({
-        url: `/properties/${propertyId}/reservation-rooms/${reservationRoomId}/confirm`,
+        url: API.reservations.reservationRoomConfirm(propertyId, reservationRoomId),
         method: "POST",
         body,
       }),
@@ -138,7 +138,7 @@ export const reservationsApi = baseApi.injectEndpoints({
     }),
     cancelReservation: build.mutation<ReservationDetail, RoomCommand<CancelReservationInput>>({
       query: ({ propertyId, reservationRoomId, body }) => ({
-        url: `/properties/${propertyId}/reservation-rooms/${reservationRoomId}/cancel`,
+        url: API.reservations.reservationRoomCancel(propertyId, reservationRoomId),
         method: "POST",
         body,
       }),
@@ -147,7 +147,7 @@ export const reservationsApi = baseApi.injectEndpoints({
     }),
     markNoShow: build.mutation<ReservationDetail, RoomCommand<CancelReservationInput>>({
       query: ({ propertyId, reservationRoomId, body }) => ({
-        url: `/properties/${propertyId}/reservation-rooms/${reservationRoomId}/no-show`,
+        url: API.reservations.reservationRoomNoShow(propertyId, reservationRoomId),
         method: "POST",
         body,
       }),
@@ -159,7 +159,7 @@ export const reservationsApi = baseApi.injectEndpoints({
       RoomCommand<Partial<ReinstateReservationInput>>
     >({
       query: ({ propertyId, reservationRoomId, body }) => ({
-        url: `/properties/${propertyId}/reservation-rooms/${reservationRoomId}/reinstate`,
+        url: API.reservations.reservationRoomReinstate(propertyId, reservationRoomId),
         method: "POST",
         body,
       }),
@@ -172,7 +172,7 @@ export const reservationsApi = baseApi.injectEndpoints({
       RoomCommand<Partial<ReinstateReservationInput>>
     >({
       query: ({ propertyId, reservationRoomId, body }) => ({
-        url: `/properties/${propertyId}/reservation-rooms/${reservationRoomId}/reinstate-no-show`,
+        url: API.reservations.reservationRoomReinstateNoShow(propertyId, reservationRoomId),
         method: "POST",
         body,
       }),
@@ -185,7 +185,7 @@ export const reservationsApi = baseApi.injectEndpoints({
       { propertyId: string; reservationId: string; body: ReservationCompanyInput }
     >({
       query: ({ propertyId, reservationId, body }) => ({
-        url: `/properties/${propertyId}/reservations/${reservationId}/company`,
+        url: API.reservations.reservationCompany(propertyId, reservationId),
         method: "PUT",
         body,
       }),
@@ -194,7 +194,7 @@ export const reservationsApi = baseApi.injectEndpoints({
     }),
     assignRoom: build.mutation<ReservationDetail, RoomCommand<AssignRoomInput>>({
       query: ({ propertyId, reservationRoomId, body }) => ({
-        url: `/properties/${propertyId}/reservation-rooms/${reservationRoomId}/assign-room`,
+        url: API.reservations.reservationRoomAssignRoom(propertyId, reservationRoomId),
         method: "POST",
         body,
       }),
@@ -228,13 +228,13 @@ export const reservationPackagesApi = reservationsApi.injectEndpoints({
       { propertyId: string; reservationRoomId: string }
     >({
       query: ({ propertyId, reservationRoomId }) =>
-        `/properties/${propertyId}/reservation-rooms/${reservationRoomId}/charge-estimate`,
+        API.reservations.reservationRoomChargeEstimate(propertyId, reservationRoomId),
       transformResponse: (response: ApiSuccess<StayChargeEstimate>) => response.data,
       providesTags: ["Reservation", "RatePlan"],
     }),
     addReservationPackage: build.mutation<ReservationDetail, RoomCommand<ReservationPackageInput>>({
       query: ({ propertyId, reservationRoomId, body }) => ({
-        url: `/properties/${propertyId}/reservation-rooms/${reservationRoomId}/packages`,
+        url: API.reservations.reservationRoomPackages(propertyId, reservationRoomId),
         method: "POST",
         body,
       }),
@@ -246,7 +246,11 @@ export const reservationPackagesApi = reservationsApi.injectEndpoints({
       { propertyId: string; reservationRoomId: string; reservationPackageId: string }
     >({
       query: ({ propertyId, reservationRoomId, reservationPackageId }) => ({
-        url: `/properties/${propertyId}/reservation-rooms/${reservationRoomId}/packages/${reservationPackageId}`,
+        url: API.reservations.reservationRoomPackage(
+          propertyId,
+          reservationRoomId,
+          reservationPackageId,
+        ),
         method: "DELETE",
       }),
       transformResponse: (response: ApiSuccess<ReservationDetail>) => response.data,

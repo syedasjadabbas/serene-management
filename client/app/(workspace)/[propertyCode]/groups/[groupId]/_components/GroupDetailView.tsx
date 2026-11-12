@@ -50,15 +50,6 @@ export function GroupDetailView({ groupId }: { groupId: string }) {
   const [dialog, setDialog] = useState<Dialog>(null);
 
   if (isLoading) return <PageSkeleton title="Loading group" layout="detail" />;
-  if (!can("groups:read")) {
-    return (
-      <StatusPanel
-        kind="forbidden"
-        title="Access denied"
-        description="You need the groups:read permission."
-      />
-    );
-  }
   if (query.isLoading) return <PageSkeleton title="Loading group" layout="detail" />;
   if (error || !query.data) {
     return (

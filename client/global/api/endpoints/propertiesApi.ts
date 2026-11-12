@@ -1,12 +1,12 @@
-import type { BusinessDateView } from "@serene/shared/modules/business-date/business-date.types";
-import type { ApiSuccess } from "@serene/shared/types/api";
+import { API } from "@/global/constants/api";
+import type { ApiSuccess, BusinessDateView } from "../types";
 import { baseApi } from "../baseApi";
 
 /** Property context endpoints used by the workspace shell and property pages. */
 export const propertiesApi = baseApi.injectEndpoints({
   endpoints: (build) => ({
     businessDate: build.query<BusinessDateView, string>({
-      query: (propertyId) => `/properties/${propertyId}/business-date`,
+      query: (propertyId) => API.properties.businessDate(propertyId),
       transformResponse: (response: ApiSuccess<BusinessDateView>) => response.data,
       providesTags: (_result, _error, propertyId) => [{ type: "BusinessDate", id: propertyId }],
     }),

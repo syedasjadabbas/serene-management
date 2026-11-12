@@ -7,7 +7,6 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 import { buttonClass } from "@/global/components/ui/Button";
 import { PageHeader } from "@/global/components/ui/PageHeader";
-import { StatusPanel } from "@/global/components/ui/StatusPanel";
 import { PageSkeleton } from "@/global/components/ui/PageSkeleton";
 import { THead, Table, TableFrame, Th } from "@/global/components/ui/Table";
 import { usePermissions } from "@/global/hooks/usePermissions";
@@ -44,15 +43,6 @@ export function ReservationSearch() {
   const hasFilters = RESERVATION_FILTER_KEYS.some((key) => key !== "sort" && Boolean(filters[key]));
 
   if (isLoading) return <PageSkeleton title="Loading reservations" />;
-  if (!can("reservations:read")) {
-    return (
-      <StatusPanel
-        kind="forbidden"
-        title="Access denied"
-        description="You need the reservations:read permission."
-      />
-    );
-  }
 
   function apply(values: ReservationFilterValues) {
     const next = new URLSearchParams();
