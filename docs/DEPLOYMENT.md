@@ -353,7 +353,9 @@ Routing both applications under one host (`/api/` to the API, everything else to
 
 **Database roles.** The schema owner and the runtime role are separate (OPERATIONS §4). Only role creation needs a superuser. After that, the owner runs the migrations and the grants in `scripts/db/runtime-grants.sql`, except its final `ALTER ROLE … SET` lines: those need `CREATEROLE` and belong in the superuser step. When PostgreSQL is on another host, enable `ssl = on`, allow only `hostssl … scram-sha-256` in `pg_hba.conf` for both roles, and use `sslmode=verify-full` in the URLs.
 
-**nginx.** Open-source nginx has passive health checks only. To drain an instance, remove it from `upstream` and reload before stopping it, or use HAProxy or a cloud load balancer with active readiness checks.
+**nginx.** Open-source nginx has passive health checks only. To drain an instance, remove it from `upstream` and reload before stopping it, or use HAProxy or a cloud load balancer with active readiness checks. This example is for the recommended one-host layout (`pms.example-hotel.com` serves the client and routes `/api/` to Express). `proxy_pass` has no URI part on purpose, so `/api/v1/...` reaches Express unchanged. `http2 on;` needs nginx 1.25.1 or newer (on older versions write `listen 443 ssl http2;`).
+
+> Reviewed line by line against the code (paths, headers, timeouts, body limit) but **not yet rehearsed on a server**: run `nginx -t` on the proxy host before use.
 
 ```nginx
 upstream serene_api {
@@ -382,6 +384,7 @@ server {
     ssl_session_cache shared:SSL:10m;
     client_max_body_size 1m;                 # the application also refuses larger JSON bodies with 413
     keepalive_timeout 75s;
+    server_tokens off;
     proxy_http_version 1.1;
     proxy_set_header Connection "";
     proxy_set_header Host $host;
@@ -389,15 +392,19 @@ server {
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header X-Request-Id $request_id;
     proxy_connect_timeout 5s;
+    proxy_send_timeout 75s;
     proxy_read_timeout 75s;
     proxy_next_upstream error timeout;        # nginx never retries non-idempotent requests by default
     # Security headers: the client sets HSTS, the nonce CSP, X-Frame-Options, nosniff, COOP, Referrer/Permissions-Policy; the API sets helmet's set.
 
-    location ~ ^/api/v1/properties/[^/]+/events$ {      # server-sent events
+    # server-sent events; a regex location wins over the /api/ prefix below (no URI after proxy_pass in a regex location)
+    location ~ ^/api/v1/properties/[^/]+/events$ {
         proxy_pass http://serene_api;
         proxy_buffering off;
         proxy_cache off;
+        gzip off;
         proxy_read_timeout 120s;              # longer than the 25 s heartbeat
+        proxy_next_upstream off;              # never replay a stream on another instance
     }
     location = /api/metrics { return 404; }   # scrape instances directly, never through the public proxy
     location /api/ { proxy_pass http://serene_api; }
@@ -405,79 +412,148 @@ server {
 }
 ```
 
-**HAProxy** (active readiness checks; it drains an instance automatically when it answers 503 `draining`):
+With the two-host layout (`pms.` for the client, `api.` for Express, same registrable domain) add a second `server` block for `api.` with its own certificate and the same `proxy_*` lines, whose `location /` proxies to `serene_api` (keep the events and `/api/metrics` rules), and drop `/api/` from the `pms.` block. Then `NEXT_PUBLIC_API_URL=https://api.<domain>/api/v1` and `CLIENT_ORIGINS=https://pms.<domain>`; the client's CSP `connect-src` follows `NEXT_PUBLIC_API_URL`.
+
+**HAProxy** (active readiness checks; it drains an instance automatically when it answers 503 `draining`). A complete minimal file for the one-host layout; the TLS certificate is a combined PEM (fullchain + key):
 
 ```haproxy
-backend serene_api            # a second backend, serene_client, serves the client (check GET /)
+global
+    log /dev/log local0
+    ssl-default-bind-options ssl-min-ver TLSv1.2
+
+defaults
+    mode http
+    log global
+    option httplog
+    option redispatch
+    retries 2
+    timeout connect 5s
+    timeout client  75s
+    timeout server  75s                       # the event stream gets a longer one in its backend
+    timeout http-request 60s
+
+frontend fe_https
+    bind :80
+    bind :443 ssl crt /etc/haproxy/certs/pms.example-hotel.com.pem alpn h2,http/1.1
+    http-request redirect scheme https code 301 unless { ssl_fc }
+    http-request set-header X-Forwarded-Proto https
+    http-request set-header X-Request-Id %[uuid()]
+    option forwardfor                          # appends the peer to X-Forwarded-For; TRUSTED_PROXY_HOPS=1
+    acl is_metrics path -i /api/metrics
+    http-request deny deny_status 404 if is_metrics
+    acl is_api path_beg /api/
+    use_backend serene_api if is_api
+    default_backend serene_client
+
+backend serene_api
+    balance leastconn
     option httpchk GET /api/health/ready
     http-check expect status 200
     default-server inter 1s fall 2 rise 2
-    timeout server 120s                       # covers the SSE heartbeat (25 s)
-    http-request set-header X-Forwarded-Proto https
-    option forwardfor                          # appends X-Forwarded-For; TRUSTED_PROXY_HOPS=1
+    timeout server 120s                       # longer than the 25 s SSE heartbeat
     server api1 10.0.0.11:4000 check
     server api2 10.0.0.12:4000 check
+
+backend serene_client
+    balance leastconn
+    option httpchk GET /
+    http-check expect rstatus (2|3)[0-9][0-9] # the client has no health route; / may redirect
+    default-server inter 2s fall 2 rise 2
+    server client1 10.0.0.11:3000 check
+    server client2 10.0.0.12:3000 check
 ```
 
-Validate the real file with `nginx -t` or `haproxy -c -f …` on the proxy host: these examples were not run through either tool (the rehearsal used a stand-in proxy, §12; the split two-upstream form has not been run through either tool).
+> Reviewed against the code but **not yet rehearsed on a server**: run `haproxy -c -f /etc/haproxy/haproxy.cfg` on the proxy host before use. The event stream is plain HTTP, so `timeout server` (not `timeout tunnel`) is the setting that matters; the 25 s heartbeat keeps the connection active.
 
-**systemd units** (Linux; on Windows use NSSM with `AppStopMethodConsole` and the same timeouts):
+Validate the real file with `nginx -t` or `haproxy -c -f …` on the proxy host: these examples were not run through either tool (the rehearsal used a stand-in proxy, §12).
+
+**systemd units** (Linux; on Windows use NSSM with `AppStopMethodConsole` and the same timeouts). `%i` is the instance name after the `@`: the listen port for API and client units, the metrics port for worker units; `%H` is the host name.
+
+> Reviewed against the code but **not yet rehearsed on a server**: run `systemd-analyze verify /etc/systemd/system/serene-*@.service` after installing them.
 
 ```ini
 # /etc/systemd/system/serene-api@.service   (instance name = port, e.g. serene-api@4000)
 [Unit]
 Description=SERENE MANAGEMENT API %i
+Wants=network-online.target
 After=network-online.target
+
 [Service]
 User=serene
+Group=serene
 WorkingDirectory=/srv/serene/current/server
 EnvironmentFile=/etc/serene/serene.env
-Environment=INSTANCE_ID=api-%H-%i JOB_WORKER=off PORT=%i
-ExecStart=/usr/bin/node dist/index.mjs
+Environment=NODE_ENV=production
+Environment=INSTANCE_ID=api-%H-%i
+Environment=JOB_WORKER=off
+Environment=PORT=%i
+ExecStart=/usr/bin/node /srv/serene/current/server/dist/index.mjs
 KillSignal=SIGTERM
-# SHUTDOWN_TIMEOUT_MS + 5 s + margin
+# SHUTDOWN_TIMEOUT_MS (25 s) + 5 s hard exit + margin; raise it with SHUTDOWN_TIMEOUT_MS
 TimeoutStopSec=35
 Restart=on-failure
+RestartSec=5
 NoNewPrivileges=true
+
 [Install]
 WantedBy=multi-user.target
 
 # /etc/systemd/system/serene-client@.service   (instance name = port, e.g. serene-client@3000)
 [Unit]
 Description=SERENE MANAGEMENT client %i
+Wants=network-online.target
 After=network-online.target
+
 [Service]
 User=serene
+Group=serene
 WorkingDirectory=/srv/serene/current/client
 Environment=NODE_ENV=production
-ExecStart=/usr/bin/node ../node_modules/next/dist/bin/next start -p %i -H 0.0.0.0
+# keepAliveTimeout above nginx's 60 s upstream idle time, so nginx never reuses a connection Next.js just closed (its default is 5 s)
+ExecStart=/usr/bin/node /srv/serene/current/node_modules/next/dist/bin/next start -p %i -H 0.0.0.0 --keepAliveTimeout 70000
 KillSignal=SIGTERM
 TimeoutStopSec=30
 Restart=on-failure
+RestartSec=5
 NoNewPrivileges=true
+
 [Install]
 WantedBy=multi-user.target
 
 # /etc/systemd/system/serene-worker@.service   (instance name = metrics port, e.g. serene-worker@9101)
 [Unit]
 Description=SERENE MANAGEMENT worker %i
+Wants=network-online.target
 After=network-online.target
+
 [Service]
 User=serene
+Group=serene
 WorkingDirectory=/srv/serene/current/server
 EnvironmentFile=/etc/serene/serene.env
-Environment=INSTANCE_ID=worker-%H-%i DATABASE_POOL_MAX=4
-ExecStart=/usr/bin/node dist/workers/worker.mjs --metrics-port %i
+Environment=NODE_ENV=production
+Environment=INSTANCE_ID=worker-%H-%i
+Environment=DATABASE_POOL_MAX=4
+# The worker runs unless JOB_WORKER is "off" in ITS environment; "inline" (the default) means "run jobs".
+Environment=JOB_WORKER=inline
+ExecStart=/usr/bin/node /srv/serene/current/server/dist/workers/worker.mjs --metrics-port %i
 KillSignal=SIGTERM
 # The worker waits up to 60 s for running jobs; systemd kills it after this (OPERATIONS §7)
 TimeoutStopSec=90
 Restart=on-failure
+RestartSec=5
 NoNewPrivileges=true
+
 [Install]
 WantedBy=multi-user.target
 ```
 
-The shared `/etc/serene/serene.env` must not set `JOB_WORKER`: the API unit sets `off` for itself, and the worker unit leaves it unset so the worker runs (a `JOB_WORKER=off` in the shared file would stop the separate workers too). The client unit needs no server secrets; its only build-time setting is `NEXT_PUBLIC_API_URL`. These units were written for the split and have not been run on a host.
+Rules the units depend on:
+
+- **`JOB_WORKER` is per process, and `off` stops the separate worker too** (`server/workers/worker.ts` logs `disabled` and exits 0; `Restart=on-failure` does not restart a clean exit). The API unit sets `off`, the worker unit sets `inline`. Systemd lets `EnvironmentFile=` values override `Environment=`, so the shared `/etc/serene/serene.env` must not set `JOB_WORKER`, `PORT`, `INSTANCE_ID` or `DATABASE_POOL_MAX` (each unit sets its own). A stray `server/.env` file cannot override them, because real environment variables win.
+- **`METRICS_TOKEN` must be in the shared file** when the worker unit uses `--metrics-port`: without it the worker refuses to start (exit 1) and systemd restarts it in a loop. Drop `--metrics-port %i` if worker metrics are not scraped.
+- The server reads the process environment first, then `server/.env`, then the repository-root `.env`; production should use only the `EnvironmentFile`.
+- The shared `/etc/serene/serene.env` is for the API and the worker. The client unit needs no server secrets; its only build-time setting is `NEXT_PUBLIC_API_URL`. The `serene` user must be able to write to `client/.next/cache` if the client uses it.
 
 `/srv/serene/current` is a symlink to `/srv/serene/releases/<version>`: a deploy or a rollback switches the link and restarts the units one at a time (OPERATIONS §12.2).
 

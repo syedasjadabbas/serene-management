@@ -366,7 +366,7 @@ Work too long for a request (today: the night audit) is queued in the `backgroun
 **Where workers run.**
 
 - **Default (`JOB_WORKER=inline`):** every API server process runs one worker next to its requests. Nothing else to deploy; a single-server installation needs nothing more.
-- **Separate workers:** set `JOB_WORKER=off` on the API processes and run `npm run worker` (`node dist/workers/worker.mjs`, built by `npm run build`, run from `server/` or through the npm script) under the process manager (systemd, NSSM, pm2), with the API's environment. The `--conditions=react-server` flag is gone.
+- **Separate workers:** set `JOB_WORKER=off` on the API processes and run `npm run worker` (`node dist/workers/worker.mjs`, built by `npm run build`, run from `server/` or through the npm script) under the process manager (systemd, NSSM, pm2), with the API's environment except `JOB_WORKER` (a worker given `JOB_WORKER=off` exits at once; see the units in DEPLOYMENT.md §11). `--metrics-port` also needs `METRICS_TOKEN`, or the worker refuses to start. The `--conditions=react-server` flag is gone.
 - **`JOB_WORKER` is read per process.** `off` makes a separate worker exit without claiming anything, exactly as it stops the inline worker of an API process. Give the API processes `off` in their own unit or environment; do not put `off` in an environment file that the separate workers also load, or no job will run. Use this to keep long audits off the web processes' event loop, or to run workers on another host.
 - Any mix is safe, on any number of hosts: a job is claimed by exactly one worker at a time (`FOR UPDATE SKIP LOCKED`), and every write a worker makes is fenced on its lease.
 
@@ -658,7 +658,7 @@ groups:
 
 ## 12. Runbooks
 
-Commands assume the reference topology (DEPLOYMENT.md §11): releases in `/srv/serene/releases/<version>`, `/srv/serene/current` pointing at the live one, systemd units `serene-api@<port>`, `serene-client@<port>` and `serene-worker@<metricsPort>`, and the production environment in `/etc/serene/serene.env`. Run `ops:*` commands from `/srv/serene/current` with that environment loaded. "Instance" below means an API server instance unless stated; the client units (`serene-client@3000`) are restarted after the API in each release and need no drain. Never paste secrets into a ticket or chat.
+Commands assume the reference topology (DEPLOYMENT.md §11): releases in `/srv/serene/releases/<version>`, `/srv/serene/current` pointing at the live one, systemd units `serene-api@<port>`, `serene-client@<port>` and `serene-worker@<metricsPort>`, and the production environment in `/etc/serene/serene.env`. Run `ops:*` commands from `/srv/serene/current` with that environment loaded (for example `set -a; . /etc/serene/serene.env; set +a`, which works while the file holds plain `KEY=value` lines; the units themselves are reviewed but not yet rehearsed on a server, DEPLOYMENT.md §11). "Instance" below means an API server instance unless stated; the client units (`serene-client@3000`) are restarted after the API in each release and need no drain. Never paste secrets into a ticket or chat.
 
 ### 12.1 Health checks
 
