@@ -19,6 +19,7 @@ import {
   rulesInForce,
   settleProblem,
 } from "@serene/shared/modules/billing/billing.policy";
+import { createTaxSchema } from "@serene/shared/modules/setup/setup.schema";
 import {
   adjustSchema,
   chargeSchema,
@@ -264,6 +265,39 @@ describe("payment, refund, settlement and reversal rules", () => {
     expect(paymentProblem(0n, m("100"))).toMatch(/greater than zero/);
   });
 
+  it("takes a deposit only as an explicit advance that leaves a credit balance", () => {
+    // Nothing owed (zero balance) or a credit already on the window: any positive deposit.
+    expect(paymentProblem(m("500"), 0n, "DEPOSIT")).toBeNull();
+    expect(paymentProblem(m("0.01"), 0n, "DEPOSIT")).toBeNull();
+    expect(paymentProblem(m("50"), m("-200"), "DEPOSIT")).toBeNull();
+    // Overpaying a balance due as a deposit: the excess becomes credit.
+    expect(paymentProblem(m("100.01"), m("100"), "DEPOSIT")).toBeNull();
+    // Within or exactly the balance it is a normal payment, not a deposit.
+    expect(paymentProblem(m("100"), m("100"), "DEPOSIT")).toMatch(/more than the balance/);
+    expect(paymentProblem(m("40"), m("100"), "DEPOSIT")).toMatch(/Take a normal payment/);
+    // Zero and negative amounts never pass.
+    expect(paymentProblem(0n, 0n, "DEPOSIT")).toMatch(/greater than zero/);
+    expect(paymentProblem(m("-5"), m("-100"), "DEPOSIT")).toMatch(/greater than zero/);
+    expect(paymentProblem(m("-5"), m("100"))).toMatch(/greater than zero/);
+  });
+
+  it("keeps ordinary payments within a positive balance, whatever the credit", () => {
+    expect(paymentProblem(m("100"), m("100"), "PAYMENT")).toBeNull();
+    expect(paymentProblem(m("0.01"), m("0.01"))).toBeNull();
+    expect(paymentProblem(m("0.01"), 0n, "PAYMENT")).toMatch(/no balance/);
+    expect(paymentProblem(m("10"), m("-50"), "PAYMENT")).toMatch(/no balance/);
+    expect(paymentProblem(m("100.0001"), m("100"), "PAYMENT")).toMatch(/more than the balance/);
+  });
+
+  it("accepts only the PAYMENT and DEPOSIT kinds in the payment contract", () => {
+    const id = "01900000-0000-7000-8000-000000000001";
+    const base = { methodId: id, amount: "100.00", version: 1 };
+    expect(paymentSchema.safeParse(base).success).toBe(true);
+    expect(paymentSchema.safeParse({ ...base, kind: "DEPOSIT" }).success).toBe(true);
+    expect(paymentSchema.safeParse({ ...base, kind: "PAYMENT" }).success).toBe(true);
+    expect(paymentSchema.safeParse({ ...base, kind: "REFUND" }).success).toBe(false);
+  });
+
   it("limits refunds to what remains refundable on a captured payment", () => {
     const payment = { status: "CAPTURED", amount: m("500"), refunded: m("200") };
     expect(refundProblem(m("300"), payment)).toBeNull();
@@ -304,6 +338,58 @@ describe("contracts never accept client-side money authority", () => {
     expect(paymentSchema.safeParse({ ...payment, balance: "0" }).success).toBe(false);
     expect(paymentSchema.safeParse({ ...payment, version: undefined }).success).toBe(false);
     expect(adjustSchema.safeParse({ amount: "5", reasonCodeId: id }).success).toBe(false);
+  });
+
+  it("caps one posting's total with exact decimal arithmetic (no float rounding)", () => {
+    const id = "01900000-0000-7000-8000-000000000001";
+    const charge = (unitAmount: string, quantity: number) =>
+      chargeSchema.safeParse({ transactionCodeId: id, quantity, unitAmount });
+    // 10^12 exactly is out; one minor unit below is in.
+    expect(charge("1000000000000", 1).success).toBe(false);
+    expect(charge("999999999999.9999", 1).success).toBe(true);
+    expect(charge("500000000000", 2).success).toBe(false);
+    expect(charge("499999999999.9999", 2).success).toBe(true);
+    // Four-decimal prices multiply exactly: 1111111111.1111 × 900 = 999999999999.99 (in),
+    // 1111111111.1112 × 900 = 1000000000000.08 (out).
+    expect(charge("1111111111.1111", 900).success).toBe(true);
+    expect(charge("1111111111.1112", 900).success).toBe(false);
+    const issue = charge("1000000000000", 1);
+    expect(!issue.success && issue.error.issues[0]).toMatchObject({
+      path: ["unitAmount"],
+      message: "Quantity × price is too large for one posting",
+    });
+  });
+
+  it("compares a percentage tax rate to 100 exactly", () => {
+    const tax = (rate: string) =>
+      createTaxSchema.safeParse({
+        code: "VAT",
+        name: "VAT",
+        calculation: "PERCENT",
+        rate,
+        effectiveFrom: "2026-01-01",
+        reason: "Setup",
+      });
+    expect(tax("100").success).toBe(true);
+    expect(tax("100.0000").success).toBe(true);
+    expect(tax("100.0001").success).toBe(false);
+    expect(tax("16.5").success).toBe(true);
+    const over = tax("100.0001");
+    expect(!over.success && over.error.issues[0]).toMatchObject({
+      path: ["rate"],
+      message: "A percentage cannot exceed 100",
+    });
+    // Flat per-unit rates are amounts, not percentages.
+    expect(
+      createTaxSchema.safeParse({
+        code: "TOUR",
+        name: "Tourism",
+        calculation: "FLAT_PER_UNIT",
+        rate: "250",
+        effectiveFrom: "2026-01-01",
+        reason: "Setup",
+      }).success,
+    ).toBe(true);
   });
 
   it("accepts only positive decimal amounts", () => {

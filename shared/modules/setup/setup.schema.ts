@@ -1,5 +1,9 @@
 import { z } from "zod";
+import { parseMoney } from "../../lib/utils/money";
 import { highRiskReasonSchema, idSchema, isoDateSchema } from "../../lib/validation/common";
+
+/** A percentage tax cannot exceed 100 (exact bigint money units, never a float). */
+const MAX_TAX_PERCENT = parseMoney("100");
 
 /**
  * Property setup (room inventory and taxes): the configuration a property
@@ -163,7 +167,11 @@ function checkTax(
   },
   ctx: z.RefinementCtx,
 ) {
-  if (input.calculation === "PERCENT" && input.rate !== undefined && Number(input.rate) > 100) {
+  if (
+    input.calculation === "PERCENT" &&
+    input.rate !== undefined &&
+    parseMoney(input.rate) > MAX_TAX_PERCENT
+  ) {
     ctx.addIssue({ code: "custom", path: ["rate"], message: "A percentage cannot exceed 100" });
   }
   if (input.effectiveFrom && input.effectiveTo && input.effectiveTo < input.effectiveFrom) {

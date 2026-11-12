@@ -257,11 +257,11 @@ function requireManualCode(code: CodeRow | null): CodeRow {
   return code;
 }
 
-function assertCodeLimits(code: CodeRow, unitAmount: MoneyUnits) {
+function assertCodeLimits(code: CodeRow, unitAmount: MoneyUnits, minorUnits: number) {
   if (code.minAmount && unitAmount < units(code.minAmount)) {
     throw appError(
       "VALIDATION_FAILED",
-      `The minimum price for ${code.code} is ${code.minAmount.toFixed(2)}`,
+      `The minimum price for ${code.code} is ${formatMoney(units(code.minAmount), minorUnits)}`,
       {
         fields: { unitAmount: ["Below the minimum"] },
       },
@@ -270,7 +270,7 @@ function assertCodeLimits(code: CodeRow, unitAmount: MoneyUnits) {
   if (code.maxAmount && unitAmount > units(code.maxAmount)) {
     throw appError(
       "VALIDATION_FAILED",
-      `The maximum price for ${code.code} is ${code.maxAmount.toFixed(2)}`,
+      `The maximum price for ${code.code} is ${formatMoney(units(code.maxAmount), minorUnits)}`,
       {
         fields: { unitAmount: ["Above the maximum"] },
       },
@@ -432,7 +432,7 @@ async function chargeInputs(
   );
   const minorUnits = await currencyMinorUnits(tx, ctx.currencyCode);
   const unitAmount = amountInCurrency(input.unitAmount, minorUnits, "unitAmount");
-  assertCodeLimits(code, unitAmount);
+  assertCodeLimits(code, unitAmount, minorUnits);
   const rules =
     (await taxRulesByCode(tx, ctx.propertyId, [code.id], businessDate)).get(code.id) ?? [];
   const breakdown = calculateCharge({

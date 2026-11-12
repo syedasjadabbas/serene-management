@@ -332,11 +332,35 @@ export function packagePostingKey(
 
 export type FolioStatus = "OPEN" | "SETTLED" | "CLOSED";
 
-/** Why a payment cannot be taken against a window with this balance (null = allowed). */
-export function paymentProblem(amount: MoneyUnits, balance: MoneyUnits): string | null {
+export type PaymentKind = "PAYMENT" | "DEPOSIT";
+
+/**
+ * Why a payment cannot be taken against a window with this balance (null =
+ * allowed).
+ *
+ * - PAYMENT settles what is owed: 0 < amount <= balance.
+ * - DEPOSIT is an explicit advance: it must leave a credit (negative) balance,
+ *   i.e. amount > balance (always true when nothing is owed). A payment that
+ *   stays within the balance is an ordinary PAYMENT, so a deposit is never a
+ *   way around the over-payment rule by accident.
+ */
+export function paymentProblem(
+  amount: MoneyUnits,
+  balance: MoneyUnits,
+  kind: PaymentKind = "PAYMENT",
+): string | null {
   if (amount <= 0n) return "The payment amount must be greater than zero";
-  if (balance <= 0n) return "This window has no balance to pay";
-  if (amount > balance) return "The payment is more than the balance due";
+  if (kind === "DEPOSIT") {
+    return amount > balance
+      ? null
+      : "A deposit must be more than the balance due. Take a normal payment instead";
+  }
+  if (balance <= 0n) {
+    return "This window has no balance to pay. Take a deposit / advance to pay ahead";
+  }
+  if (amount > balance) {
+    return "The payment is more than the balance due. Take a deposit / advance to pay ahead";
+  }
   return null;
 }
 

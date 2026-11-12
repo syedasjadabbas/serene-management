@@ -6,6 +6,7 @@ import { Alert } from "@/global/components/ui/Alert";
 import { Button } from "@/global/components/ui/Button";
 import { Dialog } from "@/global/components/ui/Dialog";
 import { Select } from "@/global/components/ui/Select";
+import { ToggleGroup } from "@/global/components/ui/ToggleGroup";
 import { TextArea } from "@/global/components/ui/TextArea";
 import { TextField } from "@/global/components/ui/TextField";
 import { useProperty } from "@/global/hooks/useProperty";
@@ -26,6 +27,7 @@ import { type ClientApiError, toClientApiError } from "@/global/api/errors";
 import { formatCurrency, formatDate, pluralize } from "@serene/shared/lib/utils/format";
 import { formatMoney, parseMoney } from "@serene/shared/lib/utils/money";
 import { randomId } from "@serene/shared/lib/utils/random-id";
+import { type PaymentKind, paymentProblem } from "@serene/shared/modules/billing/billing.policy";
 import type {
   ChargePreview,
   FolioAccountView,
@@ -355,25 +357,39 @@ export function PaymentDialog({
   const dispatch = useDispatch();
   const options = useBillingOptionsQuery(property.id);
   const idempotencyKey = useIdempotencyKey();
+  const balance = parseMoney(win.balance);
+  // With nothing owed the only possible payment is an advance (deposit).
+  const owes = balance > 0n;
+  const [chosenKind, setKind] = useState<PaymentKind>(owes ? "PAYMENT" : "DEPOSIT");
+  const kind: PaymentKind = owes ? chosenKind : "DEPOSIT";
   const [methodId, setMethodId] = useState("");
-  const [amount, setAmount] = useState(() => toMinor(win.balance, account.minorUnits));
+  const [amount, setAmount] = useState(() =>
+    owes ? toMinor(win.balance, account.minorUnits) : "",
+  );
   const [reference, setReference] = useState("");
   const [pay, state] = usePostPaymentMutation();
   const error = toClientApiError(state.error);
   const method = options.data?.paymentMethods.find((m) => m.id === methodId);
+  const amountOk = AMOUNT.test(amount);
+  // The same rule the server applies (shared policy); the server stays the authority.
+  const problem = amountOk ? paymentProblem(parseMoney(amount), balance, kind) : null;
   const valid =
-    !!methodId && AMOUNT.test(amount) && (!method?.requiresReference || !!reference.trim());
+    !!methodId && amountOk && !problem && (!method?.requiresReference || !!reference.trim());
   const money = (value: string) =>
     formatCurrency(value, account.currencyCode, "en", account.minorUnits);
+  const deposit = kind === "DEPOSIT";
   // Preview only; the server recomputes the balance from the ledger.
-  const after = AMOUNT.test(amount)
-    ? formatMoney(parseMoney(win.balance) - parseMoney(amount))
-    : null;
+  const after = amountOk ? balance - parseMoney(amount) : null;
+  const afterCredit = after !== null && after < 0n;
 
   return (
     <FinanceDialog
-      title={`Take payment · window ${win.window}`}
-      description={`Payments are taken in ${account.currencyCode}. Card payments are recorded from the hotel's terminal; no card data is entered here.`}
+      title={`${deposit ? "Take deposit / advance" : "Take payment"} · window ${win.window}`}
+      description={`Payments are taken in ${account.currencyCode}. Card payments are recorded from the hotel's terminal; no card data is entered here.${
+        deposit
+          ? " A deposit is held as a credit on this window and must be used or refunded before check-out."
+          : ""
+      }`}
       onClose={onClose}
       onSubmit={async () => {
         const result = await pay({
@@ -383,6 +399,7 @@ export function PaymentDialog({
           idempotencyKey,
           body: {
             methodId,
+            kind,
             amount,
             version: win.version,
             currencyCode: account.currencyCode,
@@ -395,17 +412,36 @@ export function PaymentDialog({
           dispatch(billingApi.util.invalidateTags(["Folio"]));
         }
       }}
-      submitLabel={AMOUNT.test(amount) ? `Take ${money(amount)}` : "Take payment"}
+      submitLabel={amountOk ? `Take ${deposit ? "deposit " : ""}${money(amount)}` : "Take payment"}
       disabled={!valid}
       pending={state.isLoading}
       error={error}
     >
       <Summary
         rows={[
-          ["Balance due", money(win.balance), true],
-          ["Balance after this payment", after ? money(after) : "—"],
+          balance < 0n
+            ? ["Credit on window", money(formatMoney(-balance)), true]
+            : ["Balance due", money(win.balance), true],
+          [
+            afterCredit ? "Credit after this payment" : "Balance after this payment",
+            after === null ? "—" : money(formatMoney(afterCredit ? -after : after)),
+          ],
         ]}
       />
+      {owes ? (
+        <ToggleGroup
+          label="Payment type"
+          options={[
+            { value: "PAYMENT", label: "Payment" },
+            { value: "DEPOSIT", label: "Deposit / advance" },
+          ]}
+          value={kind}
+          onChange={(next) => {
+            setKind(next);
+            setAmount(next === "PAYMENT" ? toMinor(win.balance, account.minorUnits) : "");
+          }}
+        />
+      ) : null}
       <Select
         label="Payment method"
         placeholder={options.isLoading ? "Loading…" : "Select"}
@@ -419,8 +455,14 @@ export function PaymentDialog({
         inputMode="decimal"
         value={amount}
         onChange={(e) => setAmount(e.target.value.trim())}
-        errors={error?.fieldErrors.amount}
-        hint="At most the balance due."
+        errors={error?.fieldErrors.amount ?? (problem ? [problem] : undefined)}
+        hint={
+          deposit
+            ? owes
+              ? "More than the balance due; the excess stays as credit."
+              : "Paid in advance; held as credit until charges are posted."
+            : "At most the balance due."
+        }
       />
       <TextField
         label={method?.requiresReference ? "Reference (required)" : "Reference (optional)"}

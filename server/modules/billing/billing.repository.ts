@@ -76,9 +76,20 @@ export function folioBalancesWithLedger(tx: Tx, propertyId: string, folioIds: st
 export async function findFolioRef(tx: Tx, propertyId: string, id: string) {
   const ref = await tx.folio.findFirst({
     where: { id, propertyId, reservationRoomId: { not: null } },
-    select: { id: true, reservationRoomId: true, window: true },
+    select: {
+      id: true,
+      reservationRoomId: true,
+      window: true,
+      reservationRoom: { select: { reservationId: true } },
+    },
   });
-  return ref ? { ...ref, reservationRoomId: ref.reservationRoomId! } : null;
+  if (!ref) return null;
+  const { reservationRoom, ...rest } = ref;
+  return {
+    ...rest,
+    reservationRoomId: ref.reservationRoomId!,
+    reservationId: reservationRoom?.reservationId ?? null,
+  };
 }
 
 export function findWindows(tx: Tx, propertyId: string, reservationRoomId: string) {

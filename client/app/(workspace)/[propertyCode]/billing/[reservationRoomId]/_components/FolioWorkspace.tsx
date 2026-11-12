@@ -18,7 +18,7 @@ import { useProperty } from "@/global/hooks/useProperty";
 import { useFolioAccountQuery, useOpenWindowMutation } from "@/global/api/endpoints/billingApi";
 import { toClientApiError } from "@/global/api/errors";
 import { formatCurrency, formatDate, pluralize } from "@serene/shared/lib/utils/format";
-import { parseMoney } from "@serene/shared/lib/utils/money";
+import { formatMoney, parseMoney } from "@serene/shared/lib/utils/money";
 import type {
   FolioAccountView,
   FolioWindowView,
@@ -122,8 +122,8 @@ export function FolioWorkspace({ reservationRoomId }: { reservationRoomId: strin
             <Total label="Charges" value={money(account.totals.charges)} />
             <Total label="Payments & credits" value={money(account.totals.credits)} />
             <Total
-              label="Balance due"
-              value={money(account.totals.balance)}
+              label={parseMoney(account.totals.balance) < 0n ? "Credit balance" : "Balance due"}
+              value={money(creditOrDue(account.totals.balance))}
               emphasis={account.totals.balance !== "0.0000"}
             />
           </section>
@@ -174,7 +174,10 @@ export function FolioWorkspace({ reservationRoomId }: { reservationRoomId: strin
                   <p className="text-sm">
                     Window {win.window}
                     {win.payeeName ? ` · ${win.payeeName}` : ""} ·{" "}
-                    <span className="font-semibold tabular-nums">{money(win.balance)}</span> due
+                    <span className="font-semibold tabular-nums">
+                      {money(creditOrDue(win.balance))}
+                    </span>{" "}
+                    {parseMoney(win.balance) < 0n ? "credit" : "due"}
                   </p>
                   <WindowStatus win={win} />
                 </div>
@@ -183,12 +186,8 @@ export function FolioWorkspace({ reservationRoomId }: { reservationRoomId: strin
                     <Button onClick={() => setDialog("charge")}>Post charge</Button>
                   ) : null}
                   {a.takePayment && win.status !== "CLOSED" ? (
-                    <Button
-                      variant="secondary"
-                      disabled={parseMoney(win.balance) <= 0n}
-                      onClick={() => setDialog("payment")}
-                    >
-                      Take payment
+                    <Button variant="secondary" onClick={() => setDialog("payment")}>
+                      {parseMoney(win.balance) > 0n ? "Take payment" : "Take deposit / advance"}
                     </Button>
                   ) : null}
                   {a.postRoomCharges ? (
@@ -334,10 +333,17 @@ function WindowTab({
     >
       <span className="font-medium">Window {win.window}</span>
       <span className="text-xs tabular-nums">
-        {formatCurrency(win.balance, currency, "en", minorUnits)}
+        {formatCurrency(creditOrDue(win.balance), currency, "en", minorUnits)}
+        {parseMoney(win.balance) < 0n ? " credit" : ""}
       </span>
     </button>
   );
+}
+
+/** A credit (negative) balance is shown as a positive amount labelled "credit". */
+function creditOrDue(balance: string): string {
+  const units = parseMoney(balance);
+  return units < 0n ? formatMoney(-units) : balance;
 }
 
 function WindowStatus({ win }: { win: FolioWindowView }) {

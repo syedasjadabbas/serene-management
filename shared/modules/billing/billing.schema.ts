@@ -6,6 +6,7 @@ import {
   idSchema,
   isoDateSchema,
 } from "../../lib/validation/common";
+import { parseMoney } from "../../lib/utils/money";
 
 /**
  * Billing API contracts (docs/API_CONVENTIONS.md). Clients send what the
@@ -61,7 +62,7 @@ export const openWindowSchema = z.object({}).strict();
  * total with tax and the folio balance keep headroom in numeric(19,4) and an
  * oversized entry answers 400 instead of a database overflow.
  */
-const MAX_POSTING_TOTAL = 1_000_000_000_000;
+const MAX_POSTING_TOTAL = parseMoney("1000000000000"); // exact bigint money units
 
 export const chargeSchema = z
   .object({
@@ -72,7 +73,7 @@ export const chargeSchema = z
     comment,
   })
   .strict()
-  .refine((input) => Number(input.unitAmount) * input.quantity < MAX_POSTING_TOTAL, {
+  .refine((input) => parseMoney(input.unitAmount) * BigInt(input.quantity) < MAX_POSTING_TOTAL, {
     path: ["unitAmount"],
     message: "Quantity × price is too large for one posting",
   });
@@ -82,9 +83,17 @@ export type ChargeInput = z.infer<typeof chargeSchema>;
 export const roomChargesSchema = z.object({ through: isoDateSchema.optional() }).strict();
 export type RoomChargesInput = z.infer<typeof roomChargesSchema>;
 
+export const PAYMENT_KINDS = ["PAYMENT", "DEPOSIT"] as const;
+
 export const paymentSchema = z
   .object({
     methodId: idSchema,
+    /**
+     * PAYMENT (default) settles the balance due, at most the balance. DEPOSIT
+     * is an explicit advance that leaves a credit balance (amount above the
+     * balance); both need payments:create.
+     */
+    kind: z.enum(PAYMENT_KINDS).optional(),
     amount: positiveAmountSchema,
     /** Window version the cashier saw; a changed balance returns 409 instead of paying blind. */
     version,

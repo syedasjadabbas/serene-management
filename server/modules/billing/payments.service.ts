@@ -114,8 +114,10 @@ async function reasonOf(
 /**
  * Takes a payment against one window (payments:create). The client sends
  * the window version it saw: if anything was posted since, the command is
- * refused with 409 so the cashier sees the new balance first. The amount may
- * not exceed the balance (over-payment is not supported).
+ * refused with 409 so the cashier sees the new balance first. A PAYMENT may
+ * not exceed the balance; an explicit DEPOSIT (advance) must exceed it and
+ * leaves a credit balance that has to be refunded or consumed by later charges
+ * before check-out (billing.policy paymentProblem).
  */
 export async function postPayment(
   ctx: PropertyContext,
@@ -165,16 +167,23 @@ export async function postPayment(
           { reason: "BALANCE_CHANGED", balance: money(balance), version: folio.version },
         );
       }
-      const problem = paymentProblem(amount, balance);
+      const kind = input.kind ?? "PAYMENT";
+      const problem = paymentProblem(amount, balance, kind);
       if (problem) {
-        throw rule(problem, "PAYMENT_EXCEEDS_BALANCE", { balance: money(balance) });
+        throw rule(
+          problem,
+          kind === "DEPOSIT" ? "DEPOSIT_WITHIN_BALANCE" : "PAYMENT_EXCEEDS_BALANCE",
+          { balance: money(balance) },
+        );
       }
 
       const payment = await insertPayment(tx, {
         propertyId: ctx.propertyId,
-        kind: "PAYMENT",
+        kind,
         status: "CAPTURED",
         folioId: folio.id,
+        // A deposit belongs to the reservation (payments_deposit_chk); it is held on this window.
+        reservationId: kind === "DEPOSIT" ? ref.reservationId : null,
         methodId: method.id,
         amount: money(amount),
         currencyCode: folio.currency_code,
@@ -195,7 +204,7 @@ export async function postPayment(
         unitAmount: money(-amount),
         amount: money(-amount),
         currencyCode: folio.currency_code,
-        description: `${method.name} · ${receiptNumber}`,
+        description: `${kind === "DEPOSIT" ? "Deposit · " : ""}${method.name} · ${receiptNumber}`,
         reference: input.reference ?? null,
         comment: input.comment ?? null,
         paymentId: payment.id,
@@ -218,6 +227,7 @@ export async function postPayment(
             paymentId: payment.id,
             itemId: item.id,
             receiptNumber,
+            kind,
             method: method.code,
             amount: money(amount),
             currencyCode: folio.currency_code,
@@ -442,7 +452,7 @@ export async function refundPayment(
         unitAmount: money(amount),
         amount: money(amount),
         currencyCode: folio.currency_code,
-        description: `Refund · ${method.name}${payment.receipt_number ? ` · ${payment.receipt_number}` : ""}`,
+        description: `Refund · ${payment.kind === "DEPOSIT" ? "Deposit · " : ""}${method.name}${payment.receipt_number ? ` · ${payment.receipt_number}` : ""}`,
         reference: input.reference ?? null,
         comment: input.reason,
         paymentId: payment.id,

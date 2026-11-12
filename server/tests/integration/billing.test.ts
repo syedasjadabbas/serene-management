@@ -1170,3 +1170,199 @@ describe("security and isolation", () => {
     expect(balance).toBe("70.00");
   });
 });
+
+describe("deposits and advance payments", () => {
+  const readinessRoute = route("GET", "/properties/:propertyId/night-audits/readiness");
+
+  it("takes a deposit on an empty folio, leaving a credit balance", async () => {
+    const guest = await inHouse();
+    const w = await window1(guest.rrId);
+    expect(w.balance).toBe("0.0000");
+    // An ordinary payment still needs something to pay.
+    const plain = await pay(agent, w.id, {
+      methodId: CASH(),
+      amount: "500.00",
+      version: w.version,
+    });
+    expect(plain.status).toBe(422);
+    expect(plain.body.error.details.reason).toBe("PAYMENT_EXCEEDS_BALANCE");
+    expect(
+      (await pay(agent, w.id, { methodId: CASH(), amount: "5.00", version: w.version, kind: "X" }))
+        .status,
+    ).toBe(400);
+    expect(await prisma.payment.count({ where: { folioId: w.id } })).toBe(0);
+
+    const k = key();
+    const body = { methodId: CASH(), amount: "500.00", version: w.version, kind: "DEPOSIT" };
+    const r = await pay(agent, w.id, body, { idempotencyKey: k });
+    expect(r.status).toBe(201);
+    expect(r.body.data).toMatchObject({ amount: "500.0000", balance: "-500.0000" });
+    // Idempotent: the same key replays the first result, no second payment.
+    const replay = await pay(agent, w.id, body, { idempotencyKey: k });
+    expect(replay.body.data.paymentId).toBe(r.body.data.paymentId);
+    expect(await prisma.payment.count({ where: { folioId: w.id } })).toBe(1);
+
+    const payment = await prisma.payment.findUniqueOrThrow({
+      where: { id: r.body.data.paymentId },
+    });
+    expect(payment).toMatchObject({ kind: "DEPOSIT", status: "CAPTURED", currencyCode: "PKR" });
+    expect(payment.reservationId).not.toBeNull(); // payments_deposit_chk
+    const { folio, items, balance } = await expectLedgerConsistent(w.id);
+    expect(balance).toBe("-500.00");
+    expect(folio.creditsTotal.toFixed(2)).toBe("-500.00");
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ kind: "PAYMENT", paymentId: payment.id });
+    expect(items[0]!.description).toMatch(/^Deposit · /);
+    const log = (await auditLogsFor(w.id)).find((l) => l.action === "folio.payment")!;
+    expect(log.risk).toBe("HIGH");
+    expect(log.after).toMatchObject({ kind: "DEPOSIT", amount: "500.0000", balance: "-500.0000" });
+    expect((await window1(guest.rrId)).balance).toBe("-500.0000");
+  });
+
+  it("requires a deposit to exceed the balance and keeps charges working against the credit", async () => {
+    const guest = await inHouse();
+    let w = await window1(guest.rrId);
+    await charge(agent, w.id, { transactionCodeId: MINIBAR(), unitAmount: "300.00" });
+    w = await window1(guest.rrId);
+    // Within the balance it is a normal payment, not a deposit.
+    const within = await pay(agent, w.id, {
+      methodId: CASH(),
+      amount: "300.00",
+      version: w.version,
+      kind: "DEPOSIT",
+    });
+    expect(within.status).toBe(422);
+    expect(within.body.error.details.reason).toBe("DEPOSIT_WITHIN_BALANCE");
+    const over = await pay(agent, w.id, {
+      methodId: CASH(),
+      amount: "500.00",
+      version: w.version,
+      kind: "DEPOSIT",
+    });
+    expect(over.status).toBe(201);
+    expect(over.body.data.balance).toBe("-200.0000");
+    // A further deposit stacks on the credit; a normal payment is still refused.
+    w = await window1(guest.rrId);
+    const more = await pay(agent, w.id, {
+      methodId: CASH(),
+      amount: "50.00",
+      version: w.version,
+      kind: "DEPOSIT",
+    });
+    expect(more.body.data.balance).toBe("-250.0000");
+    w = await window1(guest.rrId);
+    expect(
+      (await pay(agent, w.id, { methodId: CASH(), amount: "10.00", version: w.version })).status,
+    ).toBe(422);
+    // A later charge consumes the credit.
+    await charge(agent, w.id, { transactionCodeId: MINIBAR(), unitAmount: "100.00" });
+    expect((await window1(guest.rrId)).balance).toBe("-150.0000");
+    await expectLedgerConsistent(w.id);
+  });
+
+  it("refunds a deposit back to zero and refuses refunding more than was paid", async () => {
+    const guest = await inHouse();
+    const w = await window1(guest.rrId);
+    const dep = await pay(agent, w.id, {
+      methodId: CASH(),
+      amount: "400.00",
+      version: w.version,
+      kind: "DEPOSIT",
+    });
+    const paymentId = dep.body.data.paymentId as string;
+    const r = await refund(fom, paymentId, {
+      amount: "400.00",
+      reasonCodeId: reason("REFUND:GOOD"),
+      reason: "Guest cancelled the advance",
+    });
+    expect(r.status).toBe(201);
+    expect(r.body.data.balance).toBe("0.0000");
+    expect(
+      (
+        await refund(fom, paymentId, {
+          amount: "0.01",
+          reasonCodeId: reason("REFUND:GOOD"),
+          reason: "Too much",
+        })
+      ).status,
+    ).toBe(422);
+    const { items, balance } = await expectLedgerConsistent(w.id);
+    expect(balance).toBe("0.00");
+    expect(items).toHaveLength(2);
+    expect(items[1]!.description).toMatch(/^Refund · Deposit · /);
+  });
+
+  it("voids a same-day deposit, restoring the balance", async () => {
+    const guest = await inHouse();
+    const w = await window1(guest.rrId);
+    const dep = await pay(agent, w.id, {
+      methodId: CASH(),
+      amount: "250.00",
+      version: w.version,
+      kind: "DEPOSIT",
+    });
+    const v = await voidPayment(fom, dep.body.data.paymentId, { reason: "Entered by mistake" });
+    expect(v.status).toBe(201);
+    expect(v.body.data.balance).toBe("0.0000");
+    await expectLedgerConsistent(w.id);
+  });
+
+  it("blocks check-out until the credit is refunded, then settles the window", async () => {
+    const guest = await withPastNights(1);
+    expect((await roomCharges(agent, guest.rrId)).status).toBe(201);
+    let w = await window1(guest.rrId);
+    const total = parseMoney(w.balance) + parseMoney("100.00");
+    const dep = await pay(agent, w.id, {
+      methodId: CASH(),
+      amount: formatMoney(total, 2),
+      version: w.version,
+      kind: "DEPOSIT",
+    });
+    expect(dep.status).toBe(201);
+    expect(dep.body.data.balance).toBe("-100.0000");
+
+    const checkOut = () =>
+      post(
+        checkOutRoute,
+        agent,
+        `/stays/${guest.stay.id}/check-out`,
+        { stayId: guest.stay.id },
+        { version: guest.stay.version },
+        { idempotencyKey: null },
+      );
+    const blocked = await checkOut();
+    expect(blocked.status).toBe(422);
+    expect(blocked.body.error.details.reason).toBe("FOLIO_BALANCE_OUTSTANDING");
+    expect(blocked.body.error.details.windows).toEqual([{ window: 1, balance: "-100.0000" }]);
+
+    const r = await refund(fom, dep.body.data.paymentId, {
+      amount: "100.00",
+      reasonCodeId: reason("REFUND:GOOD"),
+      reason: "Unused advance returned",
+    });
+    expect(r.status).toBe(201);
+    expect(r.body.data.balance).toBe("0.0000");
+    expect((await checkOut()).status).toBe(200);
+    w = await window1(guest.rrId);
+    expect(w.status).toBe("SETTLED");
+    await expectLedgerConsistent(w.id);
+  });
+
+  it("keeps the night-audit balance and payment checks passing with a credit balance", async () => {
+    const guest = await inHouse();
+    const w = await window1(guest.rrId);
+    const dep = await pay(agent, w.id, {
+      methodId: CASH(),
+      amount: "123.45",
+      version: w.version,
+      kind: "DEPOSIT",
+    });
+    expect(dep.status).toBe(201);
+    const ready = await get(readinessRoute, fom, "/night-audits/readiness");
+    expect(ready.status).toBe(200);
+    const outcome = (code: string) =>
+      ready.body.data.checks.find((c: { code: string }) => c.code === code).outcome;
+    expect(outcome("VALIDATE_BALANCES")).toBe("PASSED");
+    expect(outcome("VALIDATE_PAYMENTS")).toBe("PASSED");
+  });
+});
