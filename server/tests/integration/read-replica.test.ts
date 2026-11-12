@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import net from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@/config/prisma";
+import { clearMemoryCache } from "@/lib/cache";
 import { serverEnv } from "@/config/env";
 import { type HealthProbe, configureReadReplica, readFromReplica } from "@/lib/db/read-replica";
 import { addDays } from "@serene/shared/modules/business-date/business-date.policy";
@@ -386,6 +387,7 @@ describe("application paths", () => {
   });
 
   it("exports closed-date CSV from the replica, identical to the primary's", async () => {
+    clearMemoryCache(); // closed-range results are cached (lib/report-cache.ts)
     const before = replicaCheckouts;
     const viaReplica = await exportCsv("revenue-by-code", D, D);
     expect(viaReplica.status).toBe(200);
@@ -403,6 +405,7 @@ describe("application paths", () => {
   });
 
   it("serves the organization performance of closed dates from the replica", async () => {
+    clearMemoryCache(); // closed-range results are cached (lib/report-cache.ts)
     const before = replicaCheckouts;
     const r = await get(
       orgPerformanceRoute,

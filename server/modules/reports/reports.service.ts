@@ -16,6 +16,14 @@ import {
 } from "@/modules/night-audit/night-audit.repository";
 import { currencyMinorUnits } from "@/modules/rates/rates.service";
 import {
+  REPORT_CACHE_MAX_ROWS,
+  buildReportCacheKey,
+  buildStatisticsCacheKey,
+  cachedClosedRead,
+  isCacheableReport,
+  isClosedRange,
+} from "@/lib/report-cache";
+import {
   HEAVY_REPORT_KEYS,
   LIVE_REPORT_KEYS,
   REPORT_PAGE_SIZE,
@@ -217,9 +225,30 @@ async function liveFacts(env: ReportEnv): Promise<NightFacts> {
   };
 }
 
+/**
+ * Daily statistics of a window. Snapshots of closed dates are immutable, so a
+ * window entirely before the open date is cached; one that reaches it is read
+ * from `db` every time.
+ */
+function closedStatistics(
+  db: Db,
+  propertyId: string,
+  businessDate: string,
+  from: string,
+  to: string,
+): Promise<StatisticsRow[]> {
+  const read = () => findStatistics(db, { propertyId, from, to });
+  if (!isClosedRange(to, businessDate)) return read();
+  return cachedClosedRead(
+    "statistics",
+    buildStatisticsCacheKey(propertyId, businessDate, from, to),
+    read,
+  );
+}
+
 async function nightFacts(env: ReportEnv, from: string, to: string): Promise<NightFacts[]> {
   const snapshots = (
-    await findStatistics(env.db, { propertyId: env.ctx.propertyId, from, to })
+    await closedStatistics(env.db, env.ctx.propertyId, env.businessDate, from, to)
   ).map(factsFromSnapshot);
   if (from <= env.businessDate && env.businessDate <= to) snapshots.push(await liveFacts(env));
   return snapshots;
@@ -1374,6 +1403,38 @@ async function computeReport(
       fields: { to: ["Must be on or after the start date"] },
     });
   }
+  const compute = () => computeReportUncached(ctx, report, query, businessDate, from, to);
+  // Closed-range results of ledger/snapshot reports cannot change: cached
+  // (lib/report-cache.ts). The open date and live reports always compute.
+  if (!isCacheableReport(key, to, businessDate)) return compute();
+  return cachedClosedRead(
+    "report",
+    buildReportCacheKey({
+      propertyId: ctx.propertyId,
+      reportKey: key,
+      businessDate,
+      from,
+      to,
+      roomTypeId: report.roomTypeFilter ? (query.roomTypeId ?? null) : null,
+      risk: report.riskFilter ? (query.risk ?? null) : null,
+      currencyCode: ctx.currencyCode,
+      financial: can(ctx, "reports:financial"),
+      canExport: can(ctx, "reports:export"),
+    }),
+    compute,
+    (result) => result.rows.length <= REPORT_CACHE_MAX_ROWS,
+  );
+}
+
+async function computeReportUncached(
+  ctx: PropertyContext,
+  report: ReportDefinition,
+  query: ReportQuery,
+  businessDate: string,
+  from: string,
+  to: string,
+): Promise<Omit<ReportResult, "page">> {
+  const key = report.key;
   const config = await findAuditConfiguration(prisma, ctx.propertyId);
   const env: ReportEnv = {
     ctx,
@@ -1630,11 +1691,13 @@ export async function getDashboard(ctx: PropertyContext): Promise<DashboardView>
   const rooms = await countRoomStates(prisma, ctx.propertyId);
   const live = await liveFacts(env);
   const closed = (
-    await findStatistics(prisma, {
-      propertyId: ctx.propertyId,
-      from: addDays(businessDate, -30),
-      to: addDays(businessDate, -1),
-    })
+    await closedStatistics(
+      prisma,
+      ctx.propertyId,
+      businessDate,
+      addDays(businessDate, -30),
+      addDays(businessDate, -1),
+    )
   ).map(factsFromSnapshot);
   const last = closed.at(-1) ?? null;
   const balances = financial ? await sumOpenBalances(prisma, ctx.propertyId) : null;

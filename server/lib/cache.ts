@@ -29,7 +29,7 @@ function reportRedisFailure(error: unknown) {
   logServerError("cache: Redis unavailable, using memory", error);
 }
 
-function memorySet(key: string, value: string, ttlMs: number) {
+function memorySet(key: string, value: string, ttlMs: number, memoryMaxTtlMs = MEMORY_MAX_TTL_MS) {
   if (memory.size >= MAX_MEMORY_ENTRIES && !memory.has(key)) {
     const now = Date.now();
     for (const [k, entry] of memory) if (entry.expiresAt <= now) memory.delete(k);
@@ -39,7 +39,7 @@ function memorySet(key: string, value: string, ttlMs: number) {
     }
   }
   memory.delete(key);
-  memory.set(key, { value, expiresAt: Date.now() + Math.min(ttlMs, MEMORY_MAX_TTL_MS) });
+  memory.set(key, { value, expiresAt: Date.now() + Math.min(ttlMs, memoryMaxTtlMs) });
 }
 
 function memoryGet(key: string): string | undefined {
@@ -78,7 +78,17 @@ export async function cacheGet<T>(key: string): Promise<T | undefined> {
   }
 }
 
-export async function cacheSet(key: string, value: unknown, ttlMs: number): Promise<void> {
+/**
+ * `memoryMaxTtlMs` raises the in-process ceiling for one entry. Only for data
+ * that can never change (closed business dates); everything else keeps the
+ * 10 s default.
+ */
+export async function cacheSet(
+  key: string,
+  value: unknown,
+  ttlMs: number,
+  memoryMaxTtlMs?: number,
+): Promise<void> {
   if (ttlMs <= 0) return;
   const raw = JSON.stringify(value);
   const redis = getRedis();
@@ -90,7 +100,7 @@ export async function cacheSet(key: string, value: unknown, ttlMs: number): Prom
       reportRedisFailure(error);
     }
   }
-  memorySet(key, raw, ttlMs);
+  memorySet(key, raw, ttlMs, memoryMaxTtlMs);
 }
 
 /** Deletes keys from both backends (a Redis outage may have written to memory). */
@@ -153,17 +163,26 @@ export function singleFlight<T>(key: string, loader: () => Promise<T>): Promise<
  * one background refresh runs; a missing entry is loaded once (single flight)
  * and awaited. A failing background refresh keeps the stale value.
  */
+export interface SwrOptions<T> {
+  /** In-process TTL ceiling for this entry (see `cacheSet`). */
+  memoryMaxTtlMs?: number;
+  /** Return false to hand the value to the caller without storing it. */
+  shouldCache?: (value: T) => boolean;
+}
+
 export async function swr<T>(
   key: string,
   ttlMs: number,
   loader: () => Promise<T>,
   staleMs = ttlMs * 2,
+  options: SwrOptions<T> = {},
 ): Promise<T> {
   const load = () =>
     singleFlight(key, async () => {
       const value = await loader();
       const envelope: Envelope<T> = { v: value, freshUntil: Date.now() + ttlMs };
-      await cacheSet(key, envelope, ttlMs + staleMs);
+      if (options.shouldCache && !options.shouldCache(value)) return value;
+      await cacheSet(key, envelope, ttlMs + staleMs, options.memoryMaxTtlMs);
       return value;
     });
   const cached = await cacheGet<Envelope<T>>(key);
